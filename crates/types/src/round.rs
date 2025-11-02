@@ -6,7 +6,7 @@ use std::fmt;
 /// Consensus round number.
 ///
 /// Rounds start from 0 and increment when timeouts occur.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
 pub struct Round(u32);
 
 impl Round {
@@ -23,12 +23,6 @@ impl Round {
     /// Get the next round.
     pub fn next(&self) -> Self {
         Round(self.0 + 1)
-    }
-}
-
-impl Default for Round {
-    fn default() -> Self {
-        Round(0)
     }
 }
 

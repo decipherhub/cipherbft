@@ -13,9 +13,9 @@ pub mod round;
 pub mod validator;
 pub mod vote;
 
-pub use block::{Block, BlockData, BlockHeader};
-pub use hash::Hash;
-pub use height::Height;
+pub use block::{Block, BlockData, BlockHeader, CarMetadata, CutMetadata, ValidatorSignature};
+pub use hash::{Hash, HashError};
+pub use height::{Height, HeightError};
 pub use round::Round;
-pub use validator::{Validator, ValidatorSet};
+pub use validator::{Validator, ValidatorSet, ValidatorSetError};
 pub use vote::{Vote, VoteType};

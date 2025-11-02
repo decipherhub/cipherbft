@@ -9,5 +9,5 @@
 pub mod hash;
 pub mod signature;
 
-pub use hash::{hash_block, hash_tx, merkle_root};
-pub use signature::{PrivateKey, PublicKey, Signature};
+pub use hash::{hash, hash_block, hash_tx, merkle_root, merkle_root_from_txs};
+pub use signature::{Address, KeyPair, PrivateKey, PublicKey, Signature, SignatureError};
