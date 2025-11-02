@@ -1,0 +1,20 @@
+# Clippy configuration for CipherBFT
+# Follows Constitutional Principle II: Code Quality Requirements
+
+# Cognitive complexity threshold
+cognitive-complexity-threshold = 15
+
+# Documentation
+missing-docs-in-crate-items = true
+
+# Avoid missing documentation warnings for internal modules
+avoid-breaking-exported-api = true
+
+# Type complexity
+type-complexity-threshold = 250
+
+# Single char names allowed in short scopes
+single-char-binding-names-threshold = 4
+
+# Suppress warnings for large enum variants size difference
+enum-variant-size-threshold = 200

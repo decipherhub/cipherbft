@@ -1,0 +1,19 @@
+# Rust formatting configuration for CipherBFT
+# Follows Constitutional Principle II: Code Quality Requirements
+# Using only stable rustfmt features
+
+edition = "2021"
+
+# Line width
+max_width = 100
+
+# Consistency
+newline_style = "Unix"
+
+# Hard tabs
+hard_tabs = false
+tab_spaces = 4
+
+# Ordering
+reorder_imports = true
+reorder_modules = true

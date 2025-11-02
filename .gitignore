@@ -1,0 +1,46 @@
+# Constitution Principle XI: Repository Privacy
+# These directories contain internal tooling and must never be uploaded
+.claude/
+.specify/
+specs/
+
+# Rust build artifacts
+target/
+debug/
+release/
+Cargo.lock
+*.rs.bk
+*.rlib
+*.prof*
+*.profdata
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*
+
+# Test artifacts
+*.log
+*.log.*
+
+# Coverage
+tarpaulin-report.html
+cobertura.xml
+coverage/
+
+# Benchmarks
+criterion/
+
+# Testnet data
+testnet/

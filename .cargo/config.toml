@@ -1,0 +1,15 @@
+# Cargo configuration for CipherBFT
+# Constitutional Principle II: Code Quality Requirements
+
+[alias]
+# Quality check aliases
+check-quality = "clippy --all-targets --all-features -- -D warnings"
+check-fmt = "fmt -- --check"
+check-all = "sh -c 'cargo fmt --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test'"
+
+[build]
+# We'll add strict lints incrementally as code is implemented
+# Full production configuration will be applied in later phases
+
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
