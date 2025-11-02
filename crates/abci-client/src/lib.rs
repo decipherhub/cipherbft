@@ -10,4 +10,6 @@ pub mod client;
 pub mod codec;
 pub mod transport;
 
-pub use client::ABCIClient;
+pub use client::{ABCIClient, ClientError, ClientResult, DefaultABCIClient};
+pub use codec::ABCICodec;
+pub use transport::{ConnectionConfig, Transport};

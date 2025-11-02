@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 tokio = { workspace = true }
 tokio-util = { workspace = true }
+async-trait = { workspace = true }
 tendermint-proto = { workspace = true }
 prost = { workspace = true }
 bytes = { workspace = true }
