@@ -9,4 +9,4 @@
 pub mod mempool;
 pub mod priority_queue;
 
-pub use mempool::Mempool;
+pub use mempool::{Mempool, MempoolError};

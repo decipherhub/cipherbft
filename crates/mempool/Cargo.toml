@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 types = { path = "../types" }
+crypto = { path = "../crypto" }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
