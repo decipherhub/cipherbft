@@ -182,25 +182,6 @@ The CipherBFT architecture follows a modular design with clear separation of con
 - **storage**: RocksDB persistence with WAL
 - **rpc**: JSON-RPC 2.0 server with WebSocket support
 
-## Performance Targets
-
-Target metrics (4-validator network):
-
-- **Finality**: <4 seconds from proposal to commit
-- **Throughput**: >15,000 TPS (1KB transactions)
-- **Memory**: <500MB during normal operation
-- **CPU**: <50% at target throughput
-- **Scalability**: 100+ validators support
-
-## Documentation
-
-- [Developer Quickstart](specs/001-cipherbft-implementation/quickstart.md)
-- [Technical Architecture](specs/001-cipherbft-implementation/plan.md)
-- [Data Model](specs/001-cipherbft-implementation/data-model.md)
-- [API Contracts](specs/001-cipherbft-implementation/contracts/)
-- [Implementation Tasks](specs/001-cipherbft-implementation/tasks.md)
-- [Contributing Guidelines](CONTRIBUTING.md)
-
 ## About B-Harvest
 
 ![B-Harvest Logo](assets/bharvest.png)
@@ -240,21 +221,6 @@ Website: [decipher.ac](https://decipher.ac/)
 - Contribute to academic understanding of BFT consensus optimization
 - Provide open-source implementations for community evaluation
 - Explore ABCI 2.0 compatibility with next-generation consensus
-
-## Roadmap
-
-- [x] Phase 0: Research & Technology Selection
-- [x] Phase 1: Project Setup & Foundation
-- [ ] Phase 2: ABCI Client Implementation (Weeks 1-2)
-- [ ] Phase 3: Autobahn BFT Consensus Core (Weeks 3-5)
-- [ ] Phase 4: Mempool Integration (Week 6)
-- [ ] Phase 5: P2P Networking (Weeks 7-8)
-- [ ] Phase 6: Storage & Persistence (Week 9)
-- [ ] Phase 7: RPC & Tooling (Weeks 10-11)
-- [ ] Phase 8: Integration Testing & Byzantine Fault Tests (Week 12)
-- [ ] Phase 9: Performance Optimization (Weeks 13-14)
-
-**Target Completion**: Q1 2026
 
 ## Contributing
 
