@@ -55,19 +55,19 @@ mod tests {
     fn test_height_validation() {
         assert!(Height::new(0).is_err());
         assert!(Height::new(1).is_ok());
-        assert_eq!(Height::new(1).unwrap().value(), 1);
+        assert_eq!(Height::new(1).expect("valid height").value(), 1);
     }
 
     #[test]
     fn test_height_ordering() {
-        let h1 = Height::new(1).unwrap();
-        let h2 = Height::new(2).unwrap();
+        let h1 = Height::new(1).expect("valid height");
+        let h2 = Height::new(2).expect("valid height");
         assert!(h1 < h2);
     }
 
     #[test]
     fn test_height_next() {
-        let h1 = Height::new(1).unwrap();
+        let h1 = Height::new(1).expect("valid height");
         let h2 = h1.next();
         assert_eq!(h2.value(), 2);
     }

@@ -76,7 +76,7 @@ mod tests {
         let set = ValidatorSet {
             validators,
             total_voting_power: 40,
-            height: Height::new(1).unwrap(),
+            height: Height::new(1).expect("valid height"),
         };
 
         // For n=4 validators: f=1, quorum=3

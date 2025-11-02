@@ -67,7 +67,7 @@ mod tests {
     #[test]
     fn test_hash_from_slice() {
         let bytes = vec![0u8; 32];
-        let hash = Hash::from_slice(&bytes).unwrap();
+        let hash = Hash::from_slice(&bytes).expect("valid hash");
         assert_eq!(hash.as_bytes(), &[0u8; 32]);
     }
 
