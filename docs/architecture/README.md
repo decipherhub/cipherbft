@@ -1,17 +1,52 @@
 # CipherBFT Architecture Decision Records
 
-This directory contains Architecture Decision Records (ADRs) for CipherBFT, a high-performance BFT consensus engine implementing the Autobahn BFT algorithm with native EVM execution.
+Architecture Decision Records (ADRs) for CipherBFT - a high-performance BFT consensus engine implementing the Autobahn BFT algorithm with native EVM execution.
+
+## Why Not Engine API?
+
+> **The Engine API's "execute-then-consensus" model is fundamentally incompatible with Autobahn BFT's "consensus-then-execute" model.**
+
+This is not a performance optimization - it's a **causality inversion** that cannot be bridged:
+
+```
+Engine API:     Proposer executes → state_root in proposal → Consensus on result
+Autobahn BFT:   All validators create Cars → Consensus on Cut → Execute → state_root in commit
+```
+
+See [ADR-002](./adr-002-evm-native-execution.md) for the complete analysis.
 
 ## ADR Index
 
-| ADR | Title | Status | Summary |
-|-----|-------|--------|---------|
-| [ADR-001](./adr-001-three-layer-architecture.md) | Three-Layer Architecture (DCL/CL/EL) | PROPOSED | Separates concerns into Data Chain Layer, Consensus Layer, and Execution Layer following Autobahn BFT design |
-| [ADR-002](./adr-002-evm-native-execution.md) | EVM-Native Execution with revm | PROPOSED | Embeds revm directly instead of using Engine API with external EL |
-| [ADR-003](./adr-003-malachite-consensus.md) | Malachite Consensus Integration | PROPOSED | Uses Malachite's effect-based, formally verified Tendermint BFT implementation |
-| [ADR-004](./adr-004-primary-worker-architecture.md) | Primary-Worker Architecture | PROPOSED | Horizontal scaling through Primary (consensus) + Workers (data dissemination) separation |
-| [ADR-005](./adr-005-ed25519-signatures.md) | Dual Signature Scheme | PROPOSED | Ed25519 for CL (Malachite), BLS12-381 for DCL (attestation aggregation) |
-| [ADR-006](./adr-006-mempool-design.md) | Mempool Design | PROPOSED | Native priority mempool with gas price ordering and Ethereum semantics |
+### Core Architecture
+
+| ADR | Title | Status |
+|-----|-------|--------|
+| [ADR-001](./adr-001-three-layer-architecture.md) | Three-Layer Architecture (DCL/CL/EL) | PROPOSED |
+| [ADR-002](./adr-002-evm-native-execution.md) | EVM-Native Execution with revm | PROPOSED |
+| [ADR-003](./adr-003-malachite-consensus.md) | Malachite Consensus Integration | PROPOSED |
+| [ADR-004](./adr-004-primary-worker-architecture.md) | Autobahn BFT with Worker Scaling | PROPOSED |
+
+### Cryptography & Networking
+
+| ADR | Title | Status |
+|-----|-------|--------|
+| [ADR-005](./adr-005-dual-signatures.md) | Dual Signature Scheme (Ed25519 + BLS) | PROPOSED |
+| [ADR-007](./adr-007-p2p-networking.md) | P2P Networking with Malachite | PROPOSED |
+
+### EVM & Storage
+
+| ADR | Title | Status |
+|-----|-------|--------|
+| [ADR-006](./adr-006-mempool-design.md) | Mempool Integration with Reth Transaction Pool | PROPOSED |
+| [ADR-008](./adr-008-json-rpc-interface.md) | JSON-RPC Interface | PROPOSED |
+| [ADR-009](./adr-009-staking-precompile.md) | Staking Precompile | PROPOSED |
+| [ADR-010](./adr-010-storage-design.md) | Storage Design | PROPOSED |
+
+### Operations
+
+| ADR | Title | Status |
+|-----|-------|--------|
+| [ADR-011](./adr-011-configuration-operations.md) | Configuration & Operations | PROPOSED |
 
 ## Architecture Overview
 
@@ -22,83 +57,120 @@ This directory contains Architecture Decision Records (ADRs) for CipherBFT, a hi
 │                                                                             │
 │  ┌────────────────────────────────────────────────────────────────────┐    │
 │  │                      PRIMARY PROCESS (1-2 cores)                    │    │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐   │    │
-│  │  │     DCL      │  │      CL      │  │          EL            │   │    │
-│  │  │              │  │              │  │                        │   │    │
-│  │  │ Car Creation │  │  Malachite   │  │   Embedded revm        │   │    │
-│  │  │ Attestation  │──│  Consensus   │──│   Reth Storage         │   │    │
-│  │  │ Cut Formation│  │  (ADR-003)   │  │   (ADR-002)            │   │    │
-│  │  │              │  │              │  │                        │   │    │
-│  │  │ (ADR-001)    │  │  Ed25519     │  │   Staking Precompile   │   │    │
-│  │  │              │  │  (ADR-005)   │  │                        │   │    │
-│  │  └──────────────┘  └──────────────┘  └────────────────────────┘   │    │
+│  │                                                                      │    │
+│  │   ┌─────────────┐    ┌─────────────┐    ┌─────────────────────┐    │    │
+│  │   │     DCL     │    │     CL      │    │         EL          │    │    │
+│  │   │             │    │             │    │                     │    │    │
+│  │   │ Car/Cut     │───▶│  Malachite  │───▶│   Embedded revm     │    │    │
+│  │   │ BLS Attestn │    │  PBFT       │    │   Reth Storage      │    │    │
+│  │   │             │    │  Ed25519    │    │   Staking Precomp   │    │    │
+│  │   │ (ADR-001)   │    │  (ADR-003)  │    │   (ADR-002,009)     │    │    │
+│  │   └─────────────┘    └─────────────┘    └─────────────────────┘    │    │
+│  │                                                                      │    │
 │  └────────────────────────────────────────────────────────────────────┘    │
 │                                    │                                        │
-│                         tokio mpsc channels                                 │
+│                          tokio mpsc channels                                │
 │                                    │                                        │
-│  ┌────────────────────────────────┴───────────────────────────────────┐    │
+│  ┌────────────────────────────────▼───────────────────────────────────┐    │
 │  │                     WORKER PROCESSES (4-8 cores)                    │    │
 │  │                           (ADR-004)                                 │    │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐           │    │
-│  │  │ Worker 0 │  │ Worker 1 │  │ Worker 2 │  │ Worker 3 │           │    │
-│  │  │  Batch   │  │  Batch   │  │  Batch   │  │  Batch   │           │    │
-│  │  │ Broadcast│  │ Broadcast│  │ Broadcast│  │ Broadcast│           │    │
-│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘           │    │
+│  │                                                                      │    │
+│  │   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐          │    │
+│  │   │ Worker 0 │  │ Worker 1 │  │ Worker 2 │  │ Worker 3 │          │    │
+│  │   │ Batch TX │  │ Batch TX │  │ Batch TX │  │ Batch TX │          │    │
+│  │   │ Broadcast│  │ Broadcast│  │ Broadcast│  │ Broadcast│          │    │
+│  │   └──────────┘  └──────────┘  └──────────┘  └──────────┘          │    │
+│  │                                                                      │    │
 │  └────────────────────────────────────────────────────────────────────┘    │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
+## Transaction Flow: Consensus-then-Execute
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                              Transaction Flow                                 │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  1. USER                    2. MEMPOOL                 3. DCL                │
+│  ┌─────────┐               ┌─────────────┐            ┌─────────────┐       │
+│  │ eth_    │──────────────▶│  Validate   │───────────▶│ Create Car  │       │
+│  │ sendRaw │               │  Queue by   │            │ Broadcast   │       │
+│  │ Tx      │               │  Gas Price  │            │ to Peers    │       │
+│  └─────────┘               └─────────────┘            └──────┬──────┘       │
+│                                                               │              │
+│  6. EL                      5. CL                      4. DCL │              │
+│  ┌─────────────┐           ┌─────────────┐            ┌──────▼──────┐       │
+│  │ Execute     │◀──────────│ PBFT on Cut │◀───────────│ Collect f+1 │       │
+│  │ Compute     │           │ (Malachite) │            │ Attestations│       │
+│  │ state_root  │           │             │            │ Form Cut    │       │
+│  └──────┬──────┘           └─────────────┘            └─────────────┘       │
+│         │                                                                    │
+│         ▼                                                                    │
+│  7. COMMIT                                                                   │
+│  ┌─────────────┐                                                            │
+│  │ state_root  │   Key insight: state_root computed AFTER consensus,       │
+│  │ in commit   │   not before. This is why Engine API doesn't work.        │
+│  │ certificate │                                                            │
+│  └─────────────┘                                                            │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## Key Design Decisions
 
-### 1. Three-Layer Separation (ADR-001)
+### 1. Consensus-then-Execute (ADR-002)
 
-- **DCL (Data Chain Layer)**: Handles data availability through Car/Attestation/Cut
-- **CL (Consensus Layer)**: Runs PBFT-style consensus over Cuts via Malachite
-- **EL (Execution Layer)**: Executes finalized transactions via embedded revm
+| Aspect | Engine API | CipherBFT |
+|--------|------------|-----------|
+| Execution timing | Before consensus | After consensus |
+| state_root | In proposal | In commit certificate |
+| Transaction set | Known at proposal | Unknown until Cut finalized |
+| Proposer model | Single proposer | All validators create Cars |
 
-This separation enables **pipelined operation** where attestation collection for height N+1 occurs during consensus for height N.
+### 2. Three-Layer Separation (ADR-001)
 
-### 2. EVM-Native Execution (ADR-002)
+- **DCL**: Car creation, BLS attestations, Cut formation
+- **CL**: PBFT consensus via Malachite (Ed25519)
+- **EL**: Transaction execution via embedded revm
 
-Instead of using the Engine API to communicate with an external execution client:
-- Embed revm directly in the consensus node
-- Use Reth crates for storage (reth-db) and EVM configuration (reth-evm)
-- Zero network latency between CL and EL
+Pipelining: Collect attestations for height N+1 while consensus runs for height N.
 
-### 3. Malachite Consensus (ADR-003)
+### 3. Dual Signature Scheme (ADR-005)
 
-- Formally verified Tendermint BFT implementation
-- Effect-based architecture for clean integration
-- Custom Context trait implementation for CipherBFT types
+| Layer | Scheme | Purpose |
+|-------|--------|---------|
+| CL (Consensus) | Ed25519 | Malachite native, fast verification |
+| DCL (Data) | BLS12-381 | Attestation aggregation (f+1 → 1 sig) |
 
-### 4. Primary-Worker Architecture (ADR-004)
+### 4. Horizontal Scaling (ADR-004)
 
-- **Primary**: Handles consensus logic (1-2 cores)
-- **Workers**: Handle parallel transaction batching and data dissemination (4-8 cores)
-- Enables >100K TPS through horizontal scaling
-
-### 5. Ed25519 Signatures (ADR-005)
-
-- All consensus messages and attestations use Ed25519
-- Native Malachite support via `malachitebft-signing-ed25519`
-- Simpler than BLS aggregation for initial implementation
+- **Primary** (1-2 cores): Consensus logic, attestation aggregation
+- **Workers** (4-8 cores): Parallel transaction batching, data dissemination
 
 ## Performance Targets
 
 | Metric | Target | Conditions |
 |--------|--------|------------|
 | Throughput | >100K TPS | n=21, 4 workers |
-| Latency (p50) | <500ms | geo-distributed |
+| Latency (p50) | <500ms | geo-distributed (3 regions) |
 | Latency (p99) | <1s | geo-distributed |
 | vs Bullshark | 2x latency improvement | identical conditions |
+| Blip recovery | No hangover | vs HotStuff 30% longer |
 
-## ADR Process
+## ADR Lifecycle
 
-1. **DRAFT**: ADR is being written (draft PR)
-2. **PROPOSED**: ADR is ready for review
-3. **ACCEPTED**: ADR has been approved and is being implemented
-4. **IMPLEMENTED**: ADR has been fully implemented
-5. **SUPERSEDED**: ADR has been replaced by a newer ADR
+```
+DRAFT ──▶ PROPOSED ──▶ ACCEPTED ──▶ IMPLEMENTED
+                              │
+                              └──▶ SUPERSEDED
+```
 
-To propose a new ADR, copy the template and follow the structure defined in each section.
+| Status | Description |
+|--------|-------------|
+| DRAFT | ADR is being written |
+| PROPOSED | Ready for review |
+| ACCEPTED | Approved, implementation starting |
+| IMPLEMENTED | Fully implemented and tested |
+| SUPERSEDED | Replaced by newer ADR |
