@@ -27,45 +27,43 @@ By exploring alternative consensus algorithms like **Autobahn BFT** and optimizi
 
 ## Implementation Approach
 
-### 1. Bottleneck Analysis
-- Broadcasting layer performance metrics
-- Consensus layer latency and throughput
-- Execution layer processing capacity
+### Three-Layer Architecture (DCL/CL/EL)
 
-### 2. Technology Selection
+CipherBFT implements Autobahn BFT's three-layer separation:
 
-#### **Consensus Algorithm: Autobahn BFT**
-Autobahn is a next-generation BFT consensus protocol with a two-layer architecture that decouples data dissemination from consensus ordering:
+- **Data Chain Layer (DCL)**: Car creation, BLS attestations (f+1), Cut formation
+- **Consensus Layer (CL)**: PBFT consensus via Malachite (Ed25519 signatures)
+- **Execution Layer (EL)**: Transaction execution via embedded revm with Reth storage
 
-- **Layer 1**: Parallel data dissemination through validator "lanes" (Cars)
-- **Layer 2**: Consensus on snapshots (Cuts) using PBFT-style protocol
+**Key Insight**: Consensus-then-Execute model. Unlike Engine API's execute-then-consensus approach, Autobahn BFT reaches consensus on transaction ordering (Cut) before execution.
 
-**Key Advantages**:
-- Seamless recovery without performance hangovers
-- 3 message delays on fast path (vs 12+ for DAG protocols)
-- Linear bandwidth utilization with validator count
-- 250k+ TPS potential in geo-distributed settings
+```
+Engine API:     Proposer executes → state_root in proposal → Consensus on result
+Autobahn BFT:   All validators create Cars → Consensus on Cut → Execute → state_root in commit
+```
 
-#### **P2P Communication Protocols**
+### Autobahn BFT Consensus
 
-**Option 1: RaptorCast**
-- UDP-based communication with Raptor codes for error correction
-- Structured broadcast with predefined peer groups
-- Transaction forwarding to upcoming block proposers
+Autobahn achieves lower latency than DAG-based protocols through:
 
-**Option 2: OptimumP2P**
-- RLNC (Random Linear Network Coding) for adaptive error correction
-- Dynamic network condition handling
+- **5 delta latency** (vs Narwhal's 9 delta, Bullshark's 7 delta)
+- **f+1 attestations** for data availability (vs 2f+1 in Narwhal)
+- **Linear lanes** instead of DAG (no garbage collection complexity)
+- **Pipelining**: Attestation collection for height N+1 during consensus on height N
 
-### 3. Modular Implementation
-- Implement selected technologies in Rust
-- Maintain compatibility with ABCI 2.0 protocol
-- Enable comparative testing of different approaches
+### Dual Signature Scheme
 
-### 4. Benchmarking
-- Comparative performance analysis
-- Latency and throughput measurements (<4s finality, >15K TPS target)
-- Recovery time evaluation
+- **Ed25519**: Consensus Layer votes/proposals (Malachite native)
+- **BLS12-381**: Data Chain Layer attestations (aggregatable, 8x bandwidth reduction)
+
+### Performance Targets
+
+| Metric | Target | Conditions |
+|--------|--------|------------|
+| Throughput | >100K TPS | n=21 validators, 4 workers |
+| Latency (p50) | <500ms | geo-distributed (3 regions) |
+| Latency (p99) | <1s | geo-distributed |
+| vs Bullshark | 2x latency improvement | identical conditions |
 
 ## Getting Started
 
@@ -105,82 +103,82 @@ cargo build --release
 cargo test
 ```
 
-### Quick Start - Single Node
+### Development Status
 
-```bash
-# Initialize node
-./target/release/cipherbft init --home ./testnet/node0
-
-# Start node (requires ABCI app like kvstore)
-./target/release/cipherbft start --home ./testnet/node0
-```
-
-### Testing with kvstore
-
-```bash
-# Download kvstore ABCI application
-mkdir -p tests/fixtures/kvstore
-cd tests/fixtures/kvstore
-# Follow instructions in specs/001-cipherbft-implementation/quickstart.md
-
-# Start kvstore
-./kvstore &
-
-# Start CipherBFT
-cargo run --bin cipherbft -- start --home ./testnet/node0
-```
+> **Note**: CipherBFT is currently in the design phase. All ADRs are in PROPOSED status. See [Architecture Decision Records](./docs/architecture/README.md) for detailed design documentation.
 
 ## Architecture
 
-The CipherBFT architecture follows a modular design with clear separation of concerns:
+CipherBFT implements a three-layer architecture with Primary-Worker scaling:
 
 ```
-┌─────────────────────────────────────────────────┐
-│                  RPC Layer                      │
-│         (JSON-RPC 2.0, WebSocket)              │
-└─────────────────┬───────────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────────┐
-│              Consensus Engine                    │
-│         (Autobahn BFT State Machine)            │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐     │
-│  │   Car    │  │   Cut    │  │   PBFT   │     │
-│  │ Creation │→ │ Creation │→ │  Voting  │     │
-│  └──────────┘  └──────────┘  └──────────┘     │
-└─────────────────┬───────────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────────┐
-│              Mempool Layer                       │
-│     (Priority Queue, CheckTx Integration)       │
-└─────────────────┬───────────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────────┐
-│               P2P Network                        │
-│  (Peer Discovery, Gossip, Block Sync)          │
-└─────────────────┬───────────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────────┐
-│            Storage Layer                         │
-│      (RocksDB, WAL, Crash Recovery)            │
-└─────────────────┬───────────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────────┐
-│              ABCI Client                         │
-│    (Application Communication Interface)        │
-└──────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           CipherBFT Validator Node                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │                      PRIMARY PROCESS (1-2 cores)                    │    │
+│  │                                                                      │    │
+│  │   ┌─────────────┐    ┌─────────────┐    ┌─────────────────────┐    │    │
+│  │   │     DCL     │    │     CL      │    │         EL          │    │    │
+│  │   │             │    │             │    │                     │    │    │
+│  │   │ Car/Cut     │───▶│  Malachite  │───▶│   Embedded revm     │    │    │
+│  │   │ BLS Attestn │    │  PBFT       │    │   Reth Storage      │    │    │
+│  │   │             │    │  Ed25519    │    │   (MDBX)            │    │    │
+│  │   └─────────────┘    └─────────────┘    └─────────────────────┘    │    │
+│  │                                                                      │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                        │
+│                          tokio mpsc channels                                │
+│                                    │                                        │
+│  ┌────────────────────────────────▼───────────────────────────────────┐    │
+│  │                     WORKER PROCESSES (1-8 cores)                    │    │
+│  │                                                                      │    │
+│  │   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐          │    │
+│  │   │ Worker 0 │  │ Worker 1 │  │ Worker 2 │  │ Worker 3 │          │    │
+│  │   │ Batch TX │  │ Batch TX │  │ Batch TX │  │ Batch TX │          │    │
+│  │   │ Broadcast│  │ Broadcast│  │ Broadcast│  │ Broadcast│          │    │
+│  │   └──────────┘  └──────────┘  └──────────┘  └──────────┘          │    │
+│  │                                                                      │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+│                                                                             │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │  P2P Network (libp2p/QUIC) │ JSON-RPC API │ Mempool (Reth TxPool) │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Transaction Flow: Consensus-then-Execute
+
+```
+1. USER          2. MEMPOOL        3. DCL           4. DCL           5. CL            6. EL
+┌─────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
+│eth_send │────▶│ Validate │────▶│Create Car│────▶│Collect   │────▶│PBFT on   │────▶│ Execute  │
+│RawTx    │     │ Queue    │     │Broadcast │     │f+1 Attest│     │Cut       │     │ Compute  │
+└─────────┘     └──────────┘     └──────────┘     │Form Cut  │     │(Malachite│     │state_root│
+                                                  └──────────┘     └──────────┘     └──────────┘
+                                                                                          │
+                                                  7. COMMIT: state_root in commit certificate
 ```
 
 ## Key Components
 
-- **cipherbft**: Main binary with CLI commands (init, start, version)
-- **types**: Core data structures (Block, Vote, ValidatorSet)
-- **crypto**: Ed25519 signatures and hashing utilities
-- **abci-client**: ABCI 2.0 protocol client (TCP/Unix sockets)
-- **consensus**: Autobahn BFT consensus engine with Car/Cut
-- **mempool**: Priority-based transaction pool
-- **p2p**: Custom P2P networking with gossip protocol
-- **storage**: RocksDB persistence with WAL
-- **rpc**: JSON-RPC 2.0 server with WebSocket support
+| Crate | Purpose |
+|-------|---------|
+| **types** | Core types: Hash, Height, ValidatorId, Car, Cut, Attestation |
+| **crypto** | Dual signatures: Ed25519 (Malachite) + BLS12-381 (blst) |
+| **data-chain** | DCL: Car creation, attestation collection, Cut formation |
+| **consensus** | CL: Malachite PBFT integration, effect handlers |
+| **execution** | EL: Embedded revm, Reth crate integration |
+| **mempool** | Transaction pool: Reth TxPool integration |
+| **worker** | Primary-Worker architecture, batch dissemination |
+| **storage** | Reth-db (MDBX), WAL, consensus state |
+| **network** | P2P: libp2p with QUIC transport |
+| **sync** | State synchronization (Snap Sync, Checkpoint Sync) |
+| **rpc** | JSON-RPC 2.0 (Ethereum-compatible) |
+| **node** | Node orchestration, startup |
+| **cipherbft** | Main binary, CLI |
 
 ## About B-Harvest
 
@@ -220,7 +218,7 @@ Website: [decipher.ac](https://decipher.ac/)
 - Measure performance improvements in real-world conditions
 - Contribute to academic understanding of BFT consensus optimization
 - Provide open-source implementations for community evaluation
-- Explore ABCI 2.0 compatibility with next-generation consensus
+- Validate Autobahn BFT worker scaling empirically
 
 ## Contributing
 
@@ -243,13 +241,14 @@ at your option.
 
 ## References
 
-- [Autobahn: Seamless high speed BFT](https://arxiv.org/abs/2401.10369)
-- [RaptorCast: Designing a Messaging Layer](https://www.category.xyz/blogs/raptorcast-designing-a-messaging-layer)
-- [CometBFT (Tendermint) Specification](https://github.com/cometbft/cometbft)
-- [ABCI 2.0 Protocol](https://github.com/cometbft/cometbft/tree/main/spec/abci)
+- [Autobahn: Seamless high speed BFT (SOSP '24)](https://arxiv.org/abs/2401.10369)
+- [Narwhal and Tusk (EuroSys '22)](https://arxiv.org/abs/2105.11827)
+- [Malachite Consensus](https://github.com/informalsystems/malachite)
+- [Reth Documentation](https://reth.rs)
+- [revm - Rust EVM](https://github.com/bluealloy/revm)
 
 ---
 
 *Cipher BFT is a research collaboration between Decipher and B-Harvest, exploring the frontiers of high-performance consensus mechanisms.*
 
-**Status**: 🚧 Under Active Development | **Progress**: Phase 1 Complete (3/107 tasks)
+**Status**: Design Phase (All ADRs PROPOSED) | [Architecture Docs](./docs/architecture/README.md)

@@ -22,7 +22,7 @@ See [ADR-002](./adr-002-evm-native-execution.md) for the complete analysis.
 | ADR | Title | Status |
 |-----|-------|--------|
 | [ADR-001](./adr-001-three-layer-architecture.md) | Three-Layer Architecture (DCL/CL/EL) | PROPOSED |
-| [ADR-002](./adr-002-evm-native-execution.md) | EVM-Native Execution with revm | PROPOSED |
+| [ADR-002](./adr-002-evm-native-execution.md) | EVM-Native Execution with Embedded revm | PROPOSED |
 | [ADR-003](./adr-003-malachite-consensus.md) | Malachite Consensus Integration | PROPOSED |
 | [ADR-004](./adr-004-primary-worker-architecture.md) | Autobahn BFT with Worker Scaling | PROPOSED |
 
@@ -30,7 +30,7 @@ See [ADR-002](./adr-002-evm-native-execution.md) for the complete analysis.
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| [ADR-005](./adr-005-dual-signatures.md) | Dual Signature Scheme (Ed25519 + BLS) | PROPOSED |
+| [ADR-005](./adr-005-dual-signatures.md) | Dual Signature Scheme (Ed25519 + BLS12-381) | PROPOSED |
 | [ADR-007](./adr-007-p2p-networking.md) | P2P Networking with Malachite | PROPOSED |
 
 ### EVM & Storage
@@ -46,7 +46,7 @@ See [ADR-002](./adr-002-evm-native-execution.md) for the complete analysis.
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| [ADR-011](./adr-011-configuration-operations.md) | Configuration & Operations | PROPOSED |
+| [ADR-011](./adr-011-configuration-operations.md) | Configuration and Operations | PROPOSED |
 
 ## Architecture Overview
 
