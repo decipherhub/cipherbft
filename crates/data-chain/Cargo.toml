@@ -1,0 +1,47 @@
+[package]
+name = "cipherbft-data-chain"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Data Chain Layer (DCL) with Primary-Worker Architecture for CipherBFT"
+
+[dependencies]
+# Internal dependencies
+cipherbft-types = { path = "../types" }
+cipherbft-crypto = { path = "../crypto" }
+
+# Async runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+bincode = { workspace = true }
+bytes = { workspace = true }
+
+# Collections
+bitvec = { workspace = true }
+
+# Logging & Metrics
+tracing = { workspace = true }
+prometheus = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+criterion = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+rand = { workspace = true }
+
+[[bench]]
+name = "car_bench"
+harness = false
+
+[[bench]]
+name = "attestation_bench"
+harness = false
