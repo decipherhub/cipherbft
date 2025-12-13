@@ -2,13 +2,7 @@
 members = [
     "crates/types",
     "crates/crypto",
-    "crates/abci-client",
-    "crates/consensus",
-    "crates/mempool",
-    "crates/p2p",
-    "crates/storage",
-    "crates/rpc",
-    "crates/cipherbft",
+    "crates/data-chain",
 ]
 resolver = "2"
 
@@ -40,6 +34,10 @@ serde_json = "1.0"
 ed25519-consensus = "2.1"
 sha2 = "0.10"
 rand = "0.8"
+blst = "0.3"
+
+# Collections
+bitvec = "1.0"
 
 # Storage
 rocksdb = { version = "0.21", default-features = false, features = ["lz4"] }
