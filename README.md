@@ -29,6 +29,8 @@ By exploring alternative consensus algorithms like **Autobahn BFT** and optimizi
 
 ### Three-Layer Architecture (DCL/CL/EL)
 
+![architecture-v0.0.2.png](assets/architecture-v0.0.2.png)
+
 CipherBFT implements Autobahn BFT's three-layer separation:
 
 - **Data Chain Layer (DCL)**: Car creation, BLS attestations (f+1), Cut formation
