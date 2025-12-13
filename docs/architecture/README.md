@@ -10,7 +10,8 @@ This directory contains Architecture Decision Records (ADRs) for CipherBFT, a hi
 | [ADR-002](./adr-002-evm-native-execution.md) | EVM-Native Execution with revm | PROPOSED | Embeds revm directly instead of using Engine API with external EL |
 | [ADR-003](./adr-003-malachite-consensus.md) | Malachite Consensus Integration | PROPOSED | Uses Malachite's effect-based, formally verified Tendermint BFT implementation |
 | [ADR-004](./adr-004-primary-worker-architecture.md) | Primary-Worker Architecture | PROPOSED | Horizontal scaling through Primary (consensus) + Workers (data dissemination) separation |
-| [ADR-005](./adr-005-ed25519-signatures.md) | Ed25519 Signature Scheme | PROPOSED | Uses Ed25519 for all signatures via Malachite's native signing support |
+| [ADR-005](./adr-005-ed25519-signatures.md) | Dual Signature Scheme | PROPOSED | Ed25519 for CL (Malachite), BLS12-381 for DCL (attestation aggregation) |
+| [ADR-006](./adr-006-mempool-design.md) | Mempool Design | PROPOSED | Native priority mempool with gas price ordering and Ethereum semantics |
 
 ## Architecture Overview
 
@@ -91,13 +92,6 @@ Instead of using the Engine API to communicate with an external execution client
 | Latency (p50) | <500ms | geo-distributed |
 | Latency (p99) | <1s | geo-distributed |
 | vs Bullshark | 2x latency improvement | identical conditions |
-
-## Related Documents
-
-- [Feature Specification](../../specs/cipherbft-implementation/spec.md)
-- [Implementation Plan](../../specs/cipherbft-implementation/plan.md)
-- [Task Breakdown](../../specs/cipherbft-implementation/tasks.md)
-- [Benchmark Architecture](../../specs/cipherbft-implementation/benchmark.md)
 
 ## ADR Process
 
