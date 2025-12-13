@@ -1,21 +1,53 @@
-MIT License
+Business Source License 1.1
 
-Copyright (c) 2025 CipherBFT Contributors
+License text copyright (c) 2017 MariaDB Corporation Ab, All Rights Reserved.
+“Business Source License” is a trademark of MariaDB Corporation Ab.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+-----------------------------------------------------------------------------
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+Parameters
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Licensor:
+Decipher & B-Harvest
+
+Licensed Work:
+CipherBFT
+The Licensed Work is (c) 2025 Decipher & B-Harvest.
+
+Additional Use Grant:
+You may use the Licensed Work, provided that such use is not a Commercial Use.
+
+A “Commercial Use” is any use of the Licensed Work primarily intended for or directed toward commercial advantage or monetary compensation.
+The following categories of use are explicitly permitted and do not constitute Commercial Use:
+	•	Non-production use (development, testing, research)
+	•	Academic or educational use
+	•	Personal non-commercial use
+	•	Evaluation and benchmarking
+
+Change Date:
+2029-01-01
+
+Change License:
+Apache License, Version 2.0
+
+For commercial production-use licensing, contact: contact@cipherbft.xyz
+
+-----------------------------------------------------------------------------
+
+Terms
+
+The Licensor grants you the right to copy, modify, create derivative works of, redistribute, and make non-production use of the Licensed Work. The Licensor may also provide an Additional Use Grant (above) permitting limited production use.
+
+Effective on the Change Date, or on the fourth anniversary of the first publicly available distribution of a specific version of the Licensed Work under this License (whichever comes first), the Licensor grants you rights under the terms of the Change License.
+At that time, the rights granted in the preceding paragraph terminate.
+
+If your use of the Licensed Work does not comply with the requirements currently in effect as described in this License, you must either purchase a commercial license from the Licensor, its affiliates, or authorized resellers, or you must cease using the Licensed Work.
+
+All copies of the original or modified Licensed Work, and all derivative works based on it, are subject to this License. This License applies separately to each version of the Licensed Work, and the Change Date may differ for each version released by the Licensor.
+
+You must conspicuously display this License on every original or modified copy of the Licensed Work.
+If you receive the Licensed Work (original or modified) from a third party, the terms and conditions of this License apply to your use of that work.
+
+Any use of the Licensed Work in violation of this License will automatically terminate your rights under this License for the current and all other versions of the Licensed Work.
+
+This License does not grant you any rights not expressly stated herein.
