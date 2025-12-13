@@ -1,6 +1,6 @@
 # Cipher BFT
 
-<img width="2000" height="1490" alt="cipher-bft-high-resolution-logo-transparent" src="https://github.com/user-attachments/assets/bd5eb9ea-ef10-424a-b7b3-64e26f5c0277" />
+<img width="2000" height="1490" alt="cipher-bft-high-resolution-logo-transparent" src="assets/cipher-bft-high-resolution-logo.png" />
 
 
 
