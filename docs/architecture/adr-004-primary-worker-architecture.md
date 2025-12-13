@@ -3,8 +3,6 @@
 ## Changelog
 
 * 2025-12-06: Initial draft
-* 2025-12-06: Simplified to two options: Narwhal-Bullshark vs Autobahn
-* 2025-12-06: Autobahn BFT with configurable Worker count
 
 ## Status
 

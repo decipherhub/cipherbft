@@ -2,14 +2,14 @@
 
 ## Changelog
 
-* 2025-12-06: Initial draft based on Autobahn BFT design
-* 2025-12-06: Added layer interfaces, state sync, error handling, storage design
+* 2025-12-06: Initial draft
 
 ## Status
 
 PROPOSED Not Implemented
 
 ## Abstract
+<img width="2320" height="1987" alt="image" src="https://github.com/user-attachments/assets/1be9339a-2375-4549-b699-77ad681d4552" />
 
 CipherBFT implements a three-layer architecture separating concerns into Data Chain Layer (DCL), Consensus Layer (CL), and Execution Layer (EL). This design follows the Autobahn BFT paper's approach where DCL handles data availability through Car/Attestation/Cut mechanisms, CL runs PBFT-style consensus over Cuts, and EL executes finalized transactions via embedded revm. This separation enables pipelined operation where attestation collection for height N+1 occurs during consensus for height N, reducing latency.
 

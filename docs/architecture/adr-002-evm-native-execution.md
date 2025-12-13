@@ -3,9 +3,6 @@
 ## Changelog
 
 * 2025-12-06: Initial draft
-* 2025-12-06: Major revision - corrected Reth crate APIs, added missing dependencies, specified state sync protocol, defined precompile gas costs
-* 2025-12-06: Expanded Context - detailed Engine API vs Autobahn BFT architectural incompatibility analysis
-* 2025-12-06: Restructured - separated Context/Problem/Decision/Implementation for clarity
 
 ## Status
 
@@ -158,7 +155,6 @@ reth-primitives = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" 
 reth-execution-types = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
 reth-chainspec = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
 reth-rpc-types = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
-reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
 ```
 
 | Crate | Purpose |
@@ -172,7 +168,6 @@ reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", rev = "v1
 | `reth-execution-types` | BlockExecutionOutput, BundleState |
 | `reth-chainspec` | ChainSpec, genesis configuration |
 | `reth-rpc-types` | JSON-RPC type compatibility |
-| `reth-transaction-pool` | Mempool/transaction pool management (see ADR-006) |
 
 ### Transaction Flow (Consensus-then-Execute)
 
