@@ -13,7 +13,9 @@ pub mod config;
 pub mod core;
 pub mod cut_former;
 pub mod proposer;
+pub mod runner;
 pub mod state;
 
 pub use config::PrimaryConfig;
+pub use runner::{Primary, PrimaryEvent, PrimaryHandle, PrimaryNetwork};
 pub use state::PrimaryState;
