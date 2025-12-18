@@ -14,7 +14,10 @@ use std::time::{Duration, Instant};
 struct PendingAttestation {
     /// The Car being attested
     car: Car,
-    /// Attestations received (attester -> attestation)
+    /// Proposer's own attestation (self-attestation)
+    /// This MUST be included in the aggregated signature for correct verification
+    self_attestation: Attestation,
+    /// Attestations received from other validators (attester -> attestation)
     attestations: HashMap<ValidatorId, Attestation>,
     /// When collection started
     started_at: Instant,
@@ -23,9 +26,10 @@ struct PendingAttestation {
 }
 
 impl PendingAttestation {
-    fn new(car: Car, base_timeout: Duration) -> Self {
+    fn new(car: Car, self_attestation: Attestation, base_timeout: Duration) -> Self {
         Self {
             car,
+            self_attestation,
             attestations: HashMap::new(),
             started_at: Instant::now(),
             current_backoff: base_timeout,
@@ -73,10 +77,20 @@ impl AttestationCollector {
     }
 
     /// Start collecting attestations for a Car (our own Car)
-    pub fn start_collection(&mut self, car: Car) {
+    ///
+    /// The proposer MUST provide their own attestation (self-attestation) which
+    /// will be included in the aggregated signature. This is required for correct
+    /// verification per FR-002: "Self-attestation counts as 1 (implicit)".
+    ///
+    /// # Arguments
+    /// * `car` - The Car created by this validator
+    /// * `self_attestation` - Proposer's own signed attestation for this Car
+    pub fn start_collection(&mut self, car: Car, self_attestation: Attestation) {
         let hash = car.hash();
-        self.pending
-            .insert(hash, PendingAttestation::new(car, self.base_timeout));
+        self.pending.insert(
+            hash,
+            PendingAttestation::new(car, self_attestation, self.base_timeout),
+        );
     }
 
     /// Add an attestation
@@ -130,6 +144,9 @@ impl AttestationCollector {
     }
 
     /// Aggregate attestations for a Car
+    ///
+    /// Uses `aggregate_with_self()` to ensure the proposer's self-attestation
+    /// is included in the aggregated signature.
     fn aggregate(&self, car_hash: &Hash) -> Result<AggregatedAttestation, DclError> {
         let Some(pending) = self.pending.get(car_hash) else {
             return Err(DclError::UnknownCar {
@@ -137,7 +154,15 @@ impl AttestationCollector {
             });
         };
 
-        // Build attestations with indices
+        // Get proposer's validator index for self-attestation
+        let self_index = self
+            .validator_indices
+            .get(&self.our_id)
+            .ok_or_else(|| DclError::UnknownValidator {
+                validator: self.our_id,
+            })?;
+
+        // Build external attestations with indices
         let attestations: Vec<(Attestation, usize)> = pending
             .attestations
             .iter()
@@ -148,11 +173,17 @@ impl AttestationCollector {
             })
             .collect();
 
-        AggregatedAttestation::aggregate_with_indices(&attestations, self.validator_count)
-            .ok_or_else(|| DclError::ThresholdNotMet {
-                got: attestations.len(),
-                threshold: self.threshold,
-            })
+        // Aggregate with self-attestation included
+        AggregatedAttestation::aggregate_with_self(
+            &attestations,
+            &pending.self_attestation,
+            *self_index,
+            self.validator_count,
+        )
+        .ok_or_else(|| DclError::ThresholdNotMet {
+            got: attestations.len() + 1, // +1 for self-attestation
+            threshold: self.threshold,
+        })
     }
 
     /// Check for timed-out attestations
@@ -270,8 +301,9 @@ mod tests {
         let (mut collector, keypairs) = make_test_setup(4);
         let car = make_car(&keypairs[0]);
         let car_hash = car.hash();
+        let self_attestation = make_attestation(&car, &keypairs[0]);
 
-        collector.start_collection(car);
+        collector.start_collection(car, self_attestation);
         assert!(collector.is_pending(&car_hash));
         assert_eq!(collector.attestation_count(&car_hash), Some(1)); // self-attestation
     }
@@ -282,8 +314,9 @@ mod tests {
         let (mut collector, keypairs) = make_test_setup(4);
         let car = make_car(&keypairs[0]);
         let car_hash = car.hash();
+        let self_attestation = make_attestation(&car, &keypairs[0]);
 
-        collector.start_collection(car.clone());
+        collector.start_collection(car.clone(), self_attestation);
 
         // Add one attestation (self + 1 = 2 = threshold)
         let att = make_attestation(&car, &keypairs[1]);
@@ -295,11 +328,43 @@ mod tests {
     }
 
     #[test]
+    fn test_threshold_reached_with_verification() {
+        // n=4, f=1, threshold=2
+        // This test verifies the aggregated signature is correct
+        let (mut collector, keypairs) = make_test_setup(4);
+        let car = make_car(&keypairs[0]);
+        let self_attestation = make_attestation(&car, &keypairs[0]);
+
+        collector.start_collection(car.clone(), self_attestation);
+
+        // Add one attestation (self + 1 = 2 = threshold)
+        let att = make_attestation(&car, &keypairs[1]);
+        let result = collector.add_attestation(att).unwrap();
+
+        assert!(result.is_some());
+        let agg = result.unwrap();
+
+        // Build public key lookup
+        let pubkeys: Vec<_> = keypairs.iter().map(|kp| kp.public_key.clone()).collect();
+
+        // Verify the aggregated signature
+        assert!(agg.verify(|idx| pubkeys.get(idx).cloned()));
+
+        // Verify count includes both self and external attestation
+        assert_eq!(agg.count(), 2);
+
+        // Verify bitmap has both validators set
+        assert!(agg.has_attested(0)); // proposer (self)
+        assert!(agg.has_attested(1)); // external attester
+    }
+
+    #[test]
     fn test_duplicate_attestation() {
         let (mut collector, keypairs) = make_test_setup(7);
         let car = make_car(&keypairs[0]);
+        let self_attestation = make_attestation(&car, &keypairs[0]);
 
-        collector.start_collection(car.clone());
+        collector.start_collection(car.clone(), self_attestation);
 
         // Add first attestation
         let att1 = make_attestation(&car, &keypairs[1]);
@@ -326,8 +391,9 @@ mod tests {
         let (mut collector, keypairs) = make_test_setup(4);
         let car = make_car(&keypairs[0]);
         let car_hash = car.hash();
+        let self_attestation = make_attestation(&car, &keypairs[0]);
 
-        collector.start_collection(car);
+        collector.start_collection(car, self_attestation);
         assert!(collector.is_pending(&car_hash));
 
         let removed = collector.remove(&car_hash);

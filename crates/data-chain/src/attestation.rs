@@ -182,6 +182,64 @@ impl AggregatedAttestation {
         })
     }
 
+    /// Create from attestations with proposer's self-attestation included
+    ///
+    /// This method ensures the proposer's own attestation is included in the
+    /// aggregated signature, which is required for correct verification.
+    /// Per FR-002: "Self-attestation counts as 1 (implicit)" - the proposer
+    /// must create and include their own attestation signature.
+    ///
+    /// # Arguments
+    /// * `attestations` - External attestations (from other validators)
+    /// * `self_attestation` - Proposer's own attestation for their Car
+    /// * `self_index` - Proposer's validator index
+    /// * `validator_count` - Total validator count for bitmap sizing
+    pub fn aggregate_with_self(
+        attestations: &[(Attestation, usize)], // (attestation, validator_index)
+        self_attestation: &Attestation,
+        self_index: usize,
+        validator_count: usize,
+    ) -> Option<Self> {
+        if self_index >= validator_count {
+            return None;
+        }
+
+        let car_hash = self_attestation.car_hash;
+        let car_position = self_attestation.car_position;
+        let car_proposer = self_attestation.car_proposer;
+
+        // Build validator bitmap and collect signatures
+        let mut validators = bitvec![u8, Lsb0; 0; validator_count];
+        let mut sigs: Vec<&BlsSignature> = Vec::with_capacity(attestations.len() + 1);
+
+        // Include proposer's self-attestation FIRST
+        validators.set(self_index, true);
+        sigs.push(&self_attestation.signature);
+
+        // Add external attestations
+        for (att, idx) in attestations {
+            if att.car_hash != car_hash {
+                return None;
+            }
+            // Skip if duplicate index (shouldn't happen, but defensive)
+            if *idx < validator_count && !validators[*idx] {
+                validators.set(*idx, true);
+                sigs.push(&att.signature);
+            }
+        }
+
+        // Aggregate signatures
+        let aggregated_signature = BlsAggregateSignature::aggregate(&sigs).ok()?;
+
+        Some(Self {
+            car_hash,
+            car_position,
+            car_proposer,
+            validators,
+            aggregated_signature,
+        })
+    }
+
     /// Verify aggregated signature against public keys
     ///
     /// # Arguments
@@ -359,5 +417,83 @@ mod tests {
         assert_eq!(agg.attester_indices(), vec![1, 3, 7]);
         assert!(agg.has_attested(1));
         assert!(!agg.has_attested(2));
+    }
+
+    #[test]
+    fn test_aggregate_with_self() {
+        let proposer_kp = BlsKeyPair::generate(&mut rand::thread_rng());
+        let car = make_test_car(&proposer_kp);
+
+        // Create proposer's self-attestation
+        let proposer_id = ValidatorId::from_bytes(proposer_kp.public_key.hash());
+        let mut self_att = Attestation::from_car(&car, proposer_id);
+        let self_signing_bytes = self_att.get_signing_bytes();
+        self_att.signature = proposer_kp.sign_attestation(&self_signing_bytes);
+
+        // Create 2 external attesters
+        let attesters: Vec<BlsKeyPair> = (0..2)
+            .map(|_| BlsKeyPair::generate(&mut rand::thread_rng()))
+            .collect();
+
+        // Create external attestations with indices (proposer is index 0, attesters are 1, 2)
+        let attestations: Vec<(Attestation, usize)> = attesters
+            .iter()
+            .enumerate()
+            .map(|(idx, kp)| {
+                let attester_id = ValidatorId::from_bytes(kp.public_key.hash());
+                let mut att = Attestation::from_car(&car, attester_id);
+                let signing_bytes = att.get_signing_bytes();
+                att.signature = kp.sign_attestation(&signing_bytes);
+                (att, idx + 1) // indices 1, 2 for external attesters
+            })
+            .collect();
+
+        // Aggregate with self-attestation
+        let agg = AggregatedAttestation::aggregate_with_self(
+            &attestations,
+            &self_att,
+            0, // proposer is index 0
+            10,
+        )
+        .unwrap();
+
+        // Verify count includes self + 2 external
+        assert_eq!(agg.count(), 3);
+
+        // Verify bitmap
+        assert!(agg.has_attested(0)); // proposer
+        assert!(agg.has_attested(1)); // attester 1
+        assert!(agg.has_attested(2)); // attester 2
+        assert!(!agg.has_attested(3)); // not attested
+
+        // Build public key lookup (proposer at 0, attesters at 1, 2)
+        let mut pubkeys: Vec<BlsPublicKey> = Vec::with_capacity(10);
+        pubkeys.push(proposer_kp.public_key.clone());
+        for kp in &attesters {
+            pubkeys.push(kp.public_key.clone());
+        }
+
+        // Verify the aggregated signature
+        assert!(agg.verify(|idx| pubkeys.get(idx).cloned()));
+    }
+
+    #[test]
+    fn test_aggregate_with_self_invalid_index() {
+        let proposer_kp = BlsKeyPair::generate(&mut rand::thread_rng());
+        let car = make_test_car(&proposer_kp);
+
+        let proposer_id = ValidatorId::from_bytes(proposer_kp.public_key.hash());
+        let mut self_att = Attestation::from_car(&car, proposer_id);
+        self_att.signature = proposer_kp.sign_attestation(&self_att.get_signing_bytes());
+
+        // Try with invalid self_index (>= validator_count)
+        let result = AggregatedAttestation::aggregate_with_self(
+            &[],
+            &self_att,
+            10, // invalid: >= validator_count
+            10,
+        );
+
+        assert!(result.is_none());
     }
 }
