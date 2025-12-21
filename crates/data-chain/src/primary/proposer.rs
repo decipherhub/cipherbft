@@ -63,11 +63,9 @@ impl Proposer {
         }
 
         // Check empty car policy
-        if batch_digests.is_empty() {
-            if empty_car_count >= self.max_empty_cars {
-                // Cannot create another empty Car
-                return Ok(None);
-            }
+        if batch_digests.is_empty() && empty_car_count >= self.max_empty_cars {
+            // Cannot create another empty Car
+            return Ok(None);
         }
 
         // Sort batch digests by worker_id for determinism
@@ -103,10 +101,19 @@ impl Proposer {
 mod tests {
     use super::*;
     use cipherbft_crypto::BlsKeyPair;
+    use cipherbft_types::VALIDATOR_ID_SIZE;
+
+    /// Helper to derive ValidatorId from BLS public key (for tests only)
+    fn validator_id_from_bls_pubkey(pubkey: &cipherbft_crypto::BlsPublicKey) -> ValidatorId {
+        let hash = pubkey.hash();
+        let mut bytes = [0u8; VALIDATOR_ID_SIZE];
+        bytes.copy_from_slice(&hash[12..32]); // last 20 bytes
+        ValidatorId::from_bytes(bytes)
+    }
 
     fn make_proposer() -> (Proposer, BlsKeyPair) {
         let keypair = BlsKeyPair::generate(&mut rand::thread_rng());
-        let validator_id = ValidatorId::from_bytes(keypair.public_key.hash());
+        let validator_id = validator_id_from_bls_pubkey(&keypair.public_key);
         let proposer = Proposer::new(validator_id, keypair.secret_key.clone(), 3);
         (proposer, keypair)
     }

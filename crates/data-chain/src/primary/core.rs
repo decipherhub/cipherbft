@@ -234,7 +234,15 @@ impl Core {
 mod tests {
     use super::*;
     use cipherbft_crypto::BlsKeyPair;
-    use cipherbft_types::Hash;
+    use cipherbft_types::{Hash, VALIDATOR_ID_SIZE};
+
+    /// Helper to derive ValidatorId from BLS public key (for tests only)
+    fn validator_id_from_bls_pubkey(pubkey: &cipherbft_crypto::BlsPublicKey) -> ValidatorId {
+        let hash = pubkey.hash();
+        let mut bytes = [0u8; VALIDATOR_ID_SIZE];
+        bytes.copy_from_slice(&hash[12..32]); // last 20 bytes
+        ValidatorId::from_bytes(bytes)
+    }
 
     fn make_test_setup(n: usize) -> (Core, Vec<BlsKeyPair>, PrimaryState) {
         let keypairs: Vec<BlsKeyPair> = (0..n)
@@ -244,12 +252,12 @@ mod tests {
         let validator_pubkeys: HashMap<_, _> = keypairs
             .iter()
             .map(|kp| {
-                let id = ValidatorId::from_bytes(kp.public_key.hash());
+                let id = validator_id_from_bls_pubkey(&kp.public_key);
                 (id, kp.public_key.clone())
             })
             .collect();
 
-        let our_id = ValidatorId::from_bytes(keypairs[0].public_key.hash());
+        let our_id = validator_id_from_bls_pubkey(&keypairs[0].public_key);
         let core = Core::new(our_id, keypairs[0].clone(), validator_pubkeys);
         let state = PrimaryState::new(our_id);
 
@@ -257,7 +265,7 @@ mod tests {
     }
 
     fn make_car(keypair: &BlsKeyPair, position: u64, parent_ref: Option<Hash>) -> Car {
-        let validator_id = ValidatorId::from_bytes(keypair.public_key.hash());
+        let validator_id = validator_id_from_bls_pubkey(&keypair.public_key);
         let mut car = Car::new(validator_id, position, vec![], parent_ref);
         let signing_bytes = car.signing_bytes();
         car.signature = keypair.sign_car(&signing_bytes);
@@ -284,7 +292,7 @@ mod tests {
         let (core, keypairs, mut state) = make_test_setup(4);
 
         // Create car with wrong signature
-        let validator_id = ValidatorId::from_bytes(keypairs[1].public_key.hash());
+        let validator_id = validator_id_from_bls_pubkey(&keypairs[1].public_key);
         let mut car = Car::new(validator_id, 0, vec![], None);
         // Sign with wrong key
         car.signature = keypairs[2].sign_car(&car.signing_bytes());

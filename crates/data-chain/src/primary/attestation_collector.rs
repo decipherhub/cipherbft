@@ -155,12 +155,12 @@ impl AttestationCollector {
         };
 
         // Get proposer's validator index for self-attestation
-        let self_index = self
-            .validator_indices
-            .get(&self.our_id)
-            .ok_or_else(|| DclError::UnknownValidator {
-                validator: self.our_id,
-            })?;
+        let self_index =
+            self.validator_indices
+                .get(&self.our_id)
+                .ok_or(DclError::UnknownValidator {
+                    validator: self.our_id,
+                })?;
 
         // Build external attestations with indices
         let attestations: Vec<(Attestation, usize)> = pending
@@ -255,6 +255,15 @@ impl AttestationCollector {
 mod tests {
     use super::*;
     use cipherbft_crypto::BlsKeyPair;
+    use cipherbft_types::VALIDATOR_ID_SIZE;
+
+    /// Helper to derive ValidatorId from BLS public key (for tests only)
+    fn validator_id_from_bls_pubkey(pubkey: &cipherbft_crypto::BlsPublicKey) -> ValidatorId {
+        let hash = pubkey.hash();
+        let mut bytes = [0u8; VALIDATOR_ID_SIZE];
+        bytes.copy_from_slice(&hash[12..32]); // last 20 bytes
+        ValidatorId::from_bytes(bytes)
+    }
 
     fn make_test_setup(n: usize) -> (AttestationCollector, Vec<BlsKeyPair>) {
         let keypairs: Vec<BlsKeyPair> = (0..n)
@@ -264,10 +273,10 @@ mod tests {
         let validator_indices: HashMap<_, _> = keypairs
             .iter()
             .enumerate()
-            .map(|(i, kp)| (ValidatorId::from_bytes(kp.public_key.hash()), i))
+            .map(|(i, kp)| (validator_id_from_bls_pubkey(&kp.public_key), i))
             .collect();
 
-        let our_id = ValidatorId::from_bytes(keypairs[0].public_key.hash());
+        let our_id = validator_id_from_bls_pubkey(&keypairs[0].public_key);
         let threshold = (n - 1) / 3 + 1; // f+1
 
         let collector = AttestationCollector::new(
@@ -283,14 +292,14 @@ mod tests {
     }
 
     fn make_car(keypair: &BlsKeyPair) -> Car {
-        let validator_id = ValidatorId::from_bytes(keypair.public_key.hash());
+        let validator_id = validator_id_from_bls_pubkey(&keypair.public_key);
         let mut car = Car::new(validator_id, 0, vec![], None);
         car.signature = keypair.sign_car(&car.signing_bytes());
         car
     }
 
     fn make_attestation(car: &Car, attester_keypair: &BlsKeyPair) -> Attestation {
-        let attester_id = ValidatorId::from_bytes(attester_keypair.public_key.hash());
+        let attester_id = validator_id_from_bls_pubkey(&attester_keypair.public_key);
         let mut att = Attestation::from_car(car, attester_id);
         att.signature = attester_keypair.sign_attestation(&att.get_signing_bytes());
         att

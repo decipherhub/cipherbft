@@ -18,9 +18,11 @@ use crate::primary::core::Core;
 use crate::primary::cut_former::CutFormer;
 use crate::primary::proposer::Proposer;
 use crate::primary::state::PrimaryState;
+use crate::storage::CarStore;
 use cipherbft_crypto::BlsPublicKey;
 use cipherbft_types::{Hash, ValidatorId};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::interval;
@@ -133,6 +135,8 @@ pub struct Primary {
     from_network: mpsc::Receiver<(ValidatorId, DclMessage)>,
     /// Network interface
     network: Box<dyn PrimaryNetwork>,
+    /// Optional persistent storage for Cars and attestations
+    storage: Option<Arc<dyn CarStore>>,
     /// Channel to send events
     event_sender: mpsc::Sender<PrimaryEvent>,
     /// Last Cut (for monotonicity)
@@ -149,6 +153,17 @@ impl Primary {
         network: Box<dyn PrimaryNetwork>,
         worker_count: u8,
     ) -> (PrimaryHandle, Vec<mpsc::Receiver<PrimaryToWorker>>) {
+        Self::spawn_with_storage(config, validator_pubkeys, network, worker_count, None)
+    }
+
+    /// Spawn a new Primary task with optional persistent storage
+    pub fn spawn_with_storage(
+        config: PrimaryConfig,
+        validator_pubkeys: HashMap<ValidatorId, BlsPublicKey>,
+        network: Box<dyn PrimaryNetwork>,
+        worker_count: u8,
+        storage: Option<Arc<dyn CarStore>>,
+    ) -> (PrimaryHandle, Vec<mpsc::Receiver<PrimaryToWorker>>) {
         let (from_workers_tx, from_workers_rx) = mpsc::channel(1024);
         let (from_network_tx, from_network_rx) = mpsc::channel(1024);
         let (event_tx, event_rx) = mpsc::channel(256);
@@ -164,7 +179,7 @@ impl Primary {
 
         let config_clone = config.clone();
         let handle = tokio::spawn(async move {
-            let mut primary = Primary::new(
+            let mut primary = Primary::new_with_storage(
                 config_clone,
                 validator_pubkeys,
                 from_workers_rx,
@@ -172,6 +187,7 @@ impl Primary {
                 from_network_rx,
                 network,
                 event_tx,
+                storage,
             );
             primary.run().await;
         });
@@ -196,6 +212,29 @@ impl Primary {
         network: Box<dyn PrimaryNetwork>,
         event_sender: mpsc::Sender<PrimaryEvent>,
     ) -> Self {
+        Self::new_with_storage(
+            config,
+            validator_pubkeys,
+            from_workers,
+            to_workers,
+            from_network,
+            network,
+            event_sender,
+            None,
+        )
+    }
+
+    /// Create a new Primary with optional persistent storage
+    pub fn new_with_storage(
+        config: PrimaryConfig,
+        validator_pubkeys: HashMap<ValidatorId, BlsPublicKey>,
+        from_workers: mpsc::Receiver<WorkerToPrimary>,
+        to_workers: Vec<mpsc::Sender<PrimaryToWorker>>,
+        from_network: mpsc::Receiver<(ValidatorId, DclMessage)>,
+        network: Box<dyn PrimaryNetwork>,
+        event_sender: mpsc::Sender<PrimaryEvent>,
+        storage: Option<Arc<dyn CarStore>>,
+    ) -> Self {
         let state = PrimaryState::new(config.validator_id);
 
         let proposer = Proposer::new(
@@ -213,7 +252,8 @@ impl Primary {
             .map(|(i, v)| (*v, i))
             .collect();
 
-        let our_keypair = cipherbft_crypto::BlsKeyPair::from_secret_key(config.bls_secret_key.clone());
+        let our_keypair =
+            cipherbft_crypto::BlsKeyPair::from_secret_key(config.bls_secret_key.clone());
         let core = Core::new(config.validator_id, our_keypair, validator_pubkeys.clone());
 
         let attestation_collector = AttestationCollector::new(
@@ -238,6 +278,7 @@ impl Primary {
             to_workers,
             from_network,
             network,
+            storage,
             event_sender,
             last_cut: None,
             shutdown: false,
@@ -304,9 +345,8 @@ impl Primary {
                     byte_size,
                     "Received batch digest from Worker"
                 );
-                self.state.add_batch_digest(BatchDigest::new(
-                    worker_id, digest, tx_count, byte_size,
-                ));
+                self.state
+                    .add_batch_digest(BatchDigest::new(worker_id, digest, tx_count, byte_size));
             }
 
             WorkerToPrimary::BatchSynced { digest, success } => {
@@ -315,7 +355,24 @@ impl Primary {
                     success,
                     "Batch sync result"
                 );
-                // Could trigger re-attestation here if we were waiting for this batch
+
+                if success {
+                    // Mark batch as available
+                    self.state.mark_batch_available(digest);
+
+                    // Check if any waiting Cars are now ready
+                    let ready_cars = self.state.get_ready_cars();
+                    for car in ready_cars {
+                        debug!(
+                            proposer = %car.proposer,
+                            position = car.position,
+                            "Processing Car that was waiting for batches"
+                        );
+                        // Re-process the Car now that batches are available
+                        // Use a dummy validator since we already have the Car
+                        self.handle_received_car(car.proposer, car).await;
+                    }
+                }
             }
 
             WorkerToPrimary::Ready { worker_id } => {
@@ -335,7 +392,10 @@ impl Primary {
                 self.handle_received_attestation(attestation).await;
             }
 
-            DclMessage::CarRequest { validator, position } => {
+            DclMessage::CarRequest {
+                validator,
+                position,
+            } => {
                 // TODO: Respond with Car if we have it
                 debug!(
                     from = %peer,
@@ -380,19 +440,59 @@ impl Primary {
             "Received Car"
         );
 
-        // For now, assume we have all batches (in production, would check and sync)
-        let has_all_batches = true;
+        // Check batch availability (T097)
+        let (has_all_batches, missing_digests) = self.state.check_batch_availability(&car);
+
+        if !has_all_batches {
+            debug!(
+                proposer = %car.proposer,
+                position = car.position,
+                missing_count = missing_digests.len(),
+                "Car missing batches, triggering sync"
+            );
+
+            // Check if we're already waiting for this Car
+            let car_hash = car.hash();
+            if !self.state.is_awaiting_batches(&car_hash) {
+                // Add to awaiting queue (T098)
+                self.state
+                    .add_car_awaiting_batches(car.clone(), missing_digests.clone());
+
+                // Trigger batch sync via Workers (T098)
+                // Send sync request to first Worker (in production, would choose appropriate Worker)
+                if !self.to_workers.is_empty() {
+                    let _ = self.to_workers[0]
+                        .send(PrimaryToWorker::Synchronize {
+                            digests: missing_digests.clone(),
+                            target_validator: car.proposer,
+                        })
+                        .await;
+                }
+
+                // Emit sync event
+                let _ = self
+                    .event_sender
+                    .send(PrimaryEvent::SyncBatches {
+                        digests: missing_digests,
+                        target: car.proposer,
+                    })
+                    .await;
+            }
+            return;
+        }
 
         match self.core.handle_car(&car, &mut self.state, has_all_batches) {
             Ok(Some(attestation)) => {
                 debug!(
                     proposer = %car.proposer,
                     position = car.position,
-                    "Generated attestation"
+                    "Generated attestation (T099)"
                 );
 
-                // Send attestation to proposer
-                self.network.send_attestation(car.proposer, &attestation).await;
+                // Send attestation to proposer (T100)
+                self.network
+                    .send_attestation(car.proposer, &attestation)
+                    .await;
 
                 // Emit event
                 let _ = self
@@ -405,11 +505,11 @@ impl Primary {
             }
 
             Ok(None) => {
-                // Missing batches - would request sync here
+                // Shouldn't happen since we checked batch availability above
                 debug!(
                     proposer = %car.proposer,
                     position = car.position,
-                    "Car valid but missing batches"
+                    "Car valid but no attestation generated"
                 );
             }
 
@@ -467,12 +567,23 @@ impl Primary {
 
     /// Handle aggregated attestation (threshold reached)
     async fn handle_aggregated_attestation(&mut self, aggregated: AggregatedAttestation) {
-        // Get the Car
+        // Persist attestation to storage if available
+        if let Some(ref storage) = self.storage {
+            if let Err(e) = storage.put_attestation(aggregated.clone()).await {
+                error!(
+                    car_hash = %aggregated.car_hash,
+                    error = %e,
+                    "Failed to persist attestation to storage"
+                );
+            }
+        }
+
+        // Get the Car from pending state
         if let Some(pending) = self.state.remove_pending_car(&aggregated.car_hash) {
             let car = pending.car;
 
-            // Mark as attested
-            self.state.mark_attested(car.clone(), pending.attestations);
+            // Mark as attested with the aggregated attestation (contains BLS aggregate signature)
+            self.state.mark_attested(car.clone(), aggregated);
 
             // Try to form a Cut
             self.try_form_cut().await;
@@ -508,6 +619,19 @@ impl Primary {
                     "Created Car"
                 );
 
+                // Persist to storage if available (T091)
+                if let Some(ref storage) = self.storage {
+                    if let Err(e) = storage.put_car(car.clone()).await {
+                        error!(
+                            position = car.position,
+                            hash = %car_hash,
+                            error = %e,
+                            "Failed to persist Car to storage"
+                        );
+                        // Continue anyway - in-memory state will still have it
+                    }
+                }
+
                 // Update our state
                 self.state.update_our_position(position, car_hash, is_empty);
                 self.state.our_position += 1;
@@ -516,7 +640,8 @@ impl Primary {
                 let self_attestation = self.core.create_attestation(&car);
 
                 // Start collecting attestations
-                self.attestation_collector.start_collection(car.clone(), self_attestation);
+                self.attestation_collector
+                    .start_collection(car.clone(), self_attestation);
 
                 // Add to pending
                 self.state.add_pending_car(car.clone());
@@ -525,10 +650,7 @@ impl Primary {
                 self.network.broadcast_car(&car).await;
 
                 // Emit event
-                let _ = self
-                    .event_sender
-                    .send(PrimaryEvent::CarCreated(car))
-                    .await;
+                let _ = self.event_sender.send(PrimaryEvent::CarCreated(car)).await;
             }
 
             Ok(None) => {
@@ -569,12 +691,8 @@ impl Primary {
 
     /// Try to form a Cut from attested Cars
     async fn try_form_cut(&mut self) {
-        // Build attested cars map
-        // TODO: In full implementation, populate this from state.attested_cars
-        let attested_cars: HashMap<ValidatorId, (Car, AggregatedAttestation)> = HashMap::new();
-
-        // In a full implementation, we would track aggregated attestations properly
-        // For now, this is a simplified version
+        // Get attested cars from state (properly populated by mark_attested)
+        let attested_cars = self.state.get_attested_cars();
 
         // Get validators with attested cars
         let validators = self.state.validators_with_attested_cars();
@@ -586,7 +704,10 @@ impl Primary {
         // Form Cut
         let height = self.state.current_height + 1;
 
-        match self.cut_former.form_cut(height, &attested_cars, self.last_cut.as_ref()) {
+        match self
+            .cut_former
+            .form_cut(height, attested_cars, self.last_cut.as_ref())
+        {
             Ok(cut) => {
                 if cut.validator_count() > 0 {
                     debug!(
@@ -628,8 +749,17 @@ impl Primary {
 mod tests {
     use super::*;
     use cipherbft_crypto::BlsKeyPair;
+    use cipherbft_types::VALIDATOR_ID_SIZE;
     use std::sync::Arc;
     use tokio::sync::Mutex;
+
+    /// Helper to derive ValidatorId from BLS public key (for tests only)
+    fn validator_id_from_bls_pubkey(pubkey: &cipherbft_crypto::BlsPublicKey) -> ValidatorId {
+        let hash = pubkey.hash();
+        let mut bytes = [0u8; VALIDATOR_ID_SIZE];
+        bytes.copy_from_slice(&hash[12..32]); // last 20 bytes
+        ValidatorId::from_bytes(bytes)
+    }
 
     struct MockNetwork {
         car_broadcasts: Arc<Mutex<Vec<Car>>>,
@@ -675,12 +805,12 @@ mod tests {
         let validator_pubkeys: HashMap<_, _> = keypairs
             .iter()
             .map(|kp| {
-                let id = ValidatorId::from_bytes(kp.public_key.hash());
+                let id = validator_id_from_bls_pubkey(&kp.public_key);
                 (id, kp.public_key.clone())
             })
             .collect();
 
-        let our_id = ValidatorId::from_bytes(keypairs[0].public_key.hash());
+        let our_id = validator_id_from_bls_pubkey(&keypairs[0].public_key);
         let config = PrimaryConfig::new(our_id, keypairs[0].secret_key.clone())
             .with_car_interval(Duration::from_millis(50))
             .with_attestation_timeout(Duration::from_millis(100), Duration::from_millis(500));
@@ -692,7 +822,7 @@ mod tests {
     async fn test_primary_car_creation() {
         let (config, validator_pubkeys, _keypairs) = make_test_setup(4);
 
-        let (from_workers_tx, from_workers_rx) = mpsc::channel(100);
+        let (_from_workers_tx, from_workers_rx) = mpsc::channel(100);
         let (_from_network_tx, from_network_rx) = mpsc::channel(100);
         let (event_tx, mut event_rx) = mpsc::channel(100);
 
@@ -759,5 +889,133 @@ mod tests {
         assert!(event.is_ok() || car_broadcasts.lock().await.len() > 0);
 
         handle.shutdown().await;
+    }
+
+    // T101: Test attestation flow
+    #[tokio::test]
+    async fn test_attestation_flow() {
+        let (config, validator_pubkeys, keypairs) = make_test_setup(4);
+
+        let (_from_workers_tx, from_workers_rx) = mpsc::channel(100);
+        let (_from_network_tx, from_network_rx) = mpsc::channel(100);
+        let (event_tx, mut event_rx) = mpsc::channel(100);
+
+        let network = MockNetwork::new();
+        let attestation_sends = network.attestation_sends.clone();
+
+        let mut primary = Primary::new(
+            config.clone(),
+            validator_pubkeys.clone(),
+            from_workers_rx,
+            vec![],
+            from_network_rx,
+            Box::new(network),
+            event_tx,
+        );
+
+        // Create a Car from another validator
+        let other_id = validator_id_from_bls_pubkey(&keypairs[1].public_key);
+        let batch_digest = crate::batch::BatchDigest::new(0, Hash::compute(b"batch"), 10, 100);
+
+        // First, we need to register the batch as available
+        primary.state.mark_batch_available(batch_digest.digest);
+
+        let mut car = Car::new(other_id, 0, vec![batch_digest], None);
+        let signing_bytes = car.signing_bytes();
+        car.signature = keypairs[1].sign_car(&signing_bytes);
+
+        // Handle the received Car - should generate attestation
+        primary
+            .handle_received_car(other_id, car.clone())
+            .await;
+
+        // Should have sent attestation to proposer
+        let sends = attestation_sends.lock().await;
+        assert_eq!(sends.len(), 1);
+        assert_eq!(sends[0].0, other_id);
+        assert_eq!(sends[0].1.car_hash, car.hash());
+
+        // Should have emitted AttestationGenerated event
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            PrimaryEvent::AttestationGenerated {
+                car_proposer,
+                attestation,
+            } => {
+                assert_eq!(car_proposer, other_id);
+                assert_eq!(attestation.car_hash, car.hash());
+            }
+            _ => panic!("Expected AttestationGenerated event"),
+        }
+    }
+
+    // T101: Test batch sync trigger when Car has missing batches
+    #[tokio::test]
+    async fn test_missing_batch_triggers_sync() {
+        let (config, validator_pubkeys, keypairs) = make_test_setup(4);
+
+        let (_from_workers_tx, from_workers_rx) = mpsc::channel(100);
+        let (_from_network_tx, from_network_rx) = mpsc::channel(100);
+        let (event_tx, mut event_rx) = mpsc::channel(100);
+        let (to_worker_tx, mut to_worker_rx) = mpsc::channel::<PrimaryToWorker>(100);
+
+        let network = MockNetwork::new();
+        let attestation_sends = network.attestation_sends.clone();
+
+        let mut primary = Primary::new_with_storage(
+            config.clone(),
+            validator_pubkeys.clone(),
+            from_workers_rx,
+            vec![to_worker_tx],
+            from_network_rx,
+            Box::new(network),
+            event_tx,
+            None,
+        );
+
+        // Create a Car with a batch we don't have
+        let other_id = validator_id_from_bls_pubkey(&keypairs[1].public_key);
+        let missing_batch = Hash::compute(b"missing_batch");
+        let batch_digest = crate::batch::BatchDigest::new(0, missing_batch, 10, 100);
+
+        let mut car = Car::new(other_id, 0, vec![batch_digest], None);
+        let signing_bytes = car.signing_bytes();
+        car.signature = keypairs[1].sign_car(&signing_bytes);
+
+        // Handle the received Car - should trigger sync, not attestation
+        primary
+            .handle_received_car(other_id, car.clone())
+            .await;
+
+        // Should NOT have sent attestation (missing batches)
+        assert_eq!(attestation_sends.lock().await.len(), 0);
+
+        // Should have emitted SyncBatches event
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            PrimaryEvent::SyncBatches { digests, target } => {
+                assert_eq!(digests.len(), 1);
+                assert_eq!(digests[0], missing_batch);
+                assert_eq!(target, other_id);
+            }
+            _ => panic!("Expected SyncBatches event"),
+        }
+
+        // Should have sent sync request to worker
+        let worker_msg = to_worker_rx.try_recv().unwrap();
+        match worker_msg {
+            PrimaryToWorker::Synchronize {
+                digests,
+                target_validator,
+            } => {
+                assert_eq!(digests.len(), 1);
+                assert_eq!(digests[0], missing_batch);
+                assert_eq!(target_validator, other_id);
+            }
+            _ => panic!("Expected Synchronize message"),
+        }
+
+        // Car should be in awaiting queue
+        assert!(primary.state.is_awaiting_batches(&car.hash()));
     }
 }

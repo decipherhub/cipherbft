@@ -97,7 +97,7 @@ impl CutFormer {
         }
 
         // 2. Check attestation thresholds
-        for (_, car) in &cut.cars {
+        for car in cut.cars.values() {
             let car_hash = car.hash();
             if let Some(att) = cut.get_attestation(&car_hash) {
                 if att.count() < self.threshold {
@@ -187,10 +187,11 @@ impl CutFormer {
 mod tests {
     use super::*;
     use cipherbft_crypto::BlsKeyPair;
+    use cipherbft_types::VALIDATOR_ID_SIZE;
 
     fn make_validators(n: usize) -> Vec<ValidatorId> {
         (0..n)
-            .map(|i| ValidatorId::from_bytes([i as u8; 32]))
+            .map(|i| ValidatorId::from_bytes([i as u8; VALIDATOR_ID_SIZE]))
             .collect()
     }
 
@@ -343,9 +344,9 @@ mod tests {
     #[test]
     fn test_ordered_validators() {
         let validators = vec![
-            ValidatorId::from_bytes([5u8; 32]),
-            ValidatorId::from_bytes([1u8; 32]),
-            ValidatorId::from_bytes([3u8; 32]),
+            ValidatorId::from_bytes([5u8; VALIDATOR_ID_SIZE]),
+            ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]),
+            ValidatorId::from_bytes([3u8; VALIDATOR_ID_SIZE]),
         ];
         let former = CutFormer::new(validators);
 
