@@ -1,0 +1,39 @@
+[package]
+name = "cipherbft-storage"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Storage layer for CipherBFT"
+
+[dependencies]
+# Internal crates
+cipherbft-types = { path = "../types" }
+cipherbft-crypto = { path = "../crypto" }
+cipherbft-data-chain = { path = "../data-chain" }
+
+# Async runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+bincode = { workspace = true }
+bytes = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Storage backend (for InMemoryStore)
+parking_lot = "0.12"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+rand = { workspace = true }
+
+[features]
+default = []
