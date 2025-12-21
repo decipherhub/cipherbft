@@ -1,0 +1,47 @@
+[package]
+name = "cipherbft-node"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "CipherBFT Node - MVP for DCL testing"
+
+[[bin]]
+name = "cipherbft-node"
+path = "src/main.rs"
+
+[dependencies]
+# Internal dependencies
+cipherbft-types = { path = "../types" }
+cipherbft-crypto = { path = "../crypto" }
+cipherbft-data-chain = { path = "../data-chain" }
+cipherbft-storage = { path = "../storage" }
+
+# Async runtime
+tokio = { workspace = true, features = ["full", "signal"] }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+bytes = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# CLI
+clap = { version = "4.4", features = ["derive"] }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = "1.0"
+
+# Crypto
+rand = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
