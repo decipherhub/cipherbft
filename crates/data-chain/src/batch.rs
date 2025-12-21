@@ -86,6 +86,11 @@ impl Batch {
     pub fn total_bytes(&self) -> usize {
         self.transactions.iter().map(|tx| tx.len()).sum()
     }
+
+    /// Compute hash of the batch (same as digest().digest)
+    pub fn hash(&self) -> Hash {
+        self.digest().digest
+    }
 }
 
 #[cfg(test)]

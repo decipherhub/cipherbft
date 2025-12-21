@@ -48,7 +48,7 @@ impl Car {
 
     /// Canonical bytes for signing
     ///
-    /// Order: proposer (32) || position (8) || parent_ref (1 + 0/32) || sorted_batch_digests
+    /// Order: proposer (20) || position (8) || parent_ref (1 + 0/32) || sorted_batch_digests
     ///
     /// This order ensures:
     /// 1. Validator identity comes first
@@ -58,7 +58,7 @@ impl Car {
     pub fn signing_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(128);
 
-        // Proposer (32 bytes)
+        // Proposer (20 bytes - Ethereum address format)
         buf.extend_from_slice(self.proposer.as_bytes());
 
         // Position (8 bytes, little-endian)
@@ -121,6 +121,7 @@ impl Car {
 mod tests {
     use super::*;
     use cipherbft_crypto::BlsKeyPair;
+    use cipherbft_types::VALIDATOR_ID_SIZE;
 
     fn make_test_digest(worker_id: u8) -> BatchDigest {
         BatchDigest {
@@ -131,10 +132,18 @@ mod tests {
         }
     }
 
+    /// Helper to derive ValidatorId from BLS public key (for tests only)
+    fn validator_id_from_bls_pubkey(pubkey: &cipherbft_crypto::BlsPublicKey) -> ValidatorId {
+        let hash = pubkey.hash();
+        let mut bytes = [0u8; VALIDATOR_ID_SIZE];
+        bytes.copy_from_slice(&hash[12..32]); // last 20 bytes
+        ValidatorId::from_bytes(bytes)
+    }
+
     #[test]
     fn test_signing_bytes_deterministic() {
         let car = Car::new(
-            ValidatorId::from_bytes([1u8; 32]),
+            ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]),
             42,
             vec![make_test_digest(1), make_test_digest(0)], // Unsorted
             None,
@@ -148,7 +157,7 @@ mod tests {
     #[test]
     fn test_signing_bytes_sorts_digests() {
         let car1 = Car::new(
-            ValidatorId::from_bytes([1u8; 32]),
+            ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]),
             0,
             vec![
                 make_test_digest(2),
@@ -159,7 +168,7 @@ mod tests {
         );
 
         let car2 = Car::new(
-            ValidatorId::from_bytes([1u8; 32]),
+            ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]),
             0,
             vec![
                 make_test_digest(0),
@@ -176,7 +185,7 @@ mod tests {
     #[test]
     fn test_car_hash_deterministic() {
         let car = Car::new(
-            ValidatorId::from_bytes([1u8; 32]),
+            ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]),
             5,
             vec![make_test_digest(0)],
             Some(Hash::compute(b"parent")),
@@ -189,7 +198,12 @@ mod tests {
 
     #[test]
     fn test_empty_car() {
-        let car = Car::new(ValidatorId::from_bytes([1u8; 32]), 0, vec![], None);
+        let car = Car::new(
+            ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]),
+            0,
+            vec![],
+            None,
+        );
         assert!(car.is_empty());
         assert_eq!(car.tx_count(), 0);
         assert_eq!(car.total_bytes(), 0);
@@ -198,7 +212,7 @@ mod tests {
     #[test]
     fn test_car_sign_verify() {
         let keypair = BlsKeyPair::generate(&mut rand::thread_rng());
-        let validator_id = ValidatorId::from_bytes(keypair.public_key.hash());
+        let validator_id = validator_id_from_bls_pubkey(&keypair.public_key);
 
         let mut car = Car::new(validator_id, 0, vec![make_test_digest(0)], None);
 
@@ -212,10 +226,15 @@ mod tests {
 
     #[test]
     fn test_parent_ref_affects_hash() {
-        let car1 = Car::new(ValidatorId::from_bytes([1u8; 32]), 1, vec![], None);
+        let car1 = Car::new(
+            ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]),
+            1,
+            vec![],
+            None,
+        );
 
         let car2 = Car::new(
-            ValidatorId::from_bytes([1u8; 32]),
+            ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]),
             1,
             vec![],
             Some(Hash::compute(b"parent")),
@@ -227,7 +246,7 @@ mod tests {
     #[test]
     fn test_is_sorted() {
         let sorted_car = Car::new(
-            ValidatorId::from_bytes([1u8; 32]),
+            ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]),
             0,
             vec![
                 make_test_digest(0),
@@ -239,7 +258,7 @@ mod tests {
         assert!(sorted_car.is_sorted());
 
         let unsorted_car = Car::new(
-            ValidatorId::from_bytes([1u8; 32]),
+            ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]),
             0,
             vec![make_test_digest(2), make_test_digest(0)],
             None,

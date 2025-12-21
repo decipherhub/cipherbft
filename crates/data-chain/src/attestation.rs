@@ -53,16 +53,16 @@ impl Attestation {
 
     /// Message bytes for signing
     ///
-    /// Format: car_hash (32) || car_position (8) || car_proposer (32) = 72 bytes
+    /// Format: car_hash (32) || car_position (8) || car_proposer (20) = 60 bytes
     pub fn signing_bytes(
         car_hash: &Hash,
         car_position: u64,
         car_proposer: &ValidatorId,
     ) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(72);
+        let mut buf = Vec::with_capacity(60);
         buf.extend_from_slice(car_hash.as_bytes()); // 32 bytes
         buf.extend_from_slice(&car_position.to_le_bytes()); // 8 bytes
-        buf.extend_from_slice(car_proposer.as_bytes()); // 32 bytes
+        buf.extend_from_slice(car_proposer.as_bytes()); // 20 bytes
         buf
     }
 
@@ -318,9 +318,19 @@ mod bitvec_serde {
 mod tests {
     use super::*;
     use cipherbft_crypto::BlsKeyPair;
+    use cipherbft_types::VALIDATOR_ID_SIZE;
+
+    /// Helper to derive ValidatorId from BLS public key (for tests only)
+    /// Takes SHA256 hash of pubkey and uses last 20 bytes
+    fn validator_id_from_bls_pubkey(pubkey: &cipherbft_crypto::BlsPublicKey) -> ValidatorId {
+        let hash = pubkey.hash();
+        let mut bytes = [0u8; VALIDATOR_ID_SIZE];
+        bytes.copy_from_slice(&hash[12..32]); // last 20 bytes
+        ValidatorId::from_bytes(bytes)
+    }
 
     fn make_test_car(keypair: &BlsKeyPair) -> Car {
-        let validator_id = ValidatorId::from_bytes(keypair.public_key.hash());
+        let validator_id = validator_id_from_bls_pubkey(&keypair.public_key);
         let mut car = Car::new(validator_id, 0, vec![], None);
         let signing_bytes = car.signing_bytes();
         car.signature = keypair.sign_car(&signing_bytes);
@@ -331,17 +341,17 @@ mod tests {
     fn test_attestation_signing_bytes() {
         let car_hash = Hash::compute(b"car");
         let car_position = 42u64;
-        let car_proposer = ValidatorId::from_bytes([1u8; 32]);
+        let car_proposer = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
 
         let bytes = Attestation::signing_bytes(&car_hash, car_position, &car_proposer);
-        assert_eq!(bytes.len(), 72);
+        assert_eq!(bytes.len(), 60); // 32 + 8 + 20
     }
 
     #[test]
     fn test_attestation_signing_bytes_deterministic() {
         let car_hash = Hash::compute(b"car");
         let car_position = 10u64;
-        let car_proposer = ValidatorId::from_bytes([2u8; 32]);
+        let car_proposer = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
 
         let bytes1 = Attestation::signing_bytes(&car_hash, car_position, &car_proposer);
         let bytes2 = Attestation::signing_bytes(&car_hash, car_position, &car_proposer);
@@ -354,7 +364,7 @@ mod tests {
         let attester_kp = BlsKeyPair::generate(&mut rand::thread_rng());
 
         let car = make_test_car(&proposer_kp);
-        let attester_id = ValidatorId::from_bytes(attester_kp.public_key.hash());
+        let attester_id = validator_id_from_bls_pubkey(&attester_kp.public_key);
 
         let mut att = Attestation::from_car(&car, attester_id);
         let signing_bytes = att.get_signing_bytes();
@@ -378,7 +388,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(idx, kp)| {
-                let attester_id = ValidatorId::from_bytes(kp.public_key.hash());
+                let attester_id = validator_id_from_bls_pubkey(&kp.public_key);
                 let mut att = Attestation::from_car(&car, attester_id);
                 let signing_bytes = att.get_signing_bytes();
                 att.signature = kp.sign_attestation(&signing_bytes);
@@ -425,7 +435,7 @@ mod tests {
         let car = make_test_car(&proposer_kp);
 
         // Create proposer's self-attestation
-        let proposer_id = ValidatorId::from_bytes(proposer_kp.public_key.hash());
+        let proposer_id = validator_id_from_bls_pubkey(&proposer_kp.public_key);
         let mut self_att = Attestation::from_car(&car, proposer_id);
         let self_signing_bytes = self_att.get_signing_bytes();
         self_att.signature = proposer_kp.sign_attestation(&self_signing_bytes);
@@ -440,7 +450,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(idx, kp)| {
-                let attester_id = ValidatorId::from_bytes(kp.public_key.hash());
+                let attester_id = validator_id_from_bls_pubkey(&kp.public_key);
                 let mut att = Attestation::from_car(&car, attester_id);
                 let signing_bytes = att.get_signing_bytes();
                 att.signature = kp.sign_attestation(&signing_bytes);
@@ -482,7 +492,7 @@ mod tests {
         let proposer_kp = BlsKeyPair::generate(&mut rand::thread_rng());
         let car = make_test_car(&proposer_kp);
 
-        let proposer_id = ValidatorId::from_bytes(proposer_kp.public_key.hash());
+        let proposer_id = validator_id_from_bls_pubkey(&proposer_kp.public_key);
         let mut self_att = Attestation::from_car(&car, proposer_id);
         self_att.signature = proposer_kp.sign_attestation(&self_att.get_signing_bytes());
 
