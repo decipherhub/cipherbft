@@ -2,13 +2,9 @@
 members = [
     "crates/types",
     "crates/crypto",
-    "crates/abci-client",
-    "crates/consensus",
-    "crates/mempool",
-    "crates/p2p",
+    "crates/data-chain",
     "crates/storage",
-    "crates/rpc",
-    "crates/cipherbft",
+    "crates/node",
 ]
 resolver = "2"
 
@@ -17,7 +13,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["CipherBFT Contributors"]
 license = "MIT"
-repository = "https://github.com/your-org/cipherbft"
+repository = "https://github.com/decipherhub/cipherbft"
 
 [workspace.dependencies]
 # Async runtime
@@ -39,7 +35,12 @@ serde_json = "1.0"
 # Cryptography
 ed25519-consensus = "2.1"
 sha2 = "0.10"
+sha3 = "0.10"
 rand = "0.8"
+blst = "0.3"
+
+# Collections
+bitvec = "1.0"
 
 # Storage
 rocksdb = { version = "0.21", default-features = false, features = ["lz4"] }
@@ -50,7 +51,7 @@ futures = "0.3"
 # Logging & Metrics
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-prometheus = "0.13"
+prometheus = { version = "0.13", default-features = false }
 
 # Error handling
 thiserror = "1.0"

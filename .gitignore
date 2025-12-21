@@ -1,9 +1,3 @@
-# Constitution Principle XI: Repository Privacy
-# These directories contain internal tooling and must never be uploaded
-.claude/
-.specify/
-specs/
-
 # Rust build artifacts
 target/
 debug/
