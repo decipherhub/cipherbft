@@ -9,11 +9,13 @@
 
 use crate::batch::{Batch, Transaction};
 use crate::messages::{PrimaryToWorker, WorkerMessage, WorkerToPrimary};
+use crate::storage::BatchStore;
 use crate::worker::batch_maker::BatchMaker;
 use crate::worker::config::WorkerConfig;
 use crate::worker::state::WorkerState;
 use crate::worker::synchronizer::Synchronizer;
 use cipherbft_types::{Hash, ValidatorId};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::interval;
@@ -74,6 +76,8 @@ pub struct WorkerHandle {
     primary_sender: mpsc::Sender<PrimaryToWorker>,
     /// Receiver for Worker-to-Primary messages
     worker_receiver: mpsc::Receiver<WorkerToPrimary>,
+    /// Sender for peer messages (from network layer)
+    peer_sender: mpsc::Sender<(ValidatorId, WorkerMessage)>,
     /// Worker ID
     worker_id: u8,
 }
@@ -85,12 +89,18 @@ impl WorkerHandle {
     }
 
     /// Submit a transaction to the worker
-    pub async fn submit_transaction(&self, tx: Transaction) -> Result<(), mpsc::error::SendError<Transaction>> {
+    pub async fn submit_transaction(
+        &self,
+        tx: Transaction,
+    ) -> Result<(), mpsc::error::SendError<Transaction>> {
         self.tx_sender.send(tx).await
     }
 
     /// Send a message to the worker from Primary
-    pub async fn send_from_primary(&self, msg: PrimaryToWorker) -> Result<(), mpsc::error::SendError<PrimaryToWorker>> {
+    pub async fn send_from_primary(
+        &self,
+        msg: PrimaryToWorker,
+    ) -> Result<(), mpsc::error::SendError<PrimaryToWorker>> {
         self.primary_sender.send(msg).await
     }
 
@@ -114,6 +124,17 @@ impl WorkerHandle {
     pub fn is_finished(&self) -> bool {
         self.handle.is_finished()
     }
+
+    /// Send a message from a peer Worker (via network layer)
+    ///
+    /// This is used by the network layer to deliver messages from peer Workers.
+    pub async fn send_from_peer(
+        &self,
+        peer: ValidatorId,
+        message: WorkerMessage,
+    ) -> Result<(), mpsc::error::SendError<(ValidatorId, WorkerMessage)>> {
+        self.peer_sender.send((peer, message)).await
+    }
 }
 
 /// Worker process - handles transaction batching and dissemination
@@ -132,8 +153,12 @@ pub struct Worker {
     from_primary: mpsc::Receiver<PrimaryToWorker>,
     /// Channel to receive transactions from mempool
     tx_receiver: mpsc::Receiver<Transaction>,
+    /// Channel to receive messages from peer Workers (optional)
+    peer_receiver: Option<mpsc::Receiver<(ValidatorId, WorkerMessage)>>,
     /// Network interface for peer communication
     network: Box<dyn WorkerNetwork>,
+    /// Optional persistent storage for batches
+    storage: Option<Arc<dyn BatchStore>>,
     /// Shutdown flag
     shutdown: bool,
 }
@@ -143,19 +168,36 @@ impl Worker {
     ///
     /// Returns a handle that can be used to interact with the worker
     pub fn spawn(config: WorkerConfig, network: Box<dyn WorkerNetwork>) -> WorkerHandle {
+        Self::spawn_with_storage(config, network, None)
+    }
+
+    /// Spawn a new Worker task with optional persistent storage
+    ///
+    /// # Arguments
+    /// * `config` - Worker configuration
+    /// * `network` - Network interface for peer communication
+    /// * `storage` - Optional persistent batch storage
+    pub fn spawn_with_storage(
+        config: WorkerConfig,
+        network: Box<dyn WorkerNetwork>,
+        storage: Option<Arc<dyn BatchStore>>,
+    ) -> WorkerHandle {
         let (to_primary_tx, to_primary_rx) = mpsc::channel(1024);
         let (from_primary_tx, from_primary_rx) = mpsc::channel(256);
         let (tx_sender, tx_receiver) = mpsc::channel(4096);
+        let (peer_sender, peer_receiver) = mpsc::channel(1024);
 
         let worker_id = config.worker_id;
 
         let handle = tokio::spawn(async move {
-            let mut worker = Worker::new(
+            let mut worker = Worker::new_internal(
                 config,
                 to_primary_tx,
                 from_primary_rx,
                 tx_receiver,
+                Some(peer_receiver),
                 network,
+                storage,
             );
             worker.run().await;
         });
@@ -165,6 +207,7 @@ impl Worker {
             tx_sender,
             primary_sender: from_primary_tx,
             worker_receiver: to_primary_rx,
+            peer_sender,
             worker_id,
         }
     }
@@ -176,6 +219,31 @@ impl Worker {
         from_primary: mpsc::Receiver<PrimaryToWorker>,
         tx_receiver: mpsc::Receiver<Transaction>,
         network: Box<dyn WorkerNetwork>,
+    ) -> Self {
+        Self::new_internal(config, to_primary, from_primary, tx_receiver, None, network, None)
+    }
+
+    /// Create a new Worker with optional persistent storage
+    pub fn new_with_storage(
+        config: WorkerConfig,
+        to_primary: mpsc::Sender<WorkerToPrimary>,
+        from_primary: mpsc::Receiver<PrimaryToWorker>,
+        tx_receiver: mpsc::Receiver<Transaction>,
+        network: Box<dyn WorkerNetwork>,
+        storage: Option<Arc<dyn BatchStore>>,
+    ) -> Self {
+        Self::new_internal(config, to_primary, from_primary, tx_receiver, None, network, storage)
+    }
+
+    /// Internal constructor with all options
+    fn new_internal(
+        config: WorkerConfig,
+        to_primary: mpsc::Sender<WorkerToPrimary>,
+        from_primary: mpsc::Receiver<PrimaryToWorker>,
+        tx_receiver: mpsc::Receiver<Transaction>,
+        peer_receiver: Option<mpsc::Receiver<(ValidatorId, WorkerMessage)>>,
+        network: Box<dyn WorkerNetwork>,
+        storage: Option<Arc<dyn BatchStore>>,
     ) -> Self {
         let state = WorkerState::new(config.validator_id, config.worker_id);
         let batch_maker = BatchMaker::new(
@@ -196,7 +264,9 @@ impl Worker {
             to_primary,
             from_primary,
             tx_receiver,
+            peer_receiver,
             network,
+            storage,
             shutdown: false,
         }
     }
@@ -230,6 +300,15 @@ impl Worker {
         sync_check_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         while !self.shutdown {
+            // Handle peer receiver if available
+            let peer_msg = async {
+                if let Some(ref mut receiver) = self.peer_receiver {
+                    receiver.recv().await
+                } else {
+                    std::future::pending::<Option<(ValidatorId, WorkerMessage)>>().await
+                }
+            };
+
             tokio::select! {
                 // Handle incoming transactions
                 Some(tx) = self.tx_receiver.recv() => {
@@ -239,6 +318,11 @@ impl Worker {
                 // Handle messages from Primary
                 Some(msg) = self.from_primary.recv() => {
                     self.handle_primary_message(msg).await;
+                }
+
+                // Handle messages from peer Workers (T074)
+                Some((peer, msg)) = peer_msg => {
+                    self.handle_peer_message(peer, msg).await;
                 }
 
                 // Time-based flush
@@ -253,10 +337,7 @@ impl Worker {
             }
         }
 
-        info!(
-            worker_id = self.config.worker_id,
-            "Worker shutting down"
-        );
+        info!(worker_id = self.config.worker_id, "Worker shutting down");
     }
 
     /// Handle incoming transaction
@@ -299,17 +380,20 @@ impl Worker {
                 }
 
                 // Start sync for missing batches
-                let _request_id = self.synchronizer.start_sync(missing.clone(), target_validator);
+                let _request_id = self
+                    .synchronizer
+                    .start_sync(missing.clone(), target_validator);
 
                 // Request from peer
-                self.network.request_batches(target_validator, missing).await;
+                self.network
+                    .request_batches(target_validator, missing)
+                    .await;
             }
 
             PrimaryToWorker::Cleanup { finalized_height } => {
                 debug!(
                     worker_id = self.config.worker_id,
-                    finalized_height,
-                    "Cleanup request from Primary"
+                    finalized_height, "Cleanup request from Primary"
                 );
                 self.state.cleanup(finalized_height);
             }
@@ -335,8 +419,22 @@ impl Worker {
                     "Received batch from peer"
                 );
 
-                // Store the batch
-                let hash = self.state.store_batch(batch);
+                let hash = batch.hash();
+
+                // Persist to storage if available
+                if let Some(ref storage) = self.storage {
+                    if let Err(e) = storage.put_batch(batch.clone()).await {
+                        trace!(
+                            worker_id = self.config.worker_id,
+                            digest = %hash,
+                            error = %e,
+                            "Failed to persist received batch to storage"
+                        );
+                    }
+                }
+
+                // Store in local memory
+                self.state.store_batch(batch);
 
                 // Mark as synced if we were waiting for it
                 if self.synchronizer.is_syncing(&hash) {
@@ -361,9 +459,31 @@ impl Worker {
                     "Batch request from peer"
                 );
 
-                // Respond with each requested batch
+                // Respond with each requested batch (T073: check storage if not in memory)
                 for digest in digests {
-                    let batch_data = self.state.get_batch(&digest).cloned();
+                    // First check in-memory state
+                    let mut batch_data = self.state.get_batch(&digest).cloned();
+
+                    // If not in memory, check persistent storage (T073)
+                    if batch_data.is_none() {
+                        if let Some(ref storage) = self.storage {
+                            match storage.get_batch(&digest).await {
+                                Ok(Some(batch)) => {
+                                    batch_data = Some(batch);
+                                }
+                                Ok(None) => {}
+                                Err(e) => {
+                                    warn!(
+                                        worker_id = self.config.worker_id,
+                                        digest = %digest,
+                                        error = %e,
+                                        "Failed to retrieve batch from storage"
+                                    );
+                                }
+                            }
+                        }
+                    }
+
                     self.network
                         .send_to_peer(
                             requestor,
@@ -396,7 +516,20 @@ impl Worker {
                         return;
                     }
 
-                    // Store the batch
+                    // Persist to storage if available
+                    if let Some(ref storage) = self.storage {
+                        if let Err(e) = storage.put_batch(batch.clone()).await {
+                            // Log but continue - in-memory state will still have it
+                            trace!(
+                                worker_id = self.config.worker_id,
+                                digest = %digest,
+                                error = %e,
+                                "Failed to persist synced batch to storage"
+                            );
+                        }
+                    }
+
+                    // Store in local memory
                     self.state.store_batch(batch);
 
                     // Mark as synced
@@ -426,7 +559,9 @@ impl Worker {
 
     /// Check if we should flush due to time threshold
     async fn check_time_flush(&mut self) {
-        if self.batch_maker.should_flush_by_time(self.config.flush_interval)
+        if self
+            .batch_maker
+            .should_flush_by_time(self.config.flush_interval)
             && self.batch_maker.has_pending()
         {
             if let Some(batch) = self.batch_maker.flush() {
@@ -443,15 +578,13 @@ impl Worker {
             if should_retry {
                 debug!(
                     worker_id = self.config.worker_id,
-                    request_id,
-                    "Retrying batch sync"
+                    request_id, "Retrying batch sync"
                 );
                 self.network.request_batches(target, digests).await;
             } else {
                 warn!(
                     worker_id = self.config.worker_id,
-                    request_id,
-                    "Batch sync failed after max retries"
+                    request_id, "Batch sync failed after max retries"
                 );
 
                 // Notify Primary of failure
@@ -480,7 +613,20 @@ impl Worker {
             "Created batch"
         );
 
-        // Store locally
+        // Persist to storage if available (T069)
+        if let Some(ref storage) = self.storage {
+            if let Err(e) = storage.put_batch(batch.clone()).await {
+                error!(
+                    worker_id = self.config.worker_id,
+                    digest = %digest.digest,
+                    error = %e,
+                    "Failed to persist batch to storage"
+                );
+                // Continue anyway - in-memory state will still have it
+            }
+        }
+
+        // Store in local memory
         self.state.store_batch(batch.clone());
 
         // Broadcast to peer Workers
@@ -595,7 +741,13 @@ mod tests {
             Box::new(network),
         );
 
-        (worker, to_primary_rx, from_primary_tx, tx_sender, broadcasts)
+        (
+            worker,
+            to_primary_rx,
+            from_primary_tx,
+            tx_sender,
+            broadcasts,
+        )
     }
 
     #[tokio::test]
@@ -666,7 +818,10 @@ mod tests {
         let digest = batch.digest().digest;
 
         worker
-            .handle_peer_message(ValidatorId::from_bytes([1u8; 32]), WorkerMessage::Batch(batch))
+            .handle_peer_message(
+                ValidatorId::from_bytes([1u8; cipherbft_types::VALIDATOR_ID_SIZE]),
+                WorkerMessage::Batch(batch),
+            )
             .await;
 
         // Should have stored the batch
@@ -726,6 +881,137 @@ mod tests {
 
         // Verify broadcast
         assert_eq!(broadcasts.lock().await.len(), 1);
+
+        // Shutdown
+        handle.shutdown().await;
+    }
+
+    // T075: Test batch sync with storage lookup
+    #[tokio::test]
+    async fn test_batch_request_from_storage() {
+        use crate::storage::BatchStore;
+        use crate::error::DclError;
+        use std::collections::HashMap;
+        use std::sync::RwLock;
+
+        // Create a simple mock storage
+        struct MockBatchStore {
+            batches: RwLock<HashMap<Hash, Batch>>,
+        }
+
+        impl MockBatchStore {
+            fn new() -> Self {
+                Self {
+                    batches: RwLock::new(HashMap::new()),
+                }
+            }
+
+            fn insert(&self, batch: Batch) {
+                let hash = batch.hash();
+                self.batches.write().unwrap().insert(hash, batch);
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl BatchStore for MockBatchStore {
+            async fn put_batch(&self, batch: Batch) -> Result<Hash, DclError> {
+                let hash = batch.hash();
+                self.batches.write().unwrap().insert(hash, batch);
+                Ok(hash)
+            }
+
+            async fn get_batch(&self, hash: &Hash) -> Result<Option<Batch>, DclError> {
+                Ok(self.batches.read().unwrap().get(hash).cloned())
+            }
+
+            async fn has_batch(&self, hash: &Hash) -> Result<bool, DclError> {
+                Ok(self.batches.read().unwrap().contains_key(hash))
+            }
+        }
+
+        let (to_primary_tx, _to_primary_rx) = mpsc::channel(100);
+        let (from_primary_tx, from_primary_rx) = mpsc::channel(100);
+        let (tx_sender, tx_receiver) = mpsc::channel(100);
+
+        let config = WorkerConfig::new(ValidatorId::ZERO, 0)
+            .with_max_batch_bytes(100)
+            .with_max_batch_txs(5);
+
+        let network = MockNetwork::new();
+        let peer_messages = network.peer_messages.clone();
+
+        // Create mock storage with a batch
+        let storage = Arc::new(MockBatchStore::new());
+        let test_batch = Batch::new(0, vec![vec![1, 2, 3]], 12345);
+        let batch_hash = test_batch.hash();
+        storage.insert(test_batch.clone());
+
+        let mut worker = Worker::new_with_storage(
+            config,
+            to_primary_tx,
+            from_primary_rx,
+            tx_receiver,
+            Box::new(network),
+            Some(storage),
+        );
+
+        // Note: The batch is in storage but NOT in worker's in-memory state
+        assert!(worker.get_batch(&batch_hash).is_none());
+
+        // Request the batch from this worker
+        let requestor = ValidatorId::from_bytes([2u8; cipherbft_types::VALIDATOR_ID_SIZE]);
+        worker
+            .handle_peer_message(
+                requestor,
+                WorkerMessage::BatchRequest {
+                    digests: vec![batch_hash],
+                    requestor,
+                },
+            )
+            .await;
+
+        // Should have responded with the batch from storage
+        let messages = peer_messages.lock().await;
+        assert_eq!(messages.len(), 1);
+
+        match &messages[0].1 {
+            WorkerMessage::BatchResponse { digest, data } => {
+                assert_eq!(*digest, batch_hash);
+                assert!(data.is_some());
+                assert_eq!(data.as_ref().unwrap().hash(), batch_hash);
+            }
+            _ => panic!("Expected BatchResponse"),
+        }
+    }
+
+    // T075: Test peer message handling via handle
+    #[tokio::test]
+    async fn test_worker_handle_peer_message() {
+        let config = WorkerConfig::new(ValidatorId::ZERO, 0)
+            .with_max_batch_bytes(100)
+            .with_max_batch_txs(5)
+            .with_flush_interval(Duration::from_millis(50));
+
+        let network = MockNetwork::new();
+
+        let mut handle = Worker::spawn(config, Box::new(network));
+
+        // Wait for ready signal
+        let msg = handle.recv_from_worker().await.unwrap();
+        assert!(matches!(msg, WorkerToPrimary::Ready { worker_id: 0 }));
+
+        // Send batch via peer channel
+        let batch = Batch::new(0, vec![vec![1, 2, 3]], 12345);
+        let batch_hash = batch.hash();
+
+        let peer = ValidatorId::from_bytes([1u8; cipherbft_types::VALIDATOR_ID_SIZE]);
+        handle
+            .send_from_peer(peer, WorkerMessage::Batch(batch))
+            .await
+            .unwrap();
+
+        // Give worker time to process
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Shutdown
         handle.shutdown().await;

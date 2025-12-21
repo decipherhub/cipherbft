@@ -97,10 +97,11 @@ impl WorkerState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cipherbft_types::VALIDATOR_ID_SIZE;
 
     #[test]
     fn test_pending_transactions() {
-        let mut state = WorkerState::new(ValidatorId::from_bytes([1u8; 32]), 0);
+        let mut state = WorkerState::new(ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]), 0);
 
         state.add_transaction(vec![1, 2, 3]);
         state.add_transaction(vec![4, 5]);
@@ -117,7 +118,7 @@ mod tests {
 
     #[test]
     fn test_should_flush() {
-        let mut state = WorkerState::new(ValidatorId::from_bytes([1u8; 32]), 0);
+        let mut state = WorkerState::new(ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]), 0);
 
         // Add transactions totaling 100 bytes
         for _ in 0..10 {
@@ -136,7 +137,7 @@ mod tests {
 
     #[test]
     fn test_batch_storage() {
-        let mut state = WorkerState::new(ValidatorId::from_bytes([1u8; 32]), 0);
+        let mut state = WorkerState::new(ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]), 0);
 
         let batch = Batch::new(0, vec![vec![1, 2, 3]], 12345);
         let hash = state.store_batch(batch.clone());

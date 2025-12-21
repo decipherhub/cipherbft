@@ -154,13 +154,14 @@ impl Synchronizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cipherbft_types::VALIDATOR_ID_SIZE;
 
     #[test]
     fn test_start_sync() {
         let mut sync = Synchronizer::new(Duration::from_millis(100), 3);
 
         let digests = vec![Hash::compute(b"1"), Hash::compute(b"2")];
-        let target = ValidatorId::from_bytes([1u8; 32]);
+        let target = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
 
         let id = sync.start_sync(digests.clone(), target);
 
@@ -174,7 +175,7 @@ mod tests {
         let mut sync = Synchronizer::new(Duration::from_millis(100), 3);
 
         let digests = vec![Hash::compute(b"1"), Hash::compute(b"2")];
-        let target = ValidatorId::from_bytes([1u8; 32]);
+        let target = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
 
         sync.start_sync(digests.clone(), target);
 
@@ -195,7 +196,7 @@ mod tests {
         let mut sync = Synchronizer::new(Duration::from_millis(100), 3);
 
         let digests = vec![Hash::compute(b"1")];
-        let target = ValidatorId::from_bytes([1u8; 32]);
+        let target = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
 
         let id = sync.start_sync(digests.clone(), target);
         assert!(sync.is_syncing(&digests[0]));
@@ -210,7 +211,7 @@ mod tests {
         let mut sync = Synchronizer::new(Duration::from_millis(1), 3);
 
         let digests = vec![Hash::compute(b"1")];
-        let target = ValidatorId::from_bytes([1u8; 32]);
+        let target = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
 
         sync.start_sync(digests.clone(), target);
 
@@ -230,7 +231,7 @@ mod tests {
         let mut sync = Synchronizer::new(Duration::from_millis(1), 0); // 0 retries
 
         let digests = vec![Hash::compute(b"1")];
-        let target = ValidatorId::from_bytes([1u8; 32]);
+        let target = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
 
         sync.start_sync(digests.clone(), target);
 
