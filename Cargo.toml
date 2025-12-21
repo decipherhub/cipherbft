@@ -51,7 +51,7 @@ futures = "0.3"
 # Logging & Metrics
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-prometheus = "0.13"
+prometheus = { version = "0.13", default-features = false }
 
 # Error handling
 thiserror = "1.0"
