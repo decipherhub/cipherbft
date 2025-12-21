@@ -37,6 +37,7 @@ criterion = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 rand = { workspace = true }
+cipherbft-storage = { path = "../storage" }
 
 [[bench]]
 name = "car_bench"
