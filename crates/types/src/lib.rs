@@ -8,4 +8,4 @@ mod validator;
 
 pub use hash::Hash;
 pub use height::Height;
-pub use validator::ValidatorId;
+pub use validator::{ValidatorId, VALIDATOR_ID_SIZE};
