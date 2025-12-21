@@ -2,7 +2,7 @@ name: Security Audit
 
 on:
   push:
-    branches: [ main, 001-cipherbft-implementation ]
+    branches: [ main ]
   pull_request:
     branches: [ main ]
   schedule:
