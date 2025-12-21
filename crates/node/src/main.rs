@@ -119,7 +119,10 @@ fn gen_config(validators: usize, output: PathBuf) -> Result<()> {
     }
 
     println!("\nTo run a node:");
-    println!("  cipherbft-node run --config {}/node-0.json", output.display());
+    println!(
+        "  cipherbft-node run --config {}/node-0.json",
+        output.display()
+    );
 
     println!("\nTo run all validators locally:");
     println!("  cipherbft-node local-test --validators {}", validators);

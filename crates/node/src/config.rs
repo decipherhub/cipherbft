@@ -68,7 +68,10 @@ impl NodeConfig {
     pub fn keypair(&self) -> Result<BlsKeyPair, anyhow::Error> {
         let secret_bytes = hex::decode(&self.bls_secret_key_hex)?;
         if secret_bytes.len() != 32 {
-            anyhow::bail!("BLS secret key must be 32 bytes, got {}", secret_bytes.len());
+            anyhow::bail!(
+                "BLS secret key must be 32 bytes, got {}",
+                secret_bytes.len()
+            );
         }
         let mut arr = [0u8; 32];
         arr.copy_from_slice(&secret_bytes);
@@ -94,9 +97,7 @@ impl NodeConfig {
 
 /// Generate configs for N validators for local testing
 pub fn generate_local_configs(n: usize) -> Vec<NodeConfig> {
-    let mut configs: Vec<NodeConfig> = (0..n)
-        .map(|i| NodeConfig::for_local_test(i, n))
-        .collect();
+    let mut configs: Vec<NodeConfig> = (0..n).map(|i| NodeConfig::for_local_test(i, n)).collect();
 
     // Populate peer lists
     let peer_infos: Vec<_> = configs

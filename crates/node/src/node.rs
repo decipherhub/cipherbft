@@ -6,7 +6,7 @@ use crate::util::validator_id_from_bls;
 use anyhow::Result;
 use cipherbft_crypto::{BlsKeyPair, BlsPublicKey};
 use cipherbft_data_chain::{
-    primary::{PrimaryConfig, PrimaryEvent, Primary},
+    primary::{Primary, PrimaryConfig, PrimaryEvent},
     DclMessage,
 };
 use cipherbft_types::ValidatorId;

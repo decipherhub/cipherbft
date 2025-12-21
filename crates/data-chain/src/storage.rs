@@ -96,8 +96,11 @@ pub trait CarStore: Send + Sync {
     /// # Arguments
     /// * `validator` - Validator ID
     /// * `position` - Position in the validator's lane
-    async fn get_car(&self, validator: &ValidatorId, position: u64)
-        -> Result<Option<Car>, DclError>;
+    async fn get_car(
+        &self,
+        validator: &ValidatorId,
+        position: u64,
+    ) -> Result<Option<Car>, DclError>;
 
     /// Get a Car by its hash
     async fn get_car_by_hash(&self, hash: &Hash) -> Result<Option<Car>, DclError>;

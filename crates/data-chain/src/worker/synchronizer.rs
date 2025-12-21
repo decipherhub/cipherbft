@@ -163,7 +163,7 @@ mod tests {
         let digests = vec![Hash::compute(b"1"), Hash::compute(b"2")];
         let target = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
 
-        let id = sync.start_sync(digests.clone(), target);
+        let _id = sync.start_sync(digests.clone(), target);
 
         assert!(sync.is_syncing(&digests[0]));
         assert!(sync.is_syncing(&digests[1]));

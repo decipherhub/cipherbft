@@ -1,6 +1,6 @@
 //! Attestation aggregation benchmarks
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 
 fn bench_attestation_aggregation(_c: &mut Criterion) {
     // Placeholder - will implement after core types work

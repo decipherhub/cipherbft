@@ -25,8 +25,8 @@ const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
 /// Network message types
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum NetworkMessage {
-    /// DCL message (for Primary)
-    Dcl(DclMessage),
+    /// DCL message (for Primary) - boxed to reduce enum size
+    Dcl(Box<DclMessage>),
     /// Worker message (for Worker)
     Worker(WorkerMessage),
 }
@@ -73,10 +73,7 @@ impl TcpPrimaryNetwork {
     }
 
     /// Start listening for incoming connections
-    pub async fn start_listener(
-        self: Arc<Self>,
-        listen_addr: SocketAddr,
-    ) -> Result<()> {
+    pub async fn start_listener(self: Arc<Self>, listen_addr: SocketAddr) -> Result<()> {
         let listener = TcpListener::bind(listen_addr).await?;
         info!("Primary listening on {}", listen_addr);
 
@@ -132,7 +129,7 @@ impl TcpPrimaryNetwork {
 
                 match bincode::deserialize::<NetworkMessage>(&msg_bytes) {
                     Ok(NetworkMessage::Dcl(dcl_msg)) => {
-                        let from = match &dcl_msg {
+                        let from = match dcl_msg.as_ref() {
                             DclMessage::Car(car) => car.proposer,
                             DclMessage::Attestation(att) => att.attester,
                             _ => continue,
@@ -141,15 +138,13 @@ impl TcpPrimaryNetwork {
                         // Store connection if not already
                         {
                             let mut peers = self.peers.write().await;
-                            if !peers.contains_key(&from) {
-                                peers.insert(from, PeerConnection {
-                                    writer: Arc::clone(&writer),
-                                });
-                            }
+                            peers.entry(from).or_insert_with(|| PeerConnection {
+                                writer: Arc::clone(&writer),
+                            });
                         }
 
                         // Forward to handler
-                        if self.incoming_tx.send((from, dcl_msg)).await.is_err() {
+                        if self.incoming_tx.send((from, *dcl_msg)).await.is_err() {
                             break;
                         }
                     }
@@ -172,7 +167,9 @@ impl TcpPrimaryNetwork {
             return Ok(()); // Already connected
         }
 
-        let addr = self.peer_addrs.get(&validator_id)
+        let addr = self
+            .peer_addrs
+            .get(&validator_id)
             .ok_or_else(|| anyhow::anyhow!("Unknown peer: {:?}", validator_id))?;
 
         debug!("Connecting to peer {:?} at {}", validator_id, addr);
@@ -180,9 +177,12 @@ impl TcpPrimaryNetwork {
         let stream = TcpStream::connect(addr).await?;
         let (_, writer) = tokio::io::split(stream);
 
-        self.peers.write().await.insert(validator_id, PeerConnection {
-            writer: Arc::new(Mutex::new(writer)),
-        });
+        self.peers.write().await.insert(
+            validator_id,
+            PeerConnection {
+                writer: Arc::new(Mutex::new(writer)),
+            },
+        );
 
         info!("Connected to peer {:?}", validator_id);
         Ok(())
@@ -247,20 +247,20 @@ impl TcpPrimaryNetwork {
 impl PrimaryNetwork for TcpPrimaryNetwork {
     async fn broadcast_car(&self, car: &Car) {
         debug!("Broadcasting Car position={}", car.position);
-        let msg = NetworkMessage::Dcl(DclMessage::Car(car.clone()));
+        let msg = NetworkMessage::Dcl(Box::new(DclMessage::Car(car.clone())));
         self.broadcast(&msg).await;
     }
 
     async fn send_attestation(&self, proposer: ValidatorId, attestation: &Attestation) {
         debug!("Sending attestation to {:?}", proposer);
-        let msg = NetworkMessage::Dcl(DclMessage::Attestation(attestation.clone()));
+        let msg = NetworkMessage::Dcl(Box::new(DclMessage::Attestation(attestation.clone())));
         if let Err(e) = self.send_to(proposer, &msg).await {
             warn!("Failed to send attestation: {}", e);
         }
     }
 
     async fn broadcast(&self, message: &DclMessage) {
-        let msg = NetworkMessage::Dcl(message.clone());
+        let msg = NetworkMessage::Dcl(Box::new(message.clone()));
         TcpPrimaryNetwork::broadcast(self, &msg).await;
     }
 }
@@ -281,11 +281,7 @@ pub struct TcpWorkerNetwork {
 
 impl TcpWorkerNetwork {
     /// Create a new TCP worker network
-    pub fn new(
-        our_id: ValidatorId,
-        worker_id: u8,
-        peers: &[PeerConfig],
-    ) -> Self {
+    pub fn new(our_id: ValidatorId, worker_id: u8, peers: &[PeerConfig]) -> Self {
         let peer_addrs: HashMap<_, _> = peers
             .iter()
             .filter_map(|p| {
@@ -309,15 +305,20 @@ impl TcpWorkerNetwork {
             return Ok(());
         }
 
-        let addr = self.peer_addrs.get(&validator_id)
+        let addr = self
+            .peer_addrs
+            .get(&validator_id)
             .ok_or_else(|| anyhow::anyhow!("Unknown peer: {:?}", validator_id))?;
 
         let stream = TcpStream::connect(addr).await?;
         let (_, writer) = tokio::io::split(stream);
 
-        self.peers.write().await.insert(validator_id, PeerConnection {
-            writer: Arc::new(Mutex::new(writer)),
-        });
+        self.peers.write().await.insert(
+            validator_id,
+            PeerConnection {
+                writer: Arc::new(Mutex::new(writer)),
+            },
+        );
 
         Ok(())
     }
@@ -374,11 +375,7 @@ impl WorkerNetwork for TcpWorkerNetwork {
         }
     }
 
-    async fn request_batches(
-        &self,
-        target: ValidatorId,
-        digests: Vec<cipherbft_types::Hash>,
-    ) {
+    async fn request_batches(&self, target: ValidatorId, digests: Vec<cipherbft_types::Hash>) {
         let msg = WorkerMessage::BatchRequest {
             digests,
             requestor: self.our_id,

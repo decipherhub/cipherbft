@@ -7,7 +7,9 @@ use cipherbft_data_chain::{
     primary::state::{PipelineStage, PrimaryState},
     Attestation, Car,
 };
-use cipherbft_storage::wal::{InMemoryWal, PipelineStage as WalPipelineStage, Wal, WalEntry, WalRecovery};
+use cipherbft_storage::wal::{
+    InMemoryWal, PipelineStage as WalPipelineStage, Wal, WalEntry, WalRecovery,
+};
 use cipherbft_types::{ValidatorId, VALIDATOR_ID_SIZE};
 
 fn make_validator_id(id: u8) -> ValidatorId {

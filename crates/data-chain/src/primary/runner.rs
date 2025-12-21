@@ -225,6 +225,7 @@ impl Primary {
     }
 
     /// Create a new Primary with optional persistent storage
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_storage(
         config: PrimaryConfig,
         validator_pubkeys: HashMap<ValidatorId, BlsPublicKey>,
@@ -886,7 +887,7 @@ mod tests {
 
         // Should have received CarCreated event
         let event = handle.try_recv_event();
-        assert!(event.is_ok() || car_broadcasts.lock().await.len() > 0);
+        assert!(event.is_ok() || !car_broadcasts.lock().await.is_empty());
 
         handle.shutdown().await;
     }
@@ -925,9 +926,7 @@ mod tests {
         car.signature = keypairs[1].sign_car(&signing_bytes);
 
         // Handle the received Car - should generate attestation
-        primary
-            .handle_received_car(other_id, car.clone())
-            .await;
+        primary.handle_received_car(other_id, car.clone()).await;
 
         // Should have sent attestation to proposer
         let sends = attestation_sends.lock().await;
@@ -983,9 +982,7 @@ mod tests {
         car.signature = keypairs[1].sign_car(&signing_bytes);
 
         // Handle the received Car - should trigger sync, not attestation
-        primary
-            .handle_received_car(other_id, car.clone())
-            .await;
+        primary.handle_received_car(other_id, car.clone()).await;
 
         // Should NOT have sent attestation (missing batches)
         assert_eq!(attestation_sends.lock().await.len(), 0);

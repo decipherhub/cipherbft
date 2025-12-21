@@ -306,10 +306,8 @@ impl DclStore for InMemoryStore {
         // Prune finalized cuts
         {
             let mut finalized_cuts = self.finalized_cuts.write();
-            let keys_to_remove: Vec<u64> = finalized_cuts
-                .range(..height)
-                .map(|(h, _)| *h)
-                .collect();
+            let keys_to_remove: Vec<u64> =
+                finalized_cuts.range(..height).map(|(h, _)| *h).collect();
 
             for key in keys_to_remove {
                 finalized_cuts.remove(&key);
@@ -362,7 +360,11 @@ mod tests {
     }
 
     fn make_test_batch(worker_id: u8) -> Batch {
-        Batch::new(worker_id, vec![Hash::compute(&[worker_id]).as_bytes().to_vec()], 0)
+        Batch::new(
+            worker_id,
+            vec![Hash::compute(&[worker_id]).as_bytes().to_vec()],
+            0,
+        )
     }
 
     fn make_test_car(validator_id: ValidatorId, position: u64) -> Car {
@@ -605,7 +607,10 @@ mod tests {
         let store = InMemoryStore::new();
 
         store.put_batch(make_test_batch(0)).await.unwrap();
-        store.put_car(make_test_car(make_validator_id(1), 0)).await.unwrap();
+        store
+            .put_car(make_test_car(make_validator_id(1), 0))
+            .await
+            .unwrap();
 
         store.clear();
 

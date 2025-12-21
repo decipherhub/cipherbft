@@ -8,6 +8,7 @@ vulnerability = "deny"
 unmaintained = "warn"
 yanked = "warn"
 notice = "warn"
+ignore = []
 
 [licenses]
 unlicensed = "deny"
@@ -19,6 +20,9 @@ allow = [
     "BSD-2-Clause",
     "ISC",
     "Unicode-DFS-2016",
+    "Zlib",
+    "CC0-1.0",
+    "BSL-1.0",
 ]
 copyleft = "warn"
 confidence-threshold = 0.8

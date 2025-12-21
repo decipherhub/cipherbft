@@ -54,7 +54,6 @@ pub enum WalEntry {
     // =========================================================
     // Pipeline state entries (T114)
     // =========================================================
-
     /// Pipeline stage changed
     PipelineStageChanged {
         /// New stage
@@ -213,9 +212,7 @@ impl Wal for InMemoryWal {
     }
 
     async fn next_index(&self) -> Result<u64> {
-        Ok(self
-            .next_index
-            .load(std::sync::atomic::Ordering::SeqCst))
+        Ok(self.next_index.load(std::sync::atomic::Ordering::SeqCst))
     }
 
     async fn sync(&self) -> Result<()> {
@@ -294,7 +291,10 @@ impl<W: Wal> WalRecovery<W> {
                     state.pipeline_stage = Some(stage);
                     state.pipeline_height = Some(height);
                 }
-                WalEntry::NextHeightAttestation { height, attestation } => {
+                WalEntry::NextHeightAttestation {
+                    height,
+                    attestation,
+                } => {
                     state
                         .next_height_attestations
                         .entry(height)
@@ -333,13 +333,13 @@ pub struct RecoveredState {
     pub last_checkpoint_height: Option<u64>,
 
     // Pipeline state (T114-T115)
-
     /// Last known pipeline stage
     pub pipeline_stage: Option<PipelineStage>,
     /// Last known pipeline height
     pub pipeline_height: Option<u64>,
     /// Attestations for future heights
-    pub next_height_attestations: std::collections::HashMap<u64, Vec<cipherbft_data_chain::Attestation>>,
+    pub next_height_attestations:
+        std::collections::HashMap<u64, Vec<cipherbft_data_chain::Attestation>>,
     /// Preserved attested Cars
     pub preserved_attested_cars: Vec<(cipherbft_types::ValidatorId, Car, AggregatedAttestation)>,
 }
@@ -377,8 +377,14 @@ mod tests {
         let wal = InMemoryWal::new();
 
         // Append entries
-        let idx1 = wal.append(WalEntry::BatchReceived(make_test_batch())).await.unwrap();
-        let idx2 = wal.append(WalEntry::CarCreated(make_test_car())).await.unwrap();
+        let idx1 = wal
+            .append(WalEntry::BatchReceived(make_test_batch()))
+            .await
+            .unwrap();
+        let idx2 = wal
+            .append(WalEntry::CarCreated(make_test_car()))
+            .await
+            .unwrap();
 
         assert_eq!(idx1, 0);
         assert_eq!(idx2, 1);
@@ -394,9 +400,15 @@ mod tests {
     async fn test_wal_replay_from_index() {
         let wal = InMemoryWal::new();
 
-        wal.append(WalEntry::BatchReceived(make_test_batch())).await.unwrap();
-        wal.append(WalEntry::CarCreated(make_test_car())).await.unwrap();
-        wal.append(WalEntry::BatchReceived(make_test_batch())).await.unwrap();
+        wal.append(WalEntry::BatchReceived(make_test_batch()))
+            .await
+            .unwrap();
+        wal.append(WalEntry::CarCreated(make_test_car()))
+            .await
+            .unwrap();
+        wal.append(WalEntry::BatchReceived(make_test_batch()))
+            .await
+            .unwrap();
 
         // Replay from index 1
         let entries = wal.replay_from(1).await.unwrap();
@@ -408,9 +420,15 @@ mod tests {
     async fn test_wal_truncate() {
         let wal = InMemoryWal::new();
 
-        wal.append(WalEntry::BatchReceived(make_test_batch())).await.unwrap();
-        wal.append(WalEntry::CarCreated(make_test_car())).await.unwrap();
-        wal.append(WalEntry::BatchReceived(make_test_batch())).await.unwrap();
+        wal.append(WalEntry::BatchReceived(make_test_batch()))
+            .await
+            .unwrap();
+        wal.append(WalEntry::CarCreated(make_test_car()))
+            .await
+            .unwrap();
+        wal.append(WalEntry::BatchReceived(make_test_batch()))
+            .await
+            .unwrap();
 
         // Truncate before index 2
         let truncated = wal.truncate_before(2).await.unwrap();
@@ -424,7 +442,9 @@ mod tests {
     async fn test_wal_checkpoint() {
         let wal = InMemoryWal::new();
 
-        wal.append(WalEntry::BatchReceived(make_test_batch())).await.unwrap();
+        wal.append(WalEntry::BatchReceived(make_test_batch()))
+            .await
+            .unwrap();
         let cp_idx = wal.checkpoint(100).await.unwrap();
 
         assert!(wal.last_checkpoint().await.unwrap().is_some());
@@ -436,9 +456,13 @@ mod tests {
         let wal = InMemoryWal::new();
 
         // Add some entries
-        wal.append(WalEntry::BatchReceived(make_test_batch())).await.unwrap();
+        wal.append(WalEntry::BatchReceived(make_test_batch()))
+            .await
+            .unwrap();
         wal.checkpoint(1).await.unwrap();
-        wal.append(WalEntry::CarCreated(make_test_car())).await.unwrap();
+        wal.append(WalEntry::CarCreated(make_test_car()))
+            .await
+            .unwrap();
 
         // Recover
         let recovery = WalRecovery::new(wal);
@@ -446,13 +470,26 @@ mod tests {
 
         // Should only see entries after checkpoint
         assert_eq!(state.batches.len(), 0); // Before checkpoint
-        assert_eq!(state.cars.len(), 1);    // After checkpoint
+        assert_eq!(state.cars.len(), 1); // After checkpoint
     }
 
     #[tokio::test]
     async fn test_wal_entry_type() {
-        assert_eq!(WalEntry::BatchReceived(make_test_batch()).entry_type(), "BatchReceived");
-        assert_eq!(WalEntry::CarCreated(make_test_car()).entry_type(), "CarCreated");
-        assert_eq!(WalEntry::CutFinalized { height: 1, cut_hash: Hash::compute(b"test") }.entry_type(), "CutFinalized");
+        assert_eq!(
+            WalEntry::BatchReceived(make_test_batch()).entry_type(),
+            "BatchReceived"
+        );
+        assert_eq!(
+            WalEntry::CarCreated(make_test_car()).entry_type(),
+            "CarCreated"
+        );
+        assert_eq!(
+            WalEntry::CutFinalized {
+                height: 1,
+                cut_hash: Hash::compute(b"test")
+            }
+            .entry_type(),
+            "CutFinalized"
+        );
     }
 }

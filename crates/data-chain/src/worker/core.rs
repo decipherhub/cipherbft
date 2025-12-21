@@ -220,7 +220,15 @@ impl Worker {
         tx_receiver: mpsc::Receiver<Transaction>,
         network: Box<dyn WorkerNetwork>,
     ) -> Self {
-        Self::new_internal(config, to_primary, from_primary, tx_receiver, None, network, None)
+        Self::new_internal(
+            config,
+            to_primary,
+            from_primary,
+            tx_receiver,
+            None,
+            network,
+            None,
+        )
     }
 
     /// Create a new Worker with optional persistent storage
@@ -232,7 +240,15 @@ impl Worker {
         network: Box<dyn WorkerNetwork>,
         storage: Option<Arc<dyn BatchStore>>,
     ) -> Self {
-        Self::new_internal(config, to_primary, from_primary, tx_receiver, None, network, storage)
+        Self::new_internal(
+            config,
+            to_primary,
+            from_primary,
+            tx_receiver,
+            None,
+            network,
+            storage,
+        )
     }
 
     /// Internal constructor with all options
@@ -714,6 +730,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn make_test_worker() -> (
         Worker,
         mpsc::Receiver<WorkerToPrimary>,
@@ -752,7 +769,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_worker_transaction_batching() {
-        let (mut worker, mut to_primary_rx, _, tx_sender, broadcasts) = make_test_worker();
+        let (mut worker, mut to_primary_rx, _, _tx_sender, broadcasts) = make_test_worker();
 
         // Send 5 transactions (triggers batch at count threshold)
         for i in 0..5 {
@@ -811,7 +828,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_worker_peer_batch_receive() {
-        let (mut worker, mut to_primary_rx, _, _, _) = make_test_worker();
+        let (mut worker, _to_primary_rx, _, _, _) = make_test_worker();
 
         // Receive batch from peer
         let batch = Batch::new(0, vec![vec![1, 2, 3]], 12345);
@@ -889,8 +906,8 @@ mod tests {
     // T075: Test batch sync with storage lookup
     #[tokio::test]
     async fn test_batch_request_from_storage() {
-        use crate::storage::BatchStore;
         use crate::error::DclError;
+        use crate::storage::BatchStore;
         use std::collections::HashMap;
         use std::sync::RwLock;
 
@@ -930,8 +947,8 @@ mod tests {
         }
 
         let (to_primary_tx, _to_primary_rx) = mpsc::channel(100);
-        let (from_primary_tx, from_primary_rx) = mpsc::channel(100);
-        let (tx_sender, tx_receiver) = mpsc::channel(100);
+        let (_from_primary_tx, from_primary_rx) = mpsc::channel(100);
+        let (_tx_sender, tx_receiver) = mpsc::channel(100);
 
         let config = WorkerConfig::new(ValidatorId::ZERO, 0)
             .with_max_batch_bytes(100)
@@ -1002,7 +1019,7 @@ mod tests {
 
         // Send batch via peer channel
         let batch = Batch::new(0, vec![vec![1, 2, 3]], 12345);
-        let batch_hash = batch.hash();
+        let _batch_hash = batch.hash();
 
         let peer = ValidatorId::from_bytes([1u8; cipherbft_types::VALIDATOR_ID_SIZE]);
         handle

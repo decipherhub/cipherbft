@@ -230,10 +230,12 @@ impl Cut {
 
         let car_parts = self.ordered_cars().filter_map(move |(_, car)| {
             let car_hash = car.hash();
-            self.attestations.get(&car_hash).map(|att| CutPart::CarData {
-                car: car.clone(),
-                attestation: att.clone(),
-            })
+            self.attestations
+                .get(&car_hash)
+                .map(|att| CutPart::CarData {
+                    car: Box::new(car.clone()),
+                    attestation: Box::new(att.clone()),
+                })
         });
 
         let fin_hash = self.hash();
@@ -265,10 +267,10 @@ pub enum CutPart {
     },
     /// Individual Car with its aggregated attestation
     CarData {
-        /// The Car
-        car: Car,
-        /// Aggregated attestation for the Car
-        attestation: AggregatedAttestation,
+        /// The Car (boxed to reduce enum size)
+        car: Box<Car>,
+        /// Aggregated attestation for the Car (boxed to reduce enum size)
+        attestation: Box<AggregatedAttestation>,
     },
     /// Final part - sent last, contains Cut hash for verification
     Fin {
@@ -354,8 +356,8 @@ impl CutAssembler {
                     return Err(CutAssemblyError::MissingInit);
                 }
                 let car_hash = car.hash();
-                self.cars.insert(car.proposer, car);
-                self.attestations.insert(car_hash, attestation);
+                self.cars.insert(car.proposer, *car);
+                self.attestations.insert(car_hash, *attestation);
                 Ok(None)
             }
             CutPart::Fin { cut_hash } => {
@@ -419,8 +421,7 @@ impl CutAssembler {
 
     /// Check if assembly is complete
     pub fn is_complete(&self) -> bool {
-        self.received_fin
-            && self.expected_count.map(|c| c as usize) == Some(self.cars.len())
+        self.received_fin && self.expected_count.map(|c| c as usize) == Some(self.cars.len())
     }
 }
 
@@ -787,8 +788,8 @@ mod tests {
 
         // Sending CarData before Init should fail
         let result = assembler.add_part(CutPart::CarData {
-            car,
-            attestation: att,
+            car: Box::new(car),
+            attestation: Box::new(att),
         });
         assert!(matches!(result, Err(CutAssemblyError::MissingInit)));
     }

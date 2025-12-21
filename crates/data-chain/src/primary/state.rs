@@ -101,7 +101,6 @@ pub struct PrimaryState {
     // =========================================================
     // Pipeline state tracking (T111)
     // =========================================================
-
     /// Current pipeline stage
     pub pipeline_stage: PipelineStage,
     /// Next height attestations (received before current height is decided)
@@ -359,7 +358,9 @@ impl PrimaryState {
         &mut self,
         height: u64,
     ) -> HashMap<Hash, Vec<Attestation>> {
-        self.next_height_attestations.remove(&height).unwrap_or_default()
+        self.next_height_attestations
+            .remove(&height)
+            .unwrap_or_default()
     }
 
     /// Preserve current attested Cars on consensus timeout (T113)
@@ -709,7 +710,9 @@ mod tests {
             validators: bv,
             aggregated_signature: dummy_aggregate_signature(),
         };
-        state.attested_cars.insert(validator, (car_new.clone(), agg_new));
+        state
+            .attested_cars
+            .insert(validator, (car_new.clone(), agg_new));
 
         // Get all should return the newer one
         let all = state.get_all_attested_cars();

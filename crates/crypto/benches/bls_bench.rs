@@ -1,6 +1,6 @@
 //! BLS12-381 benchmarks
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 
 fn bench_bls_sign(_c: &mut Criterion) {
     // Placeholder

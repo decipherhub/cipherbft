@@ -198,10 +198,7 @@ impl DataChainLayer for PrimaryDcl {
     }
 
     fn highest_attested_car(&self, validator: &ValidatorId) -> Option<&Car> {
-        self.state
-            .attested_cars
-            .get(validator)
-            .map(|(car, _)| car)
+        self.state.attested_cars.get(validator).map(|(car, _)| car)
     }
 
     fn form_cut(&self, height: u64) -> Option<Cut> {
@@ -224,9 +221,10 @@ impl DataChainLayer for PrimaryDcl {
 
     fn is_car_attested(&self, car_hash: &Hash) -> bool {
         // Check if any car in attested_cars has this hash
-        self.state.attested_cars.values().any(|(car, _)| {
-            car.hash() == *car_hash
-        })
+        self.state
+            .attested_cars
+            .values()
+            .any(|(car, _)| car.hash() == *car_hash)
     }
 
     fn our_id(&self) -> ValidatorId {
