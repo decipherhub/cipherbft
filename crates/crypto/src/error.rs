@@ -2,9 +2,9 @@
 
 use thiserror::Error;
 
-/// BLS12-381 cryptographic errors
+/// Unified cryptographic error type
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub enum BlsError {
+pub enum CryptoError {
     /// Invalid secret key bytes
     #[error("invalid secret key bytes")]
     InvalidSecretKey,
@@ -21,11 +21,11 @@ pub enum BlsError {
     #[error("signature verification failed")]
     VerificationFailed,
 
-    /// Signature aggregation failed
+    /// Signature aggregation failed (BLS only)
     #[error("signature aggregation failed")]
     AggregationFailed,
 
-    /// Empty input for aggregation
+    /// Empty input for aggregation (BLS only)
     #[error("cannot aggregate empty signature list")]
     EmptyAggregation,
 
@@ -33,3 +33,6 @@ pub enum BlsError {
     #[error("invalid message length")]
     InvalidMessageLength,
 }
+
+/// BLS12-381 specific errors (alias for backwards compatibility)
+pub type BlsError = CryptoError;
