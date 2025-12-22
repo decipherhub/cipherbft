@@ -2,6 +2,7 @@
 
 ## Changelog
 
+* 2025-12-21: Added Malachite internal architecture analysis and channel extensibility
 * 2025-12-07: Initial draft
 
 ## Status
@@ -67,10 +68,114 @@ Use Malachite's native networking implementation.
 - Seamless integration with Malachite consensus engine
 - Consistent ecosystem (same maintainers)
 - Already handles consensus message types
+- Uses libp2p internally (battle-tested transport layer)
+- Production validated (Arc/Circle blockchain uses Malachite)
 
 **Cons:**
-- Less feature-rich than libp2p
 - Tied to Malachite release cycle
+- Must extend Channel enum for custom message types
+
+## Malachite Internal Architecture
+
+Investigation of the Malachite codebase reveals that it uses libp2p internally, providing the benefits of a battle-tested networking stack while offering a BFT-optimized API.
+
+### Transport Layer
+
+Malachite's network layer (`malachitebft-network`) is built on top of libp2p:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Malachite Network API                     │
+│              (BFT-optimized, channel-based)                  │
+├─────────────────────────────────────────────────────────────┤
+│                       libp2p Stack                           │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │  GossipSub  │  │  Kademlia   │  │  Identify/Ping      │  │
+│  │  (pubsub)   │  │  (DHT)      │  │  (peer discovery)   │  │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
+├─────────────────────────────────────────────────────────────┤
+│                     Transport Layer                          │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │  TCP/QUIC   │  │    Noise    │  │       Yamux         │  │
+│  │ (transport) │  │ (encryption)│  │   (multiplexing)    │  │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Channel System
+
+Malachite uses a channel-based message routing system. Each channel maps to a separate GossipSub topic:
+
+```rust
+// From malachite/code/crates/network/src/channel.rs
+pub enum Channel {
+    /// Consensus messages (Proposal, Vote, Timeout)
+    Consensus,
+    /// Liveness messages (protocol-specific)
+    Liveness,
+    /// Proposal parts (for large proposals)
+    ProposalParts,
+    /// State synchronization
+    Sync,
+}
+```
+
+### Channel Extensibility for DCL
+
+The Channel enum can be extended to support CipherBFT's DCL messages. This enables independent communication channels for different message types:
+
+```rust
+/// Extended channel enum for CipherBFT (conceptual)
+pub enum CipherBftChannel {
+    // Malachite built-in channels
+    Consensus,
+    Liveness,
+    ProposalParts,
+    Sync,
+
+    // CipherBFT DCL extensions
+    DclCars,           // Car broadcast and propagation
+    DclAttestations,   // Attestation collection
+    WorkerBatches,     // Worker-to-Worker batch sync
+    TransactionGossip, // Transaction mempool gossip
+}
+```
+
+Each custom channel operates as an independent GossipSub topic, ensuring:
+- **Isolation**: DCL traffic doesn't interfere with consensus messages
+- **Priority**: Different channels can have different QoS settings
+- **Scalability**: Channels can be subscribed/unsubscribed independently
+
+### Message Format
+
+Messages in Malachite are opaque byte buffers. Serialization/deserialization (codec) is handled at the application layer:
+
+```rust
+// Network layer deals with raw bytes
+pub struct NetworkMessage {
+    pub channel: Channel,
+    pub data: Bytes,  // Opaque payload
+}
+
+// Application layer handles encoding
+impl DclMessage {
+    pub fn encode(&self) -> Bytes {
+        bincode::serialize(self).unwrap().into()
+    }
+
+    pub fn decode(data: &[u8]) -> Result<Self, Error> {
+        bincode::deserialize(data)
+    }
+}
+```
+
+### Production Validation
+
+Malachite is used in production by [Arc](https://www.circle.com/arc), Circle's blockchain platform. This provides real-world validation of:
+- Network stability under load
+- Peer discovery and management
+- Message propagation reliability
+- Integration with BFT consensus
 
 ## Decision
 
@@ -375,17 +480,20 @@ N/A - greenfield implementation.
 3. **Seamless integration**: Works naturally with Malachite consensus
 4. **Reduced complexity**: No need to bridge libp2p with Malachite
 5. **Maintained together**: Networking and consensus evolve together
+6. **Battle-tested transport**: Uses libp2p internally (TCP/QUIC, Noise, Yamux)
+7. **Production validated**: Arc/Circle blockchain uses Malachite in production
+8. **Channel extensibility**: Custom channels can be added for DCL messages
 
 ### Negative
 
-1. **Less feature-rich**: Fewer features than libp2p (no QUIC, limited NAT traversal)
-2. **Smaller community**: Less documentation than libp2p
-3. **Coupled release**: Must update with Malachite versions
+1. **Coupled release**: Must update with Malachite versions
+2. **Smaller community**: Less documentation than raw libp2p
+3. **Channel extension effort**: Requires forking or contributing to Malachite for custom channels
 
 ### Neutral
 
-1. **TCP-based**: Uses TCP (not QUIC) - adequate for validator networks
-2. **Learning curve**: Must understand Malachite's networking model
+1. **Learning curve**: Must understand Malachite's channel-based networking model
+2. **Abstraction trade-off**: Higher-level API than raw libp2p (less control, more convenience)
 
 ## Test Cases
 
@@ -403,3 +511,6 @@ N/A - greenfield implementation.
 * [Malachite GitHub](https://github.com/informalsystems/malachite)
 * [Malachite Documentation](https://malachite.informal.systems)
 * [malachitebft-network crate](https://crates.io/crates/informalsystems-malachitebft-network)
+* [Arc by Circle](https://www.circle.com/arc) - Production blockchain using Malachite
+* [libp2p](https://libp2p.io/) - Underlying transport layer used by Malachite
+* [Malachite Network Channel Source](https://github.com/informalsystems/malachite/blob/main/code/crates/network/src/channel.rs) - Channel enum definition
