@@ -21,6 +21,6 @@ pub mod pool;
 
 pub use error::MempoolError;
 pub use config::MempoolConfig;
-pub use transaction::{TransactionInfo, TransactionOrdering};
-pub use account::AccountState;
+pub use transaction::TransactionOrdering;
+pub use account::AccountValidator;
 pub use pool::CipherBftPool;
