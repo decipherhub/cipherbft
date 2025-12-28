@@ -1,14 +1,26 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! CipherBFT Mempool - Transaction mempool based on Reth's TransactionPool
+//!
+//! # Architecture
+//!
+//! The mempool is organized around Reth's transaction pool with CipherBFT-specific
+//! wrapping for DCL/CL integration.
+//!
+//! ## Modules
+//!
+//! - `error`: Error types for mempool operations
+//! - `config`: Configuration for the mempool
+//! - `transaction`: Transaction metadata tracking
+//! - `account`: Per-account state management
+//! - `pool`: Main pool adapter over Reth's TransactionPool
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod error;
+pub mod config;
+pub mod transaction;
+pub mod account;
+pub mod pool;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use error::MempoolError;
+pub use config::MempoolConfig;
+pub use transaction::{TransactionInfo, TransactionOrdering};
+pub use account::AccountState;
+pub use pool::CipherBftPool;

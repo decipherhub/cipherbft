@@ -1,6 +1,6 @@
 //! CipherBFT mempool over Reth's TransactionPool
 
-use crate::{config::MempoolConfig, error::MempoolError, account::AccountState};
+use crate::{account::AccountState, config::MempoolConfig, transaction::TransactionInfo};
 use reth_primitives::{Address, B256};
 use reth_transaction_pool::TransactionPool;
 use std::collections::HashMap;
@@ -15,6 +15,9 @@ pub struct CipherBftPool<P: TransactionPool> {
 
     /// Per-account states
     accounts: HashMap<Address, AccountState>,
+
+    /// Sender-address to transaction hashes index
+    sender_index: HashMap<Address, Vec<B256>>,
 }
 
 impl<P: TransactionPool> CipherBftPool<P> {
@@ -24,6 +27,7 @@ impl<P: TransactionPool> CipherBftPool<P> {
             pool,
             config,
             accounts: HashMap::new(),
+            sender_index: HashMap::new(),
         }
     }
 
@@ -56,6 +60,32 @@ impl<P: TransactionPool> CipherBftPool<P> {
     /// Number of unique senders
     pub fn num_senders(&self) -> usize {
         self.accounts.len()
+    }
+
+    /// Get all transaction hashes for a sender (if any)
+    pub fn sender_transactions(&self, address: &Address) -> Option<&Vec<B256>> {
+        self.sender_index.get(address)
+    }
+
+    /// Index a transaction by its sender and hash. No-op if already indexed.
+    pub fn index_transaction(&mut self, tx: &TransactionInfo) {
+        let entry = self.sender_index.entry(tx.sender).or_default();
+        if !entry.contains(&tx.hash) {
+            entry.push(tx.hash);
+        }
+    }
+
+    /// Remove a transaction hash from the sender index. Returns true if removed.
+    pub fn remove_transaction_from_index(&mut self, sender: &Address, hash: &B256) -> bool {
+        if let Some(list) = self.sender_index.get_mut(sender) {
+            let original_len = list.len();
+            list.retain(|h| h != hash);
+            if list.is_empty() {
+                self.sender_index.remove(sender);
+            }
+            return list.len() != original_len;
+        }
+        false
     }
 }
 
