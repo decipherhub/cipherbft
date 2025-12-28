@@ -44,6 +44,10 @@ bitvec = "1.0"
 
 # Storage
 rocksdb = { version = "0.21", default-features = false, features = ["lz4"] }
+reth-db = { git = "https://github.com/paradigmxyz/reth", tag = "v1.1.0" }
+reth-db-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.1.0" }
+reth-codecs = { git = "https://github.com/paradigmxyz/reth", tag = "v1.1.0" }
+reth-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.1.0" }
 
 # Networking
 futures = "0.3"

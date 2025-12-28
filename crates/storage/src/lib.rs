@@ -12,7 +12,7 @@
 //! The storage layer uses trait-based abstractions to allow multiple backends:
 //! - [`DclStore`]: Main trait for DCL storage operations
 //! - [`InMemoryStore`]: In-memory implementation for testing
-//! - Future: RocksDB/MDBX implementation for production
+//! - [`mdbx::MdbxDclStore`]: MDBX-backed implementation for production (requires `mdbx` feature)
 //!
 //! # Write-Ahead Log (WAL)
 //!
@@ -22,6 +22,8 @@
 //!
 //! # Usage
 //!
+//! ## In-Memory Store (Testing)
+//!
 //! ```ignore
 //! use cipherbft_storage::{DclStore, InMemoryStore};
 //!
@@ -29,6 +31,24 @@
 //! store.put_batch(batch).await?;
 //! store.put_car(car).await?;
 //! ```
+//!
+//! ## MDBX Store (Production)
+//!
+//! Requires the `mdbx` feature:
+//!
+//! ```ignore
+//! use cipherbft_storage::mdbx::{Database, DatabaseConfig, MdbxDclStore};
+//! use std::sync::Arc;
+//!
+//! let config = DatabaseConfig::new("/path/to/db");
+//! let db = Arc::new(Database::open(config)?);
+//! let store = MdbxDclStore::new(db);
+//! store.put_batch(batch).await?;
+//! ```
+//!
+//! # Feature Flags
+//!
+//! - `mdbx`: Enables the MDBX storage backend using reth-db
 
 pub mod dcl;
 pub mod error;
@@ -36,7 +56,15 @@ pub mod memory;
 pub mod tables;
 pub mod wal;
 
+// MDBX backend (requires feature flag)
+#[cfg(feature = "mdbx")]
+pub mod mdbx;
+
 pub use dcl::DclStore;
 pub use error::StorageError;
 pub use memory::InMemoryStore;
 pub use wal::{Wal, WalEntry};
+
+// Re-export MDBX types when feature is enabled
+#[cfg(feature = "mdbx")]
+pub use mdbx::{Database, DatabaseConfig, MdbxDclStore, MdbxWal};
