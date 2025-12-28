@@ -10,9 +10,11 @@ repository.workspace = true
 # Reth transaction pool and primitives
 reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
 reth-primitives = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
+reth-storage-api = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
 
 # Ethereum types (alloy suite - use Reth compatible version)
 alloy-primitives = "0.8"
+alloy-eips = "0.4"
 
 # Serialization
 serde = { workspace = true }

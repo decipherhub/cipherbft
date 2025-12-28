@@ -16,11 +16,9 @@
 pub mod error;
 pub mod config;
 pub mod transaction;
-pub mod account;
 pub mod pool;
 
 pub use error::MempoolError;
 pub use config::MempoolConfig;
 pub use transaction::TransactionOrdering;
-pub use account::AccountValidator;
 pub use pool::CipherBftPool;
