@@ -48,10 +48,21 @@
 #![warn(missing_docs)]
 
 pub mod error;
+pub mod evm;
+pub mod receipts;
 pub mod types;
 
 // Re-export main types for convenience
 pub use error::{DatabaseError, ExecutionError, Result};
+pub use evm::{
+    CipherBftEvmConfig, TransactionResult, CIPHERBFT_CHAIN_ID, DEFAULT_BASE_FEE_PER_GAS,
+    DEFAULT_BLOCK_GAS_LIMIT, MIN_STAKE_AMOUNT, STAKING_PRECOMPILE_ADDRESS,
+    UNBONDING_PERIOD_SECONDS,
+};
+pub use receipts::{
+    aggregate_bloom, compute_logs_bloom_from_transactions, compute_receipts_root,
+    compute_transactions_root, logs_bloom,
+};
 pub use types::{
     BlockHeader, BlockInput, ConsensusBlock, ExecutionBlock, ExecutionResult, Log, SealedBlock,
     TransactionReceipt, DELAYED_COMMITMENT_DEPTH, STATE_ROOT_SNAPSHOT_INTERVAL,
