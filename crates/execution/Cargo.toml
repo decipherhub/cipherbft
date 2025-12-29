@@ -1,0 +1,36 @@
+[package]
+name = "cipherbft-execution"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+
+[dependencies]
+# Internal dependencies
+cipherbft-types = { path = "../types" }
+cipherbft-crypto = { path = "../crypto" }
+
+# EVM execution (will be used in future phases)
+# revm = "19"
+
+# Ethereum types (Alloy for EVM compatibility)
+alloy-primitives = { version = "1", features = ["serde"] }
+alloy-consensus = { version = "1", features = ["serde"] }
+
+# Error handling
+thiserror = "2"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# Concurrency
+parking_lot = "0.12"
+
+# Logging
+tracing = "0.1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+
+[lints.rust]
+unsafe_code = "deny"
