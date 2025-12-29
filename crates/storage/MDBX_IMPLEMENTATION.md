@@ -27,8 +27,9 @@ crates/storage/src/mdbx/
 | `Database` | Done | Wrapper around reth-db MDBX environment |
 | `MdbxDclStore` | Skeleton | DclStore trait implementation with conversion helpers |
 | `MdbxWal` | Skeleton | Wal trait implementation for crash recovery |
-| Table Key Types | Done | `CarTableKey`, `HeightRoundKey`, `HashKey` with Encode/Decode |
+| Table Key Types | Done | `CarTableKey`, `HeightRoundKey`, `HashKey`, `HeightKey`, `UnitKey` with Encode/Decode |
 | Stored Value Types | Done | `StoredBatch`, `StoredCar`, `StoredCut`, etc. with Serialize/Deserialize |
+| **Table Definitions** | **Done** | All 11 tables defined with reth-db `Table` trait |
 
 ### Feature Flag
 
@@ -57,14 +58,56 @@ store.put_batch(batch).await?;
 store.put_car(car).await?;
 ```
 
+## Table Definitions
+
+All 11 tables are now defined in `tables.rs` using the reth-db `Table` trait:
+
+### DCL Tables
+
+| Table | Key Type | Value Type | Description |
+|-------|----------|------------|-------------|
+| `Batches` | `HashKey` | `BincodeValue<StoredBatch>` | Transaction batches from Workers |
+| `Cars` | `CarTableKey` | `BincodeValue<StoredCar>` | CARs indexed by (validator, position) |
+| `CarsByHash` | `HashKey` | `CarTableKey` | Secondary index for Car lookup by hash |
+| `Attestations` | `HashKey` | `BincodeValue<StoredAggregatedAttestation>` | Aggregated BLS attestations |
+| `PendingCuts` | `HeightKey` | `BincodeValue<StoredCut>` | Cuts awaiting consensus |
+| `FinalizedCuts` | `HeightKey` | `BincodeValue<StoredCut>` | Finalized Cuts |
+
+### Consensus Tables
+
+| Table | Key Type | Value Type | Description |
+|-------|----------|------------|-------------|
+| `ConsensusState` | `UnitKey` | `BincodeValue<StoredConsensusState>` | Singleton current state |
+| `ConsensusWal` | `HeightKey` | `BincodeValue<StoredWalEntry>` | WAL entries |
+| `ValidatorSets` | `HeightKey` | `BincodeValue<StoredValidatorSet>` | Validator sets by epoch |
+| `Votes` | `HeightRoundKey` | `BincodeValue<StoredVotes>` | Votes by (height, round) |
+| `Proposals` | `HeightRoundKey` | `BincodeValue<StoredProposal>` | Proposals by (height, round) |
+
+### Key Types
+
+| Key Type | Size | Description |
+|----------|------|-------------|
+| `HashKey` | 32 bytes | 32-byte hash, big-endian encoded |
+| `CarTableKey` | 28 bytes | (validator_prefix[20] + position[8]) |
+| `HeightKey` | 8 bytes | u64 height, big-endian for sorted iteration |
+| `HeightRoundKey` | 12 bytes | (height[8] + round[4]) |
+| `UnitKey` | 1 byte | Singleton key for single-row tables |
+
+### Value Encoding
+
+All values use `BincodeValue<T>` wrapper which:
+- Implements `Compress` trait (serializes with bincode)
+- Implements `Decompress` trait (deserializes with bincode)
+- Provides compact binary representation
+
 ## TODO
 
 ### Phase 1: Core MDBX Operations
 
-- [ ] **Define tables using reth-db macros**
-  - Use `define_tables!` macro for type-safe table definitions
-  - Define: `Batches`, `Cars`, `CarsByHash`, `Attestations`, `PendingCuts`, `FinalizedCuts`
-  - Define: `ConsensusState`, `ConsensusWal`, `ValidatorSets`, `Votes`, `Proposals`
+- [x] **Define tables using reth-db Table trait**
+  - ~~Use `define_tables!` macro for type-safe table definitions~~
+  - Implemented using direct `Table` trait implementation
+  - All 11 tables defined: `Batches`, `Cars`, `CarsByHash`, `Attestations`, `PendingCuts`, `FinalizedCuts`, `ConsensusState`, `ConsensusWal`, `ValidatorSets`, `Votes`, `Proposals`
 
 - [ ] **Implement actual MDBX read/write in MdbxDclStore**
   - Replace skeleton methods with real database operations

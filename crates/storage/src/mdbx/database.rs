@@ -91,9 +91,8 @@ impl Database {
             ));
 
         // Open the environment
-        let env = reth_db::init_db(&config.path, args).map_err(|e| {
-            StorageError::Database(format!("Failed to open database: {}", e))
-        })?;
+        let env = reth_db::init_db(&config.path, args)
+            .map_err(|e| StorageError::Database(format!("Failed to open database: {e}")))?;
 
         debug!("Database opened successfully");
 
@@ -131,9 +130,9 @@ impl Database {
 
     /// Create a read transaction
     pub fn tx(&self) -> Result<impl reth_db_api::transaction::DbTx + '_> {
-        self.env.tx().map_err(|e| {
-            StorageError::Database(format!("Failed to create read transaction: {}", e))
-        })
+        self.env
+            .tx()
+            .map_err(|e| StorageError::Database(format!("Failed to create read transaction: {e}")))
     }
 
     /// Create a write transaction
@@ -144,9 +143,9 @@ impl Database {
             ));
         }
 
-        self.env.tx_mut().map_err(|e| {
-            StorageError::Database(format!("Failed to create write transaction: {}", e))
-        })
+        self.env
+            .tx_mut()
+            .map_err(|e| StorageError::Database(format!("Failed to create write transaction: {e}")))
     }
 
     /// Get database statistics

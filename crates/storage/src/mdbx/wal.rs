@@ -4,14 +4,13 @@
 //! All consensus state changes are logged before being applied.
 
 use crate::error::Result;
-use crate::wal::{PipelineStage, Wal, WalEntry};
+use crate::wal::{Wal, WalEntry};
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing::{debug, trace};
 
 use super::database::Database;
-use super::tables::BincodeValue;
 
 /// MDBX-backed WAL implementation
 ///
@@ -38,7 +37,7 @@ impl MdbxWal {
     }
 
     /// Load the next WAL index from database
-    fn load_next_index(db: &Database) -> Result<u64> {
+    fn load_next_index(_db: &Database) -> Result<u64> {
         // TODO: Implement actual index loading from MDBX
         // For now, start at 0
         Ok(0)
@@ -50,21 +49,19 @@ impl MdbxWal {
     }
 
     /// Serialize a WAL entry for storage
+    #[allow(dead_code)]
     fn serialize_entry(entry: &WalEntry) -> Result<Vec<u8>> {
         bincode::serialize(entry).map_err(|e| {
-            crate::error::StorageError::Serialization(format!(
-                "Failed to serialize WAL entry: {}",
-                e
-            ))
+            crate::error::StorageError::Serialization(format!("Failed to serialize WAL entry: {e}"))
         })
     }
 
     /// Deserialize a WAL entry from storage
+    #[allow(dead_code)]
     fn deserialize_entry(data: &[u8]) -> Result<WalEntry> {
         bincode::deserialize(data).map_err(|e| {
             crate::error::StorageError::Deserialization(format!(
-                "Failed to deserialize WAL entry: {}",
-                e
+                "Failed to deserialize WAL entry: {e}"
             ))
         })
     }
@@ -78,7 +75,7 @@ impl Wal for MdbxWal {
 
         trace!(index, entry_type, "Appending WAL entry");
 
-        let serialized = Self::serialize_entry(&entry)?;
+        let _serialized = Self::serialize_entry(&entry)?;
 
         // TODO: Implement actual MDBX write
         // tx.put::<ConsensusWal>(index, serialized)?;
@@ -165,6 +162,7 @@ impl Wal for MdbxWal {
 }
 
 /// WAL entry index key
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WalIndexKey(pub u64);
 
@@ -188,6 +186,7 @@ impl reth_db_api::table::Decode for WalIndexKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reth_db_api::table::Decode;
 
     #[test]
     fn test_wal_entry_serialization() {

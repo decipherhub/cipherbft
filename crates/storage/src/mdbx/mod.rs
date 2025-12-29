@@ -24,5 +24,39 @@ mod wal;
 
 pub use database::{Database, DatabaseConfig, DatabaseEnv};
 pub use provider::MdbxDclStore;
-pub use tables::Tables;
+pub use tables::{
+    // Table types
+    Attestations,
+    Batches,
+    // Key types
+    CarTableKey,
+    Cars,
+    CarsByHash,
+    ConsensusState,
+    ConsensusWal,
+    FinalizedCuts,
+    HashKey,
+    HeightKey,
+    HeightRoundKey,
+    PendingCuts,
+    Proposals,
+    // Value types
+    StoredAggregatedAttestation,
+    StoredBatch,
+    StoredBatchDigest,
+    StoredCar,
+    StoredCarEntry,
+    StoredConsensusState,
+    StoredCut,
+    StoredProposal,
+    StoredValidator,
+    StoredValidatorSet,
+    StoredVote,
+    StoredVotes,
+    StoredWalEntry,
+    Tables,
+    UnitKey,
+    ValidatorSets,
+    Votes,
+};
 pub use wal::MdbxWal;

@@ -20,7 +20,7 @@
 //! - `Votes`: Collected votes by (height, round)
 //! - `Proposals`: Block proposals by (height, round)
 
-use reth_db_api::table::{Compress, Decompress, Encode, Decode};
+use reth_db_api::table::{Compress, Decode, Decompress, Encode};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
@@ -29,7 +29,9 @@ use std::fmt::Debug;
 // ============================================================
 
 /// Key for Cars table: (ValidatorId bytes, position)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, Serialize, Deserialize,
+)]
 pub struct CarTableKey {
     /// First 20 bytes of validator ID (truncated for efficiency)
     pub validator_prefix: [u8; 20],
@@ -76,8 +78,29 @@ impl Decode for CarTableKey {
     }
 }
 
+// CarTableKey is also used as a Value in CarsByHash table
+impl Compress for CarTableKey {
+    type Compressed = Vec<u8>;
+
+    fn compress(self) -> Self::Compressed {
+        self.encode().to_vec()
+    }
+
+    fn compress_to_buf<B: bytes::BufMut + AsMut<[u8]>>(self, buf: &mut B) {
+        buf.put_slice(&self.encode());
+    }
+}
+
+impl Decompress for CarTableKey {
+    fn decompress(value: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
+        Self::decode(value)
+    }
+}
+
 /// Key for Votes/Proposals table: (height, round)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, Serialize, Deserialize,
+)]
 pub struct HeightRoundKey {
     /// Consensus height
     pub height: u64,
@@ -115,7 +138,9 @@ impl Decode for HeightRoundKey {
 }
 
 /// 32-byte hash key
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, Serialize, Deserialize,
+)]
 pub struct HashKey(pub [u8; 32]);
 
 impl HashKey {
@@ -147,6 +172,56 @@ impl Decode for HashKey {
     }
 }
 
+/// Height key (u64) for height-indexed tables
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, Serialize, Deserialize,
+)]
+pub struct HeightKey(pub u64);
+
+impl HeightKey {
+    /// Create a new height key
+    pub fn new(height: u64) -> Self {
+        Self(height)
+    }
+}
+
+impl Encode for HeightKey {
+    type Encoded = [u8; 8];
+
+    fn encode(self) -> Self::Encoded {
+        self.0.to_be_bytes()
+    }
+}
+
+impl Decode for HeightKey {
+    fn decode(value: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
+        if value.len() < 8 {
+            return Err(reth_db_api::DatabaseError::Decode);
+        }
+        Ok(Self(u64::from_be_bytes(value[..8].try_into().unwrap())))
+    }
+}
+
+/// Unit key for singleton tables (e.g., ConsensusState)
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, Serialize, Deserialize,
+)]
+pub struct UnitKey;
+
+impl Encode for UnitKey {
+    type Encoded = [u8; 1];
+
+    fn encode(self) -> Self::Encoded {
+        [0]
+    }
+}
+
+impl Decode for UnitKey {
+    fn decode(_value: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
+        Ok(Self)
+    }
+}
+
 // ============================================================
 // Value Types (stored as bincode-serialized bytes)
 // ============================================================
@@ -174,7 +249,9 @@ impl<T: Serialize + for<'de> Deserialize<'de> + Debug + Send + Sync> Compress fo
     }
 }
 
-impl<T: Serialize + for<'de> Deserialize<'de> + Debug + Send + Sync> Decompress for BincodeValue<T> {
+impl<T: Serialize + for<'de> Deserialize<'de> + Debug + Send + Sync> Decompress
+    for BincodeValue<T>
+{
     fn decompress(value: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
         bincode::deserialize(value)
             .map(BincodeValue)
@@ -350,41 +427,149 @@ pub struct StoredProposal {
 }
 
 // ============================================================
-// Table Definitions
+// Table Definitions using reth-db Table trait
 // ============================================================
+
+use reth_db_api::table::Table;
+
+/// Batches table: Hash -> StoredBatch
+/// Stores transaction batches from Workers
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Batches;
+
+impl Table for Batches {
+    const NAME: &'static str = "Batches";
+    type Key = HashKey;
+    type Value = BincodeValue<StoredBatch>;
+}
+
+/// Cars table: (ValidatorPrefix, Position) -> StoredCar
+/// Stores Certified Available Records indexed by validator and position
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Cars;
+
+impl Table for Cars {
+    const NAME: &'static str = "Cars";
+    type Key = CarTableKey;
+    type Value = BincodeValue<StoredCar>;
+}
+
+/// CarsByHash table: Hash -> CarTableKey
+/// Secondary index for Car lookup by hash
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CarsByHash;
+
+impl Table for CarsByHash {
+    const NAME: &'static str = "CarsByHash";
+    type Key = HashKey;
+    type Value = CarTableKey;
+}
+
+/// Attestations table: CarHash -> StoredAggregatedAttestation
+/// Stores aggregated BLS attestations
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Attestations;
+
+impl Table for Attestations {
+    const NAME: &'static str = "Attestations";
+    type Key = HashKey;
+    type Value = BincodeValue<StoredAggregatedAttestation>;
+}
+
+/// PendingCuts table: Height -> StoredCut
+/// Stores Cuts awaiting consensus finalization
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PendingCuts;
+
+impl Table for PendingCuts {
+    const NAME: &'static str = "PendingCuts";
+    type Key = HeightKey;
+    type Value = BincodeValue<StoredCut>;
+}
+
+/// FinalizedCuts table: Height -> StoredCut
+/// Stores consensus-finalized Cuts
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FinalizedCuts;
+
+impl Table for FinalizedCuts {
+    const NAME: &'static str = "FinalizedCuts";
+    type Key = HeightKey;
+    type Value = BincodeValue<StoredCut>;
+}
+
+/// ConsensusWal table: Index -> WalEntry bytes
+/// Write-ahead log for crash recovery
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ConsensusWal;
+
+impl Table for ConsensusWal {
+    const NAME: &'static str = "ConsensusWal";
+    type Key = HeightKey;
+    type Value = BincodeValue<StoredWalEntry>;
+}
+
+/// ConsensusState table: () -> StoredConsensusState
+/// Current consensus state (height, round, step)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ConsensusState;
+
+impl Table for ConsensusState {
+    const NAME: &'static str = "ConsensusState";
+    type Key = UnitKey;
+    type Value = BincodeValue<StoredConsensusState>;
+}
+
+/// ValidatorSets table: Epoch -> StoredValidatorSet
+/// Validator sets by epoch
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ValidatorSets;
+
+impl Table for ValidatorSets {
+    const NAME: &'static str = "ValidatorSets";
+    type Key = HeightKey;
+    type Value = BincodeValue<StoredValidatorSet>;
+}
+
+/// Votes table: (Height, Round) -> StoredVotes
+/// Collected votes by height and round
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Votes;
+
+impl Table for Votes {
+    const NAME: &'static str = "Votes";
+    type Key = HeightRoundKey;
+    type Value = BincodeValue<StoredVotes>;
+}
+
+/// Proposals table: (Height, Round) -> StoredProposal
+/// Block proposals by height and round
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Proposals;
+
+impl Table for Proposals {
+    const NAME: &'static str = "Proposals";
+    type Key = HeightRoundKey;
+    type Value = BincodeValue<StoredProposal>;
+}
 
 /// All CipherBFT tables
 pub struct Tables;
 
 impl Tables {
-    /// Table names for DCL
-    pub const BATCHES: &'static str = "Batches";
-    pub const CARS: &'static str = "Cars";
-    pub const CARS_BY_HASH: &'static str = "CarsByHash";
-    pub const ATTESTATIONS: &'static str = "Attestations";
-    pub const PENDING_CUTS: &'static str = "PendingCuts";
-    pub const FINALIZED_CUTS: &'static str = "FinalizedCuts";
-
-    /// Table names for Consensus
-    pub const CONSENSUS_STATE: &'static str = "ConsensusState";
-    pub const CONSENSUS_WAL: &'static str = "ConsensusWal";
-    pub const VALIDATOR_SETS: &'static str = "ValidatorSets";
-    pub const VOTES: &'static str = "Votes";
-    pub const PROPOSALS: &'static str = "Proposals";
-
-    /// All table names
+    /// All table names (for iteration/creation)
     pub const ALL: &'static [&'static str] = &[
-        Self::BATCHES,
-        Self::CARS,
-        Self::CARS_BY_HASH,
-        Self::ATTESTATIONS,
-        Self::PENDING_CUTS,
-        Self::FINALIZED_CUTS,
-        Self::CONSENSUS_STATE,
-        Self::CONSENSUS_WAL,
-        Self::VALIDATOR_SETS,
-        Self::VOTES,
-        Self::PROPOSALS,
+        Batches::NAME,
+        Cars::NAME,
+        CarsByHash::NAME,
+        Attestations::NAME,
+        PendingCuts::NAME,
+        FinalizedCuts::NAME,
+        ConsensusWal::NAME,
+        ConsensusState::NAME,
+        ValidatorSets::NAME,
+        Votes::NAME,
+        Proposals::NAME,
     ];
 }
 

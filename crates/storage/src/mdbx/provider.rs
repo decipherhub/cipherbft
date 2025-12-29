@@ -14,8 +14,8 @@ use tracing::{debug, trace};
 
 use super::database::Database;
 use super::tables::{
-    BincodeValue, CarTableKey, HashKey, StoredAggregatedAttestation, StoredBatch,
-    StoredBatchDigest, StoredCar, StoredCut,
+    CarTableKey, HashKey, StoredAggregatedAttestation, StoredBatch, StoredBatchDigest, StoredCar,
+    StoredCut,
 };
 
 /// MDBX-backed DCL store
@@ -42,6 +42,7 @@ impl MdbxDclStore {
     // Conversion helpers
     // ============================================================
 
+    #[allow(dead_code)]
     fn batch_to_stored(batch: &Batch) -> StoredBatch {
         StoredBatch {
             worker_id: batch.worker_id,
@@ -50,6 +51,7 @@ impl MdbxDclStore {
         }
     }
 
+    #[allow(dead_code)]
     fn stored_to_batch(stored: StoredBatch, _hash: Hash) -> Batch {
         Batch {
             worker_id: stored.worker_id,
@@ -58,6 +60,7 @@ impl MdbxDclStore {
         }
     }
 
+    #[allow(dead_code)]
     fn car_to_stored(car: &Car) -> StoredCar {
         StoredCar {
             proposer: car.proposer.as_bytes().to_vec(),
@@ -78,11 +81,14 @@ impl MdbxDclStore {
         }
     }
 
+    #[allow(dead_code)]
     fn stored_to_car(stored: StoredCar) -> Result<Car> {
         let proposer = ValidatorId::from_bytes(
-            stored.proposer.as_slice().try_into().map_err(|_| {
-                StorageError::Database("Invalid validator ID length".into())
-            })?,
+            stored
+                .proposer
+                .as_slice()
+                .try_into()
+                .map_err(|_| StorageError::Database("Invalid validator ID length".into()))?,
         );
 
         let batch_digests: Vec<BatchDigest> = stored
@@ -104,7 +110,7 @@ impl MdbxDclStore {
             .try_into()
             .map_err(|_| StorageError::Database("Invalid BLS signature length".into()))?;
         let signature = cipherbft_crypto::BlsSignature::from_bytes(&sig_bytes)
-            .map_err(|e| StorageError::Database(format!("Invalid BLS signature: {}", e)))?;
+            .map_err(|e| StorageError::Database(format!("Invalid BLS signature: {e}")))?;
 
         Ok(Car {
             proposer,
@@ -115,6 +121,7 @@ impl MdbxDclStore {
         })
     }
 
+    #[allow(dead_code)]
     fn attestation_to_stored(att: &AggregatedAttestation) -> StoredAggregatedAttestation {
         StoredAggregatedAttestation {
             car_hash: *att.car_hash.as_bytes(),
@@ -126,13 +133,16 @@ impl MdbxDclStore {
         }
     }
 
+    #[allow(dead_code)]
     fn stored_to_attestation(stored: StoredAggregatedAttestation) -> Result<AggregatedAttestation> {
         use bitvec::prelude::*;
 
         let car_proposer = ValidatorId::from_bytes(
-            stored.car_proposer.as_slice().try_into().map_err(|_| {
-                StorageError::Database("Invalid validator ID length".into())
-            })?,
+            stored
+                .car_proposer
+                .as_slice()
+                .try_into()
+                .map_err(|_| StorageError::Database("Invalid validator ID length".into()))?,
         );
 
         let agg_sig_bytes: [u8; 96] = stored
@@ -142,7 +152,7 @@ impl MdbxDclStore {
             .map_err(|_| StorageError::Database("Invalid aggregate signature length".into()))?;
         let aggregated_signature =
             cipherbft_crypto::BlsAggregateSignature::from_bytes(&agg_sig_bytes)
-                .map_err(|e| StorageError::Database(format!("Invalid BLS signature: {}", e)))?;
+                .map_err(|e| StorageError::Database(format!("Invalid BLS signature: {e}")))?;
 
         // Reconstruct bitvec from raw bytes
         let validators = BitVec::<u8, Lsb0>::from_vec(stored.signers_bitvec);
@@ -156,6 +166,7 @@ impl MdbxDclStore {
         })
     }
 
+    #[allow(dead_code)]
     fn cut_to_stored(cut: &Cut) -> StoredCut {
         StoredCut {
             height: cut.height,
@@ -164,7 +175,10 @@ impl MdbxDclStore {
                 .iter()
                 .map(|(vid, car)| {
                     let car_hash = car.hash();
-                    let attestation = cut.attestations.get(&car_hash).map(Self::attestation_to_stored);
+                    let attestation = cut
+                        .attestations
+                        .get(&car_hash)
+                        .map(Self::attestation_to_stored);
                     super::tables::StoredCarEntry {
                         validator: vid.as_bytes().to_vec(),
                         car: Self::car_to_stored(car),
@@ -175,15 +189,17 @@ impl MdbxDclStore {
         }
     }
 
+    #[allow(dead_code)]
     fn stored_to_cut(stored: StoredCut) -> Result<Cut> {
         let mut cut = Cut::new(stored.height);
 
         for entry in stored.cars {
-            let validator = ValidatorId::from_bytes(
-                entry.validator.as_slice().try_into().map_err(|_| {
-                    StorageError::Database("Invalid validator ID length".into())
-                })?,
-            );
+            let validator =
+                ValidatorId::from_bytes(
+                    entry.validator.as_slice().try_into().map_err(|_| {
+                        StorageError::Database("Invalid validator ID length".into())
+                    })?,
+                );
 
             let car = Self::stored_to_car(entry.car)?;
             let car_hash = car.hash();
