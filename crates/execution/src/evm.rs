@@ -6,7 +6,7 @@
 //! - Transaction execution with revm
 //! - Environment configuration (block, tx, cfg)
 
-use crate::{error::ExecutionError, types::Log, Result};
+use crate::{error::ExecutionError, types::{Cut, Log}, Result};
 use alloy_eips::eip2718::Decodable2718;
 use alloy_primitives::{Address, Bytes, B256, U256};
 use revm::{
@@ -16,7 +16,6 @@ use revm::{
     },
     Database, Evm,
 };
-use std::str::FromStr;
 
 /// CipherBFT Chain ID (31337 - Ethereum testnet/development chain ID).
 ///
@@ -125,6 +124,25 @@ impl CipherBftEvmConfig {
             prevrandao: Some(parent_hash), // Use parent hash as randomness source
             blob_excess_gas_and_price: Some(BlobExcessGasAndPrice::new(0, false)), // EIP-4844, not prague
         }
+    }
+
+    /// Create block environment from a finalized Cut.
+    ///
+    /// This is a convenience method that extracts block parameters from a Cut
+    /// and creates the appropriate BlockEnv for transaction execution.
+    ///
+    /// # Arguments
+    /// * `cut` - Finalized Cut from the consensus layer
+    ///
+    /// # Returns
+    /// * BlockEnv configured for the Cut's block
+    pub fn block_env_from_cut(&self, cut: &Cut) -> BlockEnv {
+        self.block_env(
+            cut.block_number,
+            cut.timestamp,
+            cut.parent_hash,
+            Some(cut.gas_limit),
+        )
     }
 
     /// Create transaction environment from raw transaction bytes.
@@ -466,6 +484,7 @@ pub struct TransactionResult {
 mod tests {
     use super::*;
     use revm::db::EmptyDB;
+    use std::str::FromStr;
 
     #[test]
     fn test_constants() {
@@ -533,5 +552,29 @@ mod tests {
         assert_eq!(evm.context.evm.env.cfg.chain_id, CIPHERBFT_CHAIN_ID);
         assert_eq!(evm.context.evm.env.block.number, U256::from(1));
         assert_eq!(evm.context.evm.env.block.timestamp, U256::from(1234567890));
+    }
+
+    #[test]
+    fn test_block_env_from_cut() {
+        use crate::types::Cut;
+
+        let config = CipherBftEvmConfig::default();
+        let parent_hash = B256::from([1u8; 32]);
+
+        let cut = Cut {
+            block_number: 100,
+            timestamp: 1234567890,
+            parent_hash,
+            cars: vec![],
+            gas_limit: 25_000_000,
+            base_fee_per_gas: Some(2_000_000_000),
+        };
+
+        let block_env = config.block_env_from_cut(&cut);
+
+        assert_eq!(block_env.number, U256::from(100));
+        assert_eq!(block_env.timestamp, U256::from(1234567890));
+        assert_eq!(block_env.gas_limit, U256::from(25_000_000));
+        assert_eq!(block_env.prevrandao, Some(parent_hash));
     }
 }

@@ -244,8 +244,7 @@ mod tests {
             data: Bytes::from(vec![3u8, 4u8, 5u8]),
         };
 
-        let logs = vec![log];
-        let bloom = logs_bloom(&logs);
+        let bloom = logs_bloom(std::slice::from_ref(&log));
 
         // Bloom should not be zero after adding logs
         assert_ne!(bloom, Bloom::ZERO);
@@ -260,7 +259,7 @@ mod tests {
             data: Bytes::new(),
         };
 
-        let bloom = logs_bloom(&[log]);
+        let bloom = logs_bloom(std::slice::from_ref(&log));
 
         // The bloom filter should contain the address
         assert!(bloom.contains_input(alloy_primitives::BloomInput::Raw(&address[..])));
@@ -275,7 +274,7 @@ mod tests {
             data: Bytes::new(),
         };
 
-        let bloom = logs_bloom(&[log]);
+        let bloom = logs_bloom(std::slice::from_ref(&log));
 
         // The bloom filter should contain the topic
         assert!(bloom.contains_input(alloy_primitives::BloomInput::Raw(&topic[..])));
@@ -316,8 +315,8 @@ mod tests {
             data: Bytes::new(),
         };
 
-        let bloom1 = logs_bloom(&[log1.clone()]);
-        let bloom2 = logs_bloom(&[log2.clone()]);
+        let bloom1 = logs_bloom(std::slice::from_ref(&log1));
+        let bloom2 = logs_bloom(std::slice::from_ref(&log2));
 
         let aggregated = aggregate_bloom(&[bloom1, bloom2]);
 
@@ -371,8 +370,8 @@ mod tests {
             data: Bytes::new(),
         };
 
-        let bloom1 = logs_bloom(&[log.clone()]);
-        let bloom2 = logs_bloom(&[log.clone()]);
+        let bloom1 = logs_bloom(std::slice::from_ref(&log));
+        let bloom2 = logs_bloom(std::slice::from_ref(&log));
 
         assert_eq!(bloom1, bloom2);
     }
