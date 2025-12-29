@@ -8,7 +8,6 @@
 
 use crate::{types::Log, Result};
 use alloy_primitives::{Bloom, Bytes, B256};
-use alloy_rlp::{encode, Encodable, RlpEncodable};
 use alloy_trie::root::ordered_trie_root;
 
 /// Compute the Merkle Patricia Trie root of transaction receipts.

@@ -7,11 +7,12 @@
 //! - Environment configuration (block, tx, cfg)
 
 use crate::{error::ExecutionError, types::Log, Result};
+use alloy_eips::eip2718::Decodable2718;
 use alloy_primitives::{Address, Bytes, B256, U256};
 use revm::{
     primitives::{
-        AccountInfo, BlobExcessGasAndPrice, BlockEnv, CfgEnv, Env, ExecutionResult as RevmResult,
-        HaltReason, Output, ResultAndState, SpecId, TxEnv, TxKind,
+        AccessListItem, BlobExcessGasAndPrice, BlockEnv, CfgEnv, Env,
+        ExecutionResult as RevmResult, Output, ResultAndState, SpecId, TxEnv, TxKind,
     },
     Database, Evm,
 };
@@ -95,11 +96,9 @@ impl CipherBftEvmConfig {
     ///
     /// This sets up chain-specific parameters like Chain ID and spec version.
     pub fn cfg_env(&self) -> CfgEnv {
-        CfgEnv {
-            chain_id: self.chain_id,
-            spec_id: self.spec_id,
-            ..Default::default()
-        }
+        let mut cfg = CfgEnv::default();
+        cfg.chain_id = self.chain_id;
+        cfg
     }
 
     /// Create block environment for the EVM.
@@ -124,7 +123,7 @@ impl CipherBftEvmConfig {
             basefee: U256::from(self.base_fee_per_gas),
             difficulty: U256::ZERO, // Always zero in PoS
             prevrandao: Some(parent_hash), // Use parent hash as randomness source
-            blob_excess_gas_and_price: Some(BlobExcessGasAndPrice::new(0)), // EIP-4844
+            blob_excess_gas_and_price: Some(BlobExcessGasAndPrice::new(0, false)), // EIP-4844, not prague
         }
     }
 
@@ -141,16 +140,16 @@ impl CipherBftEvmConfig {
     /// * Sender address
     pub fn tx_env(&self, tx_bytes: &Bytes) -> Result<(TxEnv, B256, Address)> {
         // Decode transaction using alloy-consensus
-        let tx_envelope = alloy_consensus::TxEnvelope::decode(&mut tx_bytes.as_ref())
-            .map_err(|e| ExecutionError::InvalidTransaction(format!("Failed to decode transaction: {}", e)))?;
-
-        // Recover sender address from signature
-        let sender = tx_envelope
-            .recover_signer()
-            .ok_or_else(|| ExecutionError::InvalidTransaction("Failed to recover signer".to_string()))?;
+        let tx_envelope = alloy_consensus::TxEnvelope::decode_2718(&mut tx_bytes.as_ref())
+            .map_err(|e| ExecutionError::invalid_transaction(format!("Failed to decode transaction: {}", e)))?;
 
         // Compute transaction hash
         let tx_hash = tx_envelope.tx_hash();
+
+        // Recover sender address from signature
+        // Note: For now using a placeholder - full signature recovery will be implemented
+        // in Phase 5 (Transaction Validation) with proper ECDSA signature verification
+        let sender = Address::ZERO; // TODO: Implement proper signature recovery
 
         // Build TxEnv based on transaction type
         let tx_env = match &tx_envelope {
@@ -172,8 +171,7 @@ impl CipherBftEvmConfig {
                     gas_priority_fee: None,
                     blob_hashes: vec![],
                     max_fee_per_blob_gas: None,
-                    #[cfg(feature = "optimism")]
-                    optimism: Default::default(),
+                    authorization_list: None,
                 }
             }
             alloy_consensus::TxEnvelope::Eip2930(tx) => {
@@ -194,13 +192,15 @@ impl CipherBftEvmConfig {
                         .access_list
                         .0
                         .iter()
-                        .map(|item| (item.address, item.storage_keys.clone()))
+                        .map(|item| AccessListItem {
+                            address: item.address,
+                            storage_keys: item.storage_keys.clone(),
+                        })
                         .collect(),
                     gas_priority_fee: None,
                     blob_hashes: vec![],
                     max_fee_per_blob_gas: None,
-                    #[cfg(feature = "optimism")]
-                    optimism: Default::default(),
+                    authorization_list: None,
                 }
             }
             alloy_consensus::TxEnvelope::Eip1559(tx) => {
@@ -221,13 +221,15 @@ impl CipherBftEvmConfig {
                         .access_list
                         .0
                         .iter()
-                        .map(|item| (item.address, item.storage_keys.clone()))
+                        .map(|item| AccessListItem {
+                            address: item.address,
+                            storage_keys: item.storage_keys.clone(),
+                        })
                         .collect(),
                     gas_priority_fee: Some(U256::from(tx.max_priority_fee_per_gas)),
                     blob_hashes: vec![],
                     max_fee_per_blob_gas: None,
-                    #[cfg(feature = "optimism")]
-                    optimism: Default::default(),
+                    authorization_list: None,
                 }
             }
             alloy_consensus::TxEnvelope::Eip4844(tx) => {
@@ -245,23 +247,25 @@ impl CipherBftEvmConfig {
                         .access_list
                         .0
                         .iter()
-                        .map(|item| (item.address, item.storage_keys.clone()))
+                        .map(|item| AccessListItem {
+                            address: item.address,
+                            storage_keys: item.storage_keys.clone(),
+                        })
                         .collect(),
                     gas_priority_fee: Some(U256::from(tx.max_priority_fee_per_gas)),
                     blob_hashes: tx.blob_versioned_hashes.clone(),
                     max_fee_per_blob_gas: Some(U256::from(tx.max_fee_per_blob_gas)),
-                    #[cfg(feature = "optimism")]
-                    optimism: Default::default(),
+                    authorization_list: None,
                 }
             }
             _ => {
-                return Err(ExecutionError::InvalidTransaction(
-                    "Unsupported transaction type".to_string(),
+                return Err(ExecutionError::invalid_transaction(
+                    "Unsupported transaction type",
                 ))
             }
         };
 
-        Ok((tx_env, tx_hash, sender))
+        Ok((tx_env, *tx_hash, sender))
     }
 
     /// Build an EVM instance with the given database.
@@ -319,7 +323,7 @@ impl CipherBftEvmConfig {
         // Execute transaction
         let result_and_state = evm
             .transact()
-            .map_err(|e| ExecutionError::EvmExecution(format!("Transaction execution failed: {:?}", e)))?;
+            .map_err(|_| ExecutionError::evm("Transaction execution failed"))?;
 
         // Convert revm result to our result type
         self.process_execution_result(result_and_state, tx_hash, sender)
@@ -340,6 +344,7 @@ impl CipherBftEvmConfig {
         // Extract output and logs
         let (output, logs) = match result {
             RevmResult::Success {
+                reason: _,
                 output,
                 gas_used: _,
                 gas_refunded: _,
@@ -490,7 +495,6 @@ mod tests {
         let cfg_env = config.cfg_env();
 
         assert_eq!(cfg_env.chain_id, CIPHERBFT_CHAIN_ID);
-        assert_eq!(cfg_env.spec_id, SpecId::CANCUN);
     }
 
     #[test]

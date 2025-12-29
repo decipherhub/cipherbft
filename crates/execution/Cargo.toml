@@ -20,6 +20,7 @@ alloy-trie = "0.7"
 # Note: revm 19 uses c-kzg 1.x, so we need alloy versions that are compatible
 alloy-primitives = "0.8"
 alloy-consensus = { version = "0.8", features = ["serde"] }
+alloy-eips = "0.8"
 alloy-rlp = "0.3"
 
 # Error handling
