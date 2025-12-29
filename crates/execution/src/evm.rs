@@ -12,7 +12,7 @@ use alloy_primitives::{Address, Bytes, B256, U256};
 use revm::{
     primitives::{
         AccessListItem, BlobExcessGasAndPrice, BlockEnv, CfgEnv, Env,
-        ExecutionResult as RevmResult, Output, ResultAndState, SpecId, TxEnv, TxKind,
+        ExecutionResult as RevmResult, Output, SpecId, TxEnv, TxKind,
     },
     Database, Evm,
 };
@@ -156,7 +156,8 @@ impl CipherBftEvmConfig {
     /// * `TxEnv` for execution
     /// * Transaction hash
     /// * Sender address
-    pub fn tx_env(&self, tx_bytes: &Bytes) -> Result<(TxEnv, B256, Address)> {
+    /// * Optional recipient address (None for contract creation)
+    pub fn tx_env(&self, tx_bytes: &Bytes) -> Result<(TxEnv, B256, Address, Option<Address>)> {
         // Decode transaction using alloy-consensus
         let tx_envelope = alloy_consensus::TxEnvelope::decode_2718(&mut tx_bytes.as_ref())
             .map_err(|e| ExecutionError::invalid_transaction(format!("Failed to decode transaction: {}", e)))?;
@@ -164,10 +165,36 @@ impl CipherBftEvmConfig {
         // Compute transaction hash
         let tx_hash = tx_envelope.tx_hash();
 
-        // Recover sender address from signature
-        // Note: For now using a placeholder - full signature recovery will be implemented
-        // in Phase 5 (Transaction Validation) with proper ECDSA signature verification
-        let sender = Address::ZERO; // TODO: Implement proper signature recovery
+        // Recover sender address from signature using alloy-primitives signature recovery
+        use alloy_primitives::SignatureError;
+
+        let sender = match &tx_envelope {
+            alloy_consensus::TxEnvelope::Legacy(signed) => {
+                let sig_hash = signed.signature_hash();
+                signed.signature().recover_address_from_prehash(&sig_hash)
+                    .map_err(|e: SignatureError| ExecutionError::invalid_transaction(format!("Failed to recover sender: {}", e)))?
+            }
+            alloy_consensus::TxEnvelope::Eip2930(signed) => {
+                let sig_hash = signed.signature_hash();
+                signed.signature().recover_address_from_prehash(&sig_hash)
+                    .map_err(|e: SignatureError| ExecutionError::invalid_transaction(format!("Failed to recover sender: {}", e)))?
+            }
+            alloy_consensus::TxEnvelope::Eip1559(signed) => {
+                let sig_hash = signed.signature_hash();
+                signed.signature().recover_address_from_prehash(&sig_hash)
+                    .map_err(|e: SignatureError| ExecutionError::invalid_transaction(format!("Failed to recover sender: {}", e)))?
+            }
+            alloy_consensus::TxEnvelope::Eip4844(signed) => {
+                let sig_hash = signed.signature_hash();
+                signed.signature().recover_address_from_prehash(&sig_hash)
+                    .map_err(|e: SignatureError| ExecutionError::invalid_transaction(format!("Failed to recover sender: {}", e)))?
+            }
+            _ => {
+                return Err(ExecutionError::invalid_transaction(
+                    "Unsupported transaction type for sender recovery",
+                ))
+            }
+        };
 
         // Build TxEnv based on transaction type
         let tx_env = match &tx_envelope {
@@ -283,7 +310,25 @@ impl CipherBftEvmConfig {
             }
         };
 
-        Ok((tx_env, *tx_hash, sender))
+        // Extract recipient address (to) from transaction
+        let to_addr = match &tx_envelope {
+            alloy_consensus::TxEnvelope::Legacy(tx) => match tx.tx().to {
+                alloy_primitives::TxKind::Call(to) => Some(to),
+                alloy_primitives::TxKind::Create => None,
+            },
+            alloy_consensus::TxEnvelope::Eip2930(tx) => match tx.tx().to {
+                alloy_primitives::TxKind::Call(to) => Some(to),
+                alloy_primitives::TxKind::Create => None,
+            },
+            alloy_consensus::TxEnvelope::Eip1559(tx) => match tx.tx().to {
+                alloy_primitives::TxKind::Call(to) => Some(to),
+                alloy_primitives::TxKind::Create => None,
+            },
+            alloy_consensus::TxEnvelope::Eip4844(tx) => Some(tx.tx().tx().to),
+            _ => None,
+        };
+
+        Ok((tx_env, *tx_hash, sender, to_addr))
     }
 
     /// Build an EVM instance with the given database.
@@ -327,35 +372,35 @@ impl CipherBftEvmConfig {
     ///
     /// # Returns
     /// * Transaction execution result including gas used, logs, and output
-    pub fn execute_transaction<DB: Database>(
+    pub fn execute_transaction<DB: Database + revm::DatabaseCommit>(
         &self,
         evm: &mut Evm<'_, (), DB>,
         tx_bytes: &Bytes,
     ) -> Result<TransactionResult> {
         // Parse transaction and create TxEnv
-        let (tx_env, tx_hash, sender) = self.tx_env(tx_bytes)?;
+        let (tx_env, tx_hash, sender, to_addr) = self.tx_env(tx_bytes)?;
 
         // Set transaction environment
         evm.context.evm.env.tx = tx_env;
 
-        // Execute transaction
-        let result_and_state = evm
-            .transact()
+        // Execute transaction and commit state changes
+        // This ensures subsequent transactions in the same block see updated nonces
+        let result = evm
+            .transact_commit()
             .map_err(|_| ExecutionError::evm("Transaction execution failed"))?;
 
         // Convert revm result to our result type
-        self.process_execution_result(result_and_state, tx_hash, sender)
+        self.process_execution_result(result, tx_hash, sender, to_addr)
     }
 
     /// Process the execution result from revm.
     fn process_execution_result(
         &self,
-        result_and_state: ResultAndState,
+        result: RevmResult,
         tx_hash: B256,
         sender: Address,
+        to: Option<Address>,
     ) -> Result<TransactionResult> {
-        let ResultAndState { result, state: _ } = result_and_state;
-
         let success = result.is_success();
         let gas_used = result.gas_used();
 
@@ -438,7 +483,7 @@ impl CipherBftEvmConfig {
         Ok(TransactionResult {
             tx_hash,
             sender,
-            to: None, // TODO: Extract from TxEnv
+            to,
             success,
             gas_used,
             output,
