@@ -238,6 +238,24 @@ impl<'a, P: TransactionPool> CipherBftPoolAdapter<'a, P> {
             total: size.pending + size.queued,
         }
     }
+
+    /// Get pending (executable) transactions in pool order (MP-5).
+    pub fn pending_transactions(&self) -> Vec<TransactionSigned> {
+        self.pool
+            .pending_transactions()
+            .into_iter()
+            .map(|tx| tx.to_recovered_transaction().into_signed())
+            .collect()
+    }
+
+    /// Get queued (nonce-gap) transactions in pool order (MP-5).
+    pub fn queued_transactions(&self) -> Vec<TransactionSigned> {
+        self.pool
+            .queued_transactions()
+            .into_iter()
+            .map(|tx| tx.to_recovered_transaction().into_signed())
+            .collect()
+    }
 }
 
 impl<P> CipherBftPool<P>
