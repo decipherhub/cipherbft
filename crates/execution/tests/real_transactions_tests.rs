@@ -93,9 +93,8 @@ fn create_legacy_transaction(
     Bytes::from(encoded)
 }
 
-/// Create and sign an EIP-1559 transaction
-fn create_eip1559_transaction(
-    signer: &PrivateKeySigner,
+/// Parameters for creating an EIP-1559 transaction
+struct Eip1559TxParams {
     to: Address,
     value: U256,
     nonce: u64,
@@ -103,17 +102,20 @@ fn create_eip1559_transaction(
     max_fee_per_gas: u128,
     max_priority_fee_per_gas: u128,
     data: Bytes,
-) -> Bytes {
+}
+
+/// Create and sign an EIP-1559 transaction
+fn create_eip1559_transaction(signer: &PrivateKeySigner, params: Eip1559TxParams) -> Bytes {
     let tx = TxEip1559 {
         chain_id: 31337,
-        nonce,
-        gas_limit,
-        max_fee_per_gas,
-        max_priority_fee_per_gas,
-        to: TxKind::Call(to),
-        value,
+        nonce: params.nonce,
+        gas_limit: params.gas_limit,
+        max_fee_per_gas: params.max_fee_per_gas,
+        max_priority_fee_per_gas: params.max_priority_fee_per_gas,
+        to: TxKind::Call(params.to),
+        value: params.value,
         access_list: Default::default(),
-        input: data,
+        input: params.data,
     };
 
     let signature = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
@@ -167,13 +169,15 @@ fn test_simple_eth_transfer() {
     let transfer_amount = U256::from(1_000_000_000_000_000_000u64); // 1 ETH
     let tx = create_eip1559_transaction(
         &signer1,
-        addr2,
-        transfer_amount,
-        0, // nonce
-        21_000, // gas limit
-        2_000_000_000, // 2 gwei max fee
-        1_000_000_000, // 1 gwei priority fee
-        Bytes::new(),
+        Eip1559TxParams {
+            to: addr2,
+            value: transfer_amount,
+            nonce: 0,
+            gas_limit: 21_000,
+            max_fee_per_gas: 2_000_000_000,
+            max_priority_fee_per_gas: 1_000_000_000,
+            data: Bytes::new(),
+        },
     );
 
     // Execute block with transaction
@@ -217,35 +221,41 @@ fn test_multiple_transfers_in_block() {
 
     let tx1 = create_eip1559_transaction(
         &signer1,
-        addr2,
-        transfer_amount,
-        0, // nonce 0
-        21_000,
-        2_000_000_000,
-        1_000_000_000,
-        Bytes::new(),
+        Eip1559TxParams {
+            to: addr2,
+            value: transfer_amount,
+            nonce: 0,
+            gas_limit: 21_000,
+            max_fee_per_gas: 2_000_000_000,
+            max_priority_fee_per_gas: 1_000_000_000,
+            data: Bytes::new(),
+        },
     );
 
     let tx2 = create_eip1559_transaction(
         &signer1,
-        addr2,
-        transfer_amount,
-        1, // nonce 1
-        21_000,
-        2_000_000_000,
-        1_000_000_000,
-        Bytes::new(),
+        Eip1559TxParams {
+            to: addr2,
+            value: transfer_amount,
+            nonce: 1,
+            gas_limit: 21_000,
+            max_fee_per_gas: 2_000_000_000,
+            max_priority_fee_per_gas: 1_000_000_000,
+            data: Bytes::new(),
+        },
     );
 
     let tx3 = create_eip1559_transaction(
         &signer2,
-        addr1,
-        transfer_amount,
-        0, // nonce 0 for signer2
-        21_000,
-        2_000_000_000,
-        1_000_000_000,
-        Bytes::new(),
+        Eip1559TxParams {
+            to: addr1,
+            value: transfer_amount,
+            nonce: 0,
+            gas_limit: 21_000,
+            max_fee_per_gas: 2_000_000_000,
+            max_priority_fee_per_gas: 1_000_000_000,
+            data: Bytes::new(),
+        },
     );
 
     // Execute block with multiple transactions
@@ -370,13 +380,15 @@ fn test_transaction_with_data() {
 
     let tx = create_eip1559_transaction(
         &signer1,
-        addr2,
-        U256::ZERO, // No ETH transfer
-        0, // nonce
-        50_000, // higher gas limit for calldata
-        2_000_000_000,
-        1_000_000_000,
-        calldata,
+        Eip1559TxParams {
+            to: addr2,
+            value: U256::ZERO,
+            nonce: 0,
+            gas_limit: 50_000,
+            max_fee_per_gas: 2_000_000_000,
+            max_priority_fee_per_gas: 1_000_000_000,
+            data: calldata,
+        },
     );
 
     let input = BlockInput {
@@ -408,13 +420,15 @@ fn test_sequential_blocks_with_nonce() {
     // Block 1: nonce 0
     let tx1 = create_eip1559_transaction(
         &signer1,
-        addr2,
-        transfer_amount,
-        0,
-        21_000,
-        2_000_000_000,
-        1_000_000_000,
-        Bytes::new(),
+        Eip1559TxParams {
+            to: addr2,
+            value: transfer_amount,
+            nonce: 0,
+            gas_limit: 21_000,
+            max_fee_per_gas: 2_000_000_000,
+            max_priority_fee_per_gas: 1_000_000_000,
+            data: Bytes::new(),
+        },
     );
 
     let input1 = BlockInput {
@@ -432,13 +446,15 @@ fn test_sequential_blocks_with_nonce() {
     // Block 2: nonce 1
     let tx2 = create_eip1559_transaction(
         &signer1,
-        addr2,
-        transfer_amount,
-        1, // Next nonce
-        21_000,
-        2_000_000_000,
-        1_000_000_000,
-        Bytes::new(),
+        Eip1559TxParams {
+            to: addr2,
+            value: transfer_amount,
+            nonce: 1,
+            gas_limit: 21_000,
+            max_fee_per_gas: 2_000_000_000,
+            max_priority_fee_per_gas: 1_000_000_000,
+            data: Bytes::new(),
+        },
     );
 
     let input2 = BlockInput {
@@ -456,13 +472,15 @@ fn test_sequential_blocks_with_nonce() {
     // Block 3: nonce 2
     let tx3 = create_eip1559_transaction(
         &signer1,
-        addr2,
-        transfer_amount,
-        2, // Next nonce
-        21_000,
-        2_000_000_000,
-        1_000_000_000,
-        Bytes::new(),
+        Eip1559TxParams {
+            to: addr2,
+            value: transfer_amount,
+            nonce: 2,
+            gas_limit: 21_000,
+            max_fee_per_gas: 2_000_000_000,
+            max_priority_fee_per_gas: 1_000_000_000,
+            data: Bytes::new(),
+        },
     );
 
     let input3 = BlockInput {
@@ -491,13 +509,15 @@ fn test_receipts_root_with_real_transactions() {
     // Create transaction
     let tx = create_eip1559_transaction(
         &signer1,
-        addr2,
-        U256::from(1_000_000_000_000_000_000u64),
-        0,
-        21_000,
-        2_000_000_000,
-        1_000_000_000,
-        Bytes::new(),
+        Eip1559TxParams {
+            to: addr2,
+            value: U256::from(1_000_000_000_000_000_000u64),
+            nonce: 0,
+            gas_limit: 21_000,
+            max_fee_per_gas: 2_000_000_000,
+            max_priority_fee_per_gas: 1_000_000_000,
+            data: Bytes::new(),
+        },
     );
 
     let input = BlockInput {
@@ -531,13 +551,15 @@ fn test_gas_usage_accuracy() {
     // Test 1: Basic transfer should use exactly 21,000 gas
     let tx1 = create_eip1559_transaction(
         &signer1,
-        addr2,
-        U256::from(1_000_000_000_000_000_000u64),
-        0,
-        21_000,
-        2_000_000_000,
-        1_000_000_000,
-        Bytes::new(),
+        Eip1559TxParams {
+            to: addr2,
+            value: U256::from(1_000_000_000_000_000_000u64),
+            nonce: 0,
+            gas_limit: 21_000,
+            max_fee_per_gas: 2_000_000_000,
+            max_priority_fee_per_gas: 1_000_000_000,
+            data: Bytes::new(),
+        },
     );
 
     let input1 = BlockInput {
