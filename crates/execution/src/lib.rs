@@ -68,7 +68,7 @@ pub use receipts::{
 };
 pub use state::StateManager;
 pub use types::{
-    Account, BlockHeader, BlockInput, Car, ChainConfig, ConsensusBlock, Cut, ExecutionBlock,
+    BlockHeader, BlockInput, Car, ChainConfig, ConsensusBlock, Cut, ExecutionBlock,
     ExecutionResult, Log, Receipt, SealedBlock, TransactionReceipt, DELAYED_COMMITMENT_DEPTH,
     STATE_ROOT_SNAPSHOT_INTERVAL,
 };
