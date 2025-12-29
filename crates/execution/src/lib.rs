@@ -47,11 +47,18 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod database;
 pub mod error;
+pub mod evm;
+pub mod receipts;
+pub mod state;
 pub mod types;
 
 // Re-export main types for convenience
+pub use database::{Account, CipherBftDatabase, InMemoryProvider, Provider};
 pub use error::{DatabaseError, ExecutionError, Result};
+pub use evm::CipherBftEvmConfig;
+pub use state::StateManager;
 pub use types::{
     BlockHeader, BlockInput, ConsensusBlock, ExecutionBlock, ExecutionResult, Log, SealedBlock,
     TransactionReceipt, DELAYED_COMMITMENT_DEPTH, STATE_ROOT_SNAPSHOT_INTERVAL,
