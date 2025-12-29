@@ -9,10 +9,17 @@ rust-version = "1.75"
 cipherbft-types = { path = "../types" }
 cipherbft-crypto = { path = "../crypto" }
 
-# EVM execution (will be used in future phases)
+# Reth primitives (note: reth-primitives crate doesn't exist on crates.io)
+# Using alloy-consensus instead which provides compatible Ethereum types
+# reth-primitives = "1.1"
+
+# EVM execution (commented out due to c-kzg version conflict with alloy 1.x)
+# Note: revm 19 requires c-kzg 1.x, but alloy-consensus 1.x requires c-kzg 2.x
+# Will be enabled in EVM execution phase with compatible versions
 # revm = "19"
 
-# Ethereum types (Alloy for EVM compatibility)
+# Ethereum types (using Alloy v1.x for stability)
+# Note: Alloy v0.8 has dependency conflicts, v1.x is current stable
 alloy-primitives = { version = "1", features = ["serde"] }
 alloy-consensus = { version = "1", features = ["serde"] }
 
