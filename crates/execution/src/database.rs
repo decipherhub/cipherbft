@@ -338,6 +338,7 @@ impl<P: Provider> revm::Database for CipherBftDatabase<P> {
     }
 }
 
+
 /// Implement revm's DatabaseCommit trait for writing state changes.
 impl<P: Provider> revm::DatabaseCommit for CipherBftDatabase<P> {
     fn commit(&mut self, changes: RevmHashMap<Address, RevmAccount>) {
