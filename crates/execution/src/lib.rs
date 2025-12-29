@@ -48,6 +48,7 @@
 #![warn(missing_docs)]
 
 pub mod database;
+pub mod engine;
 pub mod error;
 pub mod evm;
 pub mod receipts;
@@ -56,6 +57,7 @@ pub mod types;
 
 // Re-export main types for convenience
 pub use database::{Account, CipherBftDatabase, InMemoryProvider, Provider};
+pub use engine::{ExecutionEngine, ExecutionLayer as ExecutionLayerTrait};
 pub use error::{DatabaseError, ExecutionError, Result};
 pub use evm::{
     CipherBftEvmConfig, TransactionResult, CIPHERBFT_CHAIN_ID, DEFAULT_BASE_FEE_PER_GAS,
