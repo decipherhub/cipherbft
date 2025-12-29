@@ -19,6 +19,115 @@ pub const STATE_ROOT_SNAPSHOT_INTERVAL: u64 = 100;
 /// ensuring deterministic block hashes in the header.
 pub const DELAYED_COMMITMENT_DEPTH: u64 = 2;
 
+/// Chain configuration parameters.
+///
+/// Contains all configurable parameters for the blockchain execution layer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChainConfig {
+    /// Chain ID for transaction signing and replay protection (default: 31337).
+    pub chain_id: u64,
+
+    /// Block gas limit (default: 30M).
+    pub block_gas_limit: u64,
+
+    /// State root computation interval in blocks (default: 100).
+    ///
+    /// Must be agreed by all validators via network-wide consensus parameter.
+    pub state_root_interval: u64,
+
+    /// Minimum stake amount in wei for validators (default: 1 ETH = 1e18 wei).
+    pub staking_min_stake: U256,
+
+    /// Unbonding period in seconds for unstaking (default: 3 days = 259200 seconds).
+    pub staking_unbonding_period: u64,
+
+    /// Base fee per gas (EIP-1559, default: 1 gwei = 1e9 wei).
+    pub base_fee_per_gas: u64,
+}
+
+impl Default for ChainConfig {
+    fn default() -> Self {
+        Self {
+            chain_id: 31337,
+            block_gas_limit: 30_000_000,
+            state_root_interval: STATE_ROOT_SNAPSHOT_INTERVAL,
+            staking_min_stake: U256::from(1_000_000_000_000_000_000u64), // 1 ETH
+            staking_unbonding_period: 259_200, // 3 days
+            base_fee_per_gas: 1_000_000_000, // 1 gwei
+        }
+    }
+}
+
+/// A finalized, ordered set of transactions from the consensus layer (Cut).
+///
+/// Represents the input from consensus after transaction ordering has been finalized.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Cut {
+    /// Block number for this Cut.
+    pub block_number: u64,
+
+    /// Block timestamp (Unix timestamp in seconds).
+    pub timestamp: u64,
+
+    /// Parent block hash.
+    pub parent_hash: B256,
+
+    /// Cars (transaction groups from validators), already sorted by validator ID.
+    ///
+    /// Transactions are executed by iterating Cars in order, then transactions within each Car.
+    pub cars: Vec<Car>,
+
+    /// Gas limit for this block.
+    pub gas_limit: u64,
+
+    /// Base fee per gas (EIP-1559).
+    pub base_fee_per_gas: Option<u64>,
+}
+
+/// Transactions from a single validator within a Cut (Car).
+///
+/// Multiple Cars are aggregated into a Cut by the consensus layer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Car {
+    /// Validator ID that produced this Car.
+    pub validator_id: U256,
+
+    /// Ordered transactions from this validator.
+    pub transactions: Vec<Bytes>,
+}
+
+/// Account state.
+///
+/// Represents an Ethereum account with balance, nonce, code, and storage.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Account {
+    /// Account nonce (transaction count).
+    pub nonce: u64,
+
+    /// Account balance in wei.
+    pub balance: U256,
+
+    /// Code hash (KECCAK256 of contract bytecode, or empty for EOAs).
+    pub code_hash: B256,
+
+    /// Storage root (Merkle root of account storage trie).
+    pub storage_root: B256,
+}
+
+impl Default for Account {
+    fn default() -> Self {
+        Self {
+            nonce: 0,
+            balance: U256::ZERO,
+            code_hash: B256::ZERO,
+            storage_root: B256::ZERO,
+        }
+    }
+}
+
+/// Transaction receipt (renamed from TransactionReceipt for consistency with naming in task).
+pub type Receipt = TransactionReceipt;
+
 /// Input to the execution layer from the consensus layer.
 ///
 /// Contains the ordered transactions to execute for a specific block.
@@ -324,7 +433,7 @@ impl From<SealedBlock> for AlloyHeader {
             excess_blob_gas: block.header.excess_blob_gas,
             parent_beacon_block_root: block.header.parent_beacon_block_root,
             requests_hash: None, // EIP-7685, not used in CipherBFT
-            target_blobs_per_block: Some(3), // EIP-4844 default target
+            target_blobs_per_block: None, // EIP-7742, not used in CipherBFT
         }
     }
 }
