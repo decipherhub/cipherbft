@@ -9,22 +9,25 @@ rust-version = "1.75"
 cipherbft-types = { path = "../types" }
 cipherbft-crypto = { path = "../crypto" }
 
-# Reth primitives (note: reth-primitives crate doesn't exist on crates.io)
-# Using alloy-consensus instead which provides compatible Ethereum types
-# reth-primitives = "1.1"
+# EVM execution
+revm = { version = "19", default-features = false, features = ["std", "secp256k1"] }
+revm-primitives = "19"
 
-# EVM execution (commented out due to c-kzg version conflict with alloy 1.x)
-# Note: revm 19 requires c-kzg 1.x, but alloy-consensus 1.x requires c-kzg 2.x
-# Will be enabled in EVM execution phase with compatible versions
-# revm = "19"
+# Merkle trie for root computation (compatible with alloy 0.8)
+alloy-trie = "0.7"
 
-# Ethereum types (using Alloy v1.x for stability)
-# Note: Alloy v0.8 has dependency conflicts, v1.x is current stable
-alloy-primitives = { version = "1", features = ["serde"] }
-alloy-consensus = { version = "1", features = ["serde"] }
+# Ethereum types (using Alloy v0.8 for c-kzg compatibility with revm 19)
+# Note: revm 19 uses c-kzg 1.x, so we need alloy versions that are compatible
+alloy-primitives = "0.8"
+alloy-consensus = { version = "0.8", features = ["serde"] }
+alloy-eips = "0.8"
+alloy-rlp = "0.3"
 
 # Error handling
 thiserror = "2"
+
+# Derive macros (required by alloy dependencies)
+derive_more = { version = "1.0", features = ["display", "from"] }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -38,6 +41,19 @@ tracing = "0.1"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
+
+# Encoding
+hex = "0.4"
+
+[dev-dependencies]
+# Property-based testing
+proptest = "1"
+
+# Benchmarking
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Test utilities
+tempfile = "3"
 
 [lints.rust]
 unsafe_code = "deny"
