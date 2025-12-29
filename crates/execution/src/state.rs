@@ -521,4 +521,91 @@ mod tests {
         // Commit should succeed (even though it's a no-op with InMemoryProvider)
         assert!(state_manager.commit().is_ok());
     }
+
+    /// Property test: Same state should produce same state root (determinism)
+    #[test]
+    fn test_state_root_determinism_property() {
+        use proptest::prelude::*;
+
+        proptest!(|(block_number in 100u64..1000u64)| {
+            // Create two independent state managers with same configuration
+            let provider1 = InMemoryProvider::new();
+            let provider2 = InMemoryProvider::new();
+
+            let sm1 = StateManager::new(provider1, Some(100));
+            let sm2 = StateManager::new(provider2, Some(100));
+
+            // Compute state roots at same block number
+            let root1 = sm1.compute_state_root(block_number).unwrap();
+            let root2 = sm2.compute_state_root(block_number).unwrap();
+
+            // State roots should be identical (deterministic)
+            prop_assert_eq!(root1, root2, "State roots should be deterministic");
+        });
+    }
+
+    /// Test that state root computation is deterministic across multiple executions
+    #[test]
+    fn test_state_root_determinism_repeated() {
+        // Compute state root multiple times at same block
+        let roots: Vec<B256> = (0..10)
+            .map(|_| {
+                let p = InMemoryProvider::new();
+                let sm = StateManager::new(p, Some(100));
+                sm.compute_state_root(100).unwrap()
+            })
+            .collect();
+
+        // All roots should be identical
+        let first_root = roots[0];
+        for (i, root) in roots.iter().enumerate() {
+            assert_eq!(
+                *root, first_root,
+                "Iteration {} produced different state root",
+                i
+            );
+        }
+    }
+
+    /// Test that identical state at different block numbers produces consistent roots
+    #[test]
+    fn test_state_root_consistency_across_blocks() {
+        // Create two state managers with identical initial state
+        let provider1 = InMemoryProvider::new();
+        let provider2 = InMemoryProvider::new();
+
+        let sm1 = StateManager::new(provider1, Some(100));
+        let sm2 = StateManager::new(provider2, Some(100));
+
+        // Compute state roots at different checkpoint blocks
+        let root_100 = sm1.compute_state_root(100).unwrap();
+        let root_200 = sm2.compute_state_root(200).unwrap();
+
+        // With identical underlying state, roots should be the same
+        // (block number affects when we compute, not what we compute)
+        assert_eq!(root_100, root_200);
+    }
+
+    /// Test that state root is independent of computation order
+    #[test]
+    fn test_state_root_computation_order_independence() {
+        let provider1 = InMemoryProvider::new();
+        let provider2 = InMemoryProvider::new();
+
+        let sm1 = StateManager::new(provider1, Some(100));
+        let sm2 = StateManager::new(provider2, Some(100));
+
+        // Compute in different order
+        // sm1: compute at 100, then 200
+        let root1_100 = sm1.compute_state_root(100).unwrap();
+        let root1_200 = sm1.compute_state_root(200).unwrap();
+
+        // sm2: compute at 200, then 100
+        let root2_200 = sm2.compute_state_root(200).unwrap();
+        let root2_100 = sm2.compute_state_root(100).unwrap();
+
+        // Results should be independent of order
+        assert_eq!(root1_100, root2_100);
+        assert_eq!(root1_200, root2_200);
+    }
 }
