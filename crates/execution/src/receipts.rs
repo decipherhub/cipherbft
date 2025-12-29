@@ -9,7 +9,7 @@
 use crate::{types::Log, Result};
 use alloy_primitives::{Bloom, Bytes, B256};
 use alloy_rlp::{encode, Encodable, RlpEncodable};
-use reth_trie_common::ordered_trie_root;
+use alloy_trie::root::ordered_trie_root;
 
 /// Compute the Merkle Patricia Trie root of transaction receipts.
 ///
@@ -29,8 +29,8 @@ use reth_trie_common::ordered_trie_root;
 /// ```
 pub fn compute_receipts_root(receipts: &[Bytes]) -> Result<B256> {
     if receipts.is_empty() {
-        // Empty trie has a well-known root
-        return Ok(reth_trie_common::EMPTY_ROOT_HASH);
+        // Empty trie has a well-known root (Keccak256 of RLP-encoded empty array)
+        return Ok(alloy_trie::EMPTY_ROOT_HASH);
     }
 
     // Convert Bytes to Vec<u8> for ordered_trie_root
@@ -60,8 +60,8 @@ pub fn compute_receipts_root(receipts: &[Bytes]) -> Result<B256> {
 /// ```
 pub fn compute_transactions_root(transactions: &[Bytes]) -> Result<B256> {
     if transactions.is_empty() {
-        // Empty trie has a well-known root
-        return Ok(reth_trie_common::EMPTY_ROOT_HASH);
+        // Empty trie has a well-known root (Keccak256 of RLP-encoded empty array)
+        return Ok(alloy_trie::EMPTY_ROOT_HASH);
     }
 
     // Convert Bytes to Vec<u8> for ordered_trie_root
@@ -155,14 +155,14 @@ mod tests {
     fn test_empty_receipts_root() {
         let receipts: Vec<Bytes> = vec![];
         let root = compute_receipts_root(&receipts).unwrap();
-        assert_eq!(root, reth_trie_common::EMPTY_ROOT_HASH);
+        assert_eq!(root, alloy_trie::EMPTY_ROOT_HASH);
     }
 
     #[test]
     fn test_empty_transactions_root() {
         let transactions: Vec<Bytes> = vec![];
         let root = compute_transactions_root(&transactions).unwrap();
-        assert_eq!(root, reth_trie_common::EMPTY_ROOT_HASH);
+        assert_eq!(root, alloy_trie::EMPTY_ROOT_HASH);
     }
 
     #[test]
@@ -173,7 +173,7 @@ mod tests {
 
         let root = compute_receipts_root(&receipts).unwrap();
         assert_ne!(root, B256::ZERO);
-        assert_ne!(root, reth_trie_common::EMPTY_ROOT_HASH);
+        assert_ne!(root, alloy_trie::EMPTY_ROOT_HASH);
     }
 
     #[test]
@@ -184,7 +184,7 @@ mod tests {
 
         let root = compute_transactions_root(&transactions).unwrap();
         assert_ne!(root, B256::ZERO);
-        assert_ne!(root, reth_trie_common::EMPTY_ROOT_HASH);
+        assert_ne!(root, alloy_trie::EMPTY_ROOT_HASH);
     }
 
     #[test]

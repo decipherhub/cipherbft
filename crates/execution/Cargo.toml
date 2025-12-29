@@ -13,17 +13,20 @@ cipherbft-crypto = { path = "../crypto" }
 revm = { version = "19", default-features = false, features = ["std", "secp256k1"] }
 revm-primitives = "19"
 
-# Reth trie for Merkle root computation
-reth-trie = "1.1"
-reth-trie-common = "1.1"
+# Merkle trie for root computation (compatible with alloy 0.8)
+alloy-trie = "0.7"
 
-# Ethereum types (using Alloy v1.x for stability)
-alloy-primitives = { version = "1", features = ["serde"] }
-alloy-consensus = { version = "1", features = ["serde"] }
+# Ethereum types (using Alloy v0.8 for c-kzg compatibility with revm 19)
+# Note: revm 19 uses c-kzg 1.x, so we need alloy versions that are compatible
+alloy-primitives = "0.8"
+alloy-consensus = { version = "0.8", features = ["serde"] }
 alloy-rlp = "0.3"
 
 # Error handling
 thiserror = "2"
+
+# Derive macros (required by alloy dependencies)
+derive_more = { version = "1.0", features = ["display", "from"] }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
