@@ -41,5 +41,15 @@ serde = { version = "1", features = ["derive"] }
 # Encoding
 hex = "0.4"
 
+[dev-dependencies]
+# Property-based testing
+proptest = "1"
+
+# Benchmarking
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Test utilities
+tempfile = "3"
+
 [lints.rust]
 unsafe_code = "deny"
