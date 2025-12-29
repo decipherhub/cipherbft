@@ -29,3 +29,7 @@ async-trait = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
+
+[dev-dependencies]
+reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0", features = ["test-utils"] }
+reth-provider = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0", features = ["test-utils"] }
