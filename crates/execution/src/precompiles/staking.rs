@@ -251,23 +251,23 @@ impl StakingPrecompile {
         let data = &input[4..];
 
         match selector {
-            // registerValidator(bytes32)
-            [0x6e, 0x7c, 0xf8, 0x5a] => {
+            // registerValidator(bytes32) - selector: 0x607049d8
+            [0x60, 0x70, 0x49, 0xd8] => {
                 self.register_validator(data, gas_limit, caller, value, block_number)
             }
-            // deregisterValidator()
-            [0x88, 0xa7, 0xca, 0x5c] => {
+            // deregisterValidator() - selector: 0x6a911ccf
+            [0x6a, 0x91, 0x1c, 0xcf] => {
                 self.deregister_validator(gas_limit, caller)
             }
-            // getValidatorSet()
-            [0xe7, 0xb5, 0xc8, 0xa9] => {
+            // getValidatorSet() - selector: 0xcf331250
+            [0xcf, 0x33, 0x12, 0x50] => {
                 self.get_validator_set(gas_limit)
             }
-            // getStake(address)
+            // getStake(address) - selector: 0x7a766460
             [0x7a, 0x76, 0x64, 0x60] => {
                 self.get_stake(data, gas_limit)
             }
-            // slash(address, uint256)
+            // slash(address, uint256) - selector: 0x02fb4d85
             [0x02, 0xfb, 0x4d, 0x85] => {
                 self.slash(data, gas_limit, caller)
             }
@@ -278,7 +278,7 @@ impl StakingPrecompile {
     /// Register a new validator.
     ///
     /// Function: registerValidator(bytes32 blsPubkey)
-    /// Selector: 0x6e7cf85a
+    /// Selector: 0x607049d8
     /// Gas: 50,000
     fn register_validator(
         &self,
@@ -346,7 +346,7 @@ impl StakingPrecompile {
     /// Deregister as a validator.
     ///
     /// Function: deregisterValidator()
-    /// Selector: 0x88a7ca5c
+    /// Selector: 0x6a911ccf
     /// Gas: 25,000
     fn deregister_validator(&self, gas_limit: u64, caller: Address) -> PrecompileResult {
         const GAS_COST: u64 = gas::DEREGISTER_VALIDATOR;
@@ -614,7 +614,7 @@ mod tests {
         let precompile = StakingPrecompile::new();
 
         // Prepare input: registerValidator(bytes32 blsPubkey)
-        let mut input = vec![0x6e, 0x7c, 0xf8, 0x5a]; // selector
+        let mut input = vec![0x60, 0x70, 0x49, 0xd8]; // selector
         input.extend_from_slice(&[1u8; 32]); // BLS pubkey (simplified)
 
         let caller = Address::with_last_byte(3);
@@ -636,7 +636,7 @@ mod tests {
     fn test_precompile_register_insufficient_stake() {
         let precompile = StakingPrecompile::new();
 
-        let mut input = vec![0x6e, 0x7c, 0xf8, 0x5a]; // selector
+        let mut input = vec![0x60, 0x70, 0x49, 0xd8]; // selector
         input.extend_from_slice(&[1u8; 32]); // BLS pubkey
 
         let caller = Address::with_last_byte(4);
@@ -652,14 +652,14 @@ mod tests {
         let precompile = StakingPrecompile::new();
 
         // First register
-        let mut input = vec![0x6e, 0x7c, 0xf8, 0x5a];
+        let mut input = vec![0x60, 0x70, 0x49, 0xd8];
         input.extend_from_slice(&[1u8; 32]);
         let caller = Address::with_last_byte(5);
         let value = U256::from(MIN_VALIDATOR_STAKE);
         precompile.run(&Bytes::from(input), 100_000, caller, value, 1).unwrap();
 
         // Now deregister
-        let dereg_input = vec![0x88, 0xa7, 0xca, 0x5c]; // selector
+        let dereg_input = vec![0x6a, 0x91, 0x1c, 0xcf]; // selector
         let result = precompile.run(&Bytes::from(dereg_input), 100_000, caller, U256::ZERO, 2);
 
         assert!(result.is_ok());
@@ -677,7 +677,7 @@ mod tests {
         let precompile = StakingPrecompile::new();
 
         // Register a validator
-        let mut reg_input = vec![0x6e, 0x7c, 0xf8, 0x5a];
+        let mut reg_input = vec![0x60, 0x70, 0x49, 0xd8];
         reg_input.extend_from_slice(&[1u8; 32]);
         let validator_addr = Address::with_last_byte(6);
         let stake = U256::from(MIN_VALIDATOR_STAKE * 2);
@@ -707,18 +707,18 @@ mod tests {
         // Register two validators
         let addr1 = Address::with_last_byte(7);
         let stake1 = U256::from(MIN_VALIDATOR_STAKE);
-        let mut input1 = vec![0x6e, 0x7c, 0xf8, 0x5a];
+        let mut input1 = vec![0x60, 0x70, 0x49, 0xd8];
         input1.extend_from_slice(&[1u8; 32]);
         precompile.run(&Bytes::from(input1), 100_000, addr1, stake1, 1).unwrap();
 
         let addr2 = Address::with_last_byte(8);
         let stake2 = U256::from(MIN_VALIDATOR_STAKE * 2);
-        let mut input2 = vec![0x6e, 0x7c, 0xf8, 0x5a];
+        let mut input2 = vec![0x60, 0x70, 0x49, 0xd8];
         input2.extend_from_slice(&[2u8; 32]);
         precompile.run(&Bytes::from(input2), 100_000, addr2, stake2, 2).unwrap();
 
         // Query validator set
-        let input = vec![0xe7, 0xb5, 0xc8, 0xa9]; // selector
+        let input = vec![0xcf, 0x33, 0x12, 0x50]; // selector
 
         let result = precompile.run(&Bytes::from(input), 100_000, Address::ZERO, U256::ZERO, 3);
 
