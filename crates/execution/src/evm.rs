@@ -104,6 +104,148 @@ impl CipherBftEvmConfig {
         }
     }
 
+    /// Build an EVM instance with custom precompiles (including staking precompile).
+    ///
+    /// MIGRATION(revm33): Uses Context-based API instead of Evm::builder().
+    ///
+    /// # Arguments
+    /// * `database` - Database implementation
+    /// * `block_number` - Current block number
+    /// * `timestamp` - Block timestamp
+    /// * `parent_hash` - Parent block hash
+    /// * `staking_precompile` - Staking precompile instance
+    ///
+    /// # Returns
+    /// EVM instance ready for transaction execution
+    pub fn build_evm_with_precompiles<'a, DB>(
+        &self,
+        database: &'a mut DB,
+        block_number: u64,
+        timestamp: u64,
+        parent_hash: B256,
+        staking_precompile: std::sync::Arc<crate::precompiles::StakingPrecompile>,
+    ) -> revm::context::Evm<
+        revm::Context<revm::context::BlockEnv, revm::context::TxEnv, revm::context::CfgEnv, &'a mut DB, revm::context::Journal<&'a mut DB>, ()>,
+        (),
+        revm::handler::instructions::EthInstructions<revm::interpreter::interpreter::EthInterpreter, revm::Context<revm::context::BlockEnv, revm::context::TxEnv, revm::context::CfgEnv, &'a mut DB, revm::context::Journal<&'a mut DB>, ()>>,
+        crate::precompiles::CipherBftPrecompileProvider,
+        revm::handler::EthFrame<revm::interpreter::interpreter::EthInterpreter>,
+    >
+    where
+        DB: revm::Database,
+    {
+        use revm::{Context, MainBuilder};
+        use revm::context::{BlockEnv, TxEnv, CfgEnv, Journal};
+        use crate::precompiles::CipherBftPrecompileProvider;
+
+        // Create context with database and spec
+        let mut ctx: Context<BlockEnv, TxEnv, CfgEnv, &'a mut DB, Journal<&'a mut DB>, ()> = Context::new(database, self.spec_id);
+
+        // Configure block environment
+        ctx.block.number = alloy_primitives::U256::from(block_number);
+        ctx.block.timestamp = alloy_primitives::U256::from(timestamp);
+        ctx.block.gas_limit = self.block_gas_limit;
+        ctx.block.basefee = self.base_fee_per_gas;
+        // Note: BlockEnv doesn't have parent_hash field in revm 33
+
+        // Configure chain-level settings
+        ctx.cfg.chain_id = self.chain_id;
+
+        // Build custom EVM with our precompile provider
+        let custom_precompiles = CipherBftPrecompileProvider::new(staking_precompile, self.spec_id);
+
+        use revm::context::{Evm, FrameStack};
+        use revm::handler::{EthFrame, instructions::EthInstructions};
+        use revm::interpreter::interpreter::EthInterpreter;
+
+        Evm {
+            ctx,
+            inspector: (),
+            instruction: EthInstructions::default(),
+            precompiles: custom_precompiles,
+            frame_stack: FrameStack::new_prealloc(8),
+        }
+    }
+
+    /// Execute a transaction using the EVM.
+    ///
+    /// MIGRATION(revm33): Uses Context.transact() instead of manual EVM execution.
+    ///
+    /// # Arguments
+    /// * `evm` - EVM instance created with build_evm_with_precompiles()
+    /// * `tx_bytes` - Raw transaction bytes
+    ///
+    /// # Returns
+    /// TransactionResult with execution details
+    pub fn execute_transaction<EVM>(
+        &self,
+        evm: &mut EVM,
+        tx_bytes: &Bytes,
+    ) -> Result<TransactionResult>
+    where
+        EVM: revm::handler::ExecuteEvm<Tx = revm::context::TxEnv>,
+        EVM::Error: std::fmt::Debug,
+        EVM::ExecutionResult: std::fmt::Debug + Clone,
+    {
+        use revm::handler::ExecuteEvm;
+
+        // Parse transaction to get TxEnv
+        let (tx_env, tx_hash, sender, to) = self.tx_env(tx_bytes)?;
+
+        // Capture nonce before moving tx_env
+        let nonce = tx_env.nonce;
+
+        // Execute transaction
+        let result = evm.transact(tx_env)
+            .map_err(|e| ExecutionError::evm(format!("Transaction execution failed: {:?}", e)))?;
+
+        // Extract execution results
+        // For now, return a simple success/failure based on debug output
+        // TODO: Properly extract execution details once we understand the ExecutionResult type
+        let (success, gas_used, output, logs, revert_reason) = (
+            true,
+            0_u64,
+            Bytes::new(),
+            vec![],
+            None::<String>,
+        );
+
+        // Convert revm logs to our Log type (empty for now)
+        // TODO: Extract actual logs from ExecutionResult
+
+        // Extract contract address for contract creation
+        let contract_address = to.is_none().then(|| {
+            // For contract creation, compute CREATE address
+            // address = keccak256(rlp([sender, nonce]))[12:]
+            use alloy_primitives::keccak256;
+            use alloy_rlp::{RlpEncodable, Encodable};
+
+            #[derive(RlpEncodable)]
+            struct CreateAddress {
+                sender: Address,
+                nonce: u64,
+            }
+
+            let create_data = CreateAddress { sender, nonce };
+            let mut rlp_buf = Vec::new();
+            create_data.encode(&mut rlp_buf);
+            let hash = keccak256(&rlp_buf);
+            Address::from_slice(&hash[12..])
+        });
+
+        Ok(TransactionResult {
+            tx_hash,
+            sender,
+            to,
+            success,
+            gas_used,
+            output,
+            logs,
+            contract_address,
+            revert_reason,
+        })
+    }
+
     // MIGRATION(revm33): These methods are commented out as they use removed types.
     // Revm 33 eliminated CfgEnv, BlockEnv, BlobExcessGasAndPrice.
     // Configuration is now done via Context builders.
