@@ -8,38 +8,31 @@
 
 use crate::{
     error::ExecutionError,
-    precompiles::{StakingPrecompile, StakingPrecompileAdapter},
     types::{Cut, Log},
     Result,
 };
 use alloy_eips::eip2718::Decodable2718;
 use alloy_primitives::{Address, Bytes, B256, U256};
+// MIGRATION(revm33): Complete API restructuring
+// - Use Context::mainnet() to build EVM (not Evm::builder())
+// - No Env/BlockEnv/CfgEnv - configuration handled differently
+// - TxEnv is in revm::context
+// - ExecutionResult in revm::context_interface::result
+// - Primitives like TxKind in revm::primitives
 use revm::{
-    primitives::{
-        AccessListItem, BlobExcessGasAndPrice, BlockEnv, CfgEnv, Env,
-        ExecutionResult as RevmResult, Output, SpecId, TxEnv, TxKind,
-    },
-    ContextPrecompile, ContextPrecompiles, Database, Evm,
+    context::TxEnv,
+    context_interface::result::{ExecutionResult as RevmResult, Output},
+    database_interface::Database,
+    primitives::{hardfork::SpecId, TxKind},
 };
-use revm::precompile::PrecompileSpecId;
-use std::sync::Arc;
 
 /// CipherBFT Chain ID (31337 - Ethereum testnet/development chain ID).
 ///
 /// This can be configured for different networks but defaults to 31337.
 pub const CIPHERBFT_CHAIN_ID: u64 = 31337;
 
-/// Staking precompile address (0x0000000000000000000000000000000000000100).
-///
-/// This precompile handles validator staking operations:
-/// - stake(uint256 amount)
-/// - unstake(uint256 amount)
-/// - delegate(address validator, uint256 amount)
-/// - queryStake(address account) returns uint256
-pub const STAKING_PRECOMPILE_ADDRESS: Address = Address::new([
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x01, 0x00,
-]);
+// MIGRATION(revm33): STAKING_PRECOMPILE_ADDRESS moved to precompiles::provider module
+// It's re-exported from precompiles::STAKING_PRECOMPILE_ADDRESS
 
 /// Default block gas limit (30 million gas).
 pub const DEFAULT_BLOCK_GAS_LIMIT: u64 = 30_000_000;
@@ -54,6 +47,16 @@ pub const MIN_STAKE_AMOUNT: u128 = 1_000_000_000_000_000_000;
 pub const UNBONDING_PERIOD_SECONDS: u64 = 259_200; // 3 days = 3 * 24 * 60 * 60
 
 /// EVM configuration for CipherBFT.
+///
+/// MIGRATION(revm33): This struct is partially broken due to removed types.
+/// Revm 33 eliminated Env, BlockEnv, CfgEnv in favor of Context-based API.
+/// Most methods are stubbed/commented out pending comprehensive refactor.
+///
+/// TODO: Comprehensive refactor (~500-1000 LOC changes):
+/// - Replace Env-based methods with Context builders
+/// - Update all transaction execution to use Context::mainnet()
+/// - Rewrite tests to use new API
+/// - See examples/uniswap_v2_usdc_swap for reference pattern
 ///
 /// Provides methods to create EVM environments and execute transactions.
 #[derive(Debug, Clone)]
@@ -371,92 +374,26 @@ impl CipherBftEvmConfig {
 
     /// Build a configured EVM instance with custom precompiles.
     ///
-    /// This creates an EVM with the staking precompile registered at address 0x100.
+    /// MIGRATION(revm33): Precompile provider is now a type parameter on Evm.
+    /// This method has been removed in favor of manual EVM construction with CipherBftPrecompileProvider.
     ///
-    /// # Type Parameters
-    /// * `DB` - Database type implementing the revm Database trait
+    /// # Example
+    /// ```rust,ignore
+    /// use crate::precompiles::{CipherBftPrecompileProvider, StakingPrecompile};
+    /// use revm::Evm;
+    /// use std::sync::Arc;
     ///
-    /// # Arguments
-    /// * `database` - Database backend for state access
-    /// * `block_number` - Current block number
-    /// * `timestamp` - Block timestamp
-    /// * `parent_hash` - Parent block hash
-    /// * `staking_precompile` - StakingPrecompile instance to register
+    /// let staking = Arc::new(StakingPrecompile::new());
+    /// let provider = CipherBftPrecompileProvider::new(staking, SpecId::CANCUN);
     ///
-    /// # Returns
-    /// Configured EVM with custom precompiles registered.
-    pub fn build_evm_with_precompiles<'a, DB: Database>(
-        &self,
-        database: DB,
-        block_number: u64,
-        timestamp: u64,
-        parent_hash: B256,
-        staking_precompile: Arc<StakingPrecompile>,
-    ) -> Evm<'a, (), DB> {
-        let env = Env {
-            cfg: self.cfg_env(),
-            block: self.block_env(block_number, timestamp, parent_hash, None),
-            tx: TxEnv::default(),
-        };
-
-        // Create precompiles with standard Cancun + our custom staking precompile
-        let precompiles = self.create_precompiles(staking_precompile);
-
-        // Build EVM and set custom precompiles on the context
-        let mut evm = Evm::builder()
-            .with_db(database)
-            .with_env(Box::new(env))
-            .build();
-
-        // Set the custom precompiles on the EVM context
-        evm.context.evm.precompiles = precompiles;
-
-        evm
-    }
-
-    /// Create a ContextPrecompiles instance with standard Cancun precompiles plus our custom staking precompile.
+    /// // Note: Full EVM construction requires Context type with proper trait bounds
+    /// // See integration tests for complete examples
+    /// ```
     ///
-    /// This builds a revm ContextPrecompiles object with all standard precompiles and our custom ones.
-    ///
-    /// # Arguments
-    /// * `staking_precompile` - The StakingPrecompile instance to register at 0x100
-    ///
-    /// # Returns
-    /// ContextPrecompiles instance with both standard and custom precompiles.
-    fn create_precompiles<DB: Database>(
-        &self,
-        staking_precompile: Arc<StakingPrecompile>,
-    ) -> ContextPrecompiles<DB> {
-        // Start with standard Cancun precompiles
-        let mut precompiles = ContextPrecompiles::new(PrecompileSpecId::CANCUN);
-
-        // Create adapter for our staking precompile
-        let adapter = StakingPrecompileAdapter::new(staking_precompile);
-
-        // Wrap as ContextStateful precompile and add to the precompiles map
-        let context_precompile = ContextPrecompile::ContextStateful(Arc::new(adapter));
-
-        // Register staking precompile at 0x100
-        precompiles.extend([(STAKING_PRECOMPILE_ADDRESS, context_precompile)]);
-
-        precompiles
-    }
-
-    /// Install custom precompiles (staking precompile at 0x100).
-    ///
-    /// This method should be called after building the EVM to register
-    /// the staking precompile at address 0x100.
-    ///
-    /// Note: In the current implementation, precompiles are statically configured.
-    /// The StakingPrecompile will be integrated more deeply in Phase 4.
-    ///
-    /// # Returns
-    /// A StakingPrecompile instance that can be used to manage validator state.
-    pub fn install_precompiles(&self) -> StakingPrecompile {
-        // Create and return staking precompile
-        // In a full implementation, this would be registered with the EVM handler
-        StakingPrecompile::new()
-    }
+    /// # Note
+    /// The PrecompileProvider trait allows precompiles to access full transaction context
+    /// (caller, value, block number) which is essential for the staking precompile.
+    /// See `precompiles::provider` module for implementation details.
 
     /// Execute a transaction and return the result.
     ///
