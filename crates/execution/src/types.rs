@@ -433,7 +433,6 @@ impl From<SealedBlock> for AlloyHeader {
             excess_blob_gas: block.header.excess_blob_gas,
             parent_beacon_block_root: block.header.parent_beacon_block_root,
             requests_hash: None, // EIP-7685, not used in CipherBFT
-            target_blobs_per_block: None, // EIP-7742, not used in CipherBFT
         }
     }
 }
