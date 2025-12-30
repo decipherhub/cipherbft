@@ -7,10 +7,13 @@ use crate::error::{DatabaseError, Result};
 use alloy_primitives::{Address, B256, U256};
 use dashmap::DashMap;
 use parking_lot::RwLock;
-use revm::{
-    primitives::{Account as RevmAccount, AccountInfo, Bytecode, HashMap as RevmHashMap},
-    DatabaseRef,
-};
+// MIGRATION(revm33): Database traits now in separate crates
+// - DatabaseRef still exported from revm
+// - Account, AccountInfo, Bytecode moved to revm_state
+// - HashMap moved to revm_primitives
+use revm::DatabaseRef;
+use revm_primitives::HashMap as RevmHashMap;
+use revm_state::{Account as RevmAccount, AccountInfo, Bytecode};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

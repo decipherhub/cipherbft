@@ -18,6 +18,8 @@ use crate::{
 use alloy_consensus::Header as AlloyHeader;
 use alloy_primitives::{Address, Bytes, B256, B64, U256};
 use parking_lot::RwLock;
+// MIGRATION(revm33): SpecId is at revm::primitives::hardfork::SpecId
+use revm::primitives::hardfork::SpecId;
 use std::sync::Arc;
 
 /// ExecutionLayer trait defines the interface for block execution.
@@ -128,7 +130,7 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
     pub fn new(chain_config: ChainConfig, provider: P) -> Self {
         let evm_config = CipherBftEvmConfig::new(
             chain_config.chain_id,
-            revm::primitives::SpecId::CANCUN,
+            SpecId::CANCUN,
             chain_config.block_gas_limit,
             chain_config.base_fee_per_gas,
         );
@@ -163,7 +165,7 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
         let mut all_logs = Vec::new();
 
         // Scope for EVM execution to ensure it's dropped before commit
-        {
+        let state_changes = {
             // Build EVM instance with custom precompiles (including staking precompile at 0x100)
             let mut evm = self.evm_config.build_evm_with_precompiles(
                 &mut self.database,
@@ -203,9 +205,18 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
                 receipts.push(receipt);
                 all_logs.push(tx_result.logs);
             }
-        } // EVM is dropped here, releasing the mutable borrow
 
-        // Commit state changes from EVM
+            // Finalize EVM to extract journal changes
+            // This is necessary to persist nonce increments and other state changes between blocks
+            use revm::handler::ExecuteEvm;
+            evm.finalize()
+        }; // EVM is dropped here, releasing the mutable borrow
+
+        // Apply state changes to the database using DatabaseCommit trait
+        // This adds the changes to pending state
+        <CipherBftDatabase<P> as revm::DatabaseCommit>::commit(&mut self.database, state_changes);
+
+        // Commit pending state changes to persistent storage
         self.database.commit()?;
 
         Ok((receipts, cumulative_gas_used, all_logs))

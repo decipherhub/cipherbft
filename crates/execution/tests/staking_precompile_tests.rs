@@ -491,7 +491,7 @@ fn test_multiple_validators_individual_queries() {
     // Register 5 validators
     let validators: Vec<(Address, U256)> = (0..5)
         .map(|i| {
-            let addr = test_address(21);
+            let addr = test_address(21 + i as u8);
             let stake = U256::from((i + 1) * 1_000_000_000_000_000_000u128);
             (addr, stake)
         })

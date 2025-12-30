@@ -8,38 +8,34 @@
 
 use crate::{
     error::ExecutionError,
-    precompiles::{StakingPrecompile, StakingPrecompileAdapter},
     types::{Cut, Log},
     Result,
 };
 use alloy_eips::eip2718::Decodable2718;
 use alloy_primitives::{Address, Bytes, B256, U256};
+// MIGRATION(revm33): Complete API restructuring
+// - Use Context::mainnet() to build EVM (not Evm::builder())
+// - No Env/BlockEnv/CfgEnv - configuration handled differently
+// - TxEnv is in revm::context
+// - ExecutionResult in revm::context_interface::result
+// - Primitives like TxKind in revm::primitives
 use revm::{
-    primitives::{
-        AccessListItem, BlobExcessGasAndPrice, BlockEnv, CfgEnv, Env,
-        ExecutionResult as RevmResult, Output, SpecId, TxEnv, TxKind,
+    context::TxEnv,
+    context_interface::{
+        result::{ExecutionResult as RevmResult, Output},
+        transaction::{AccessList, AccessListItem},
     },
-    ContextPrecompile, ContextPrecompiles, Database, Evm,
+    database_interface::Database,
+    primitives::{hardfork::SpecId, TxKind},
 };
-use revm::precompile::PrecompileSpecId;
-use std::sync::Arc;
 
 /// CipherBFT Chain ID (31337 - Ethereum testnet/development chain ID).
 ///
 /// This can be configured for different networks but defaults to 31337.
 pub const CIPHERBFT_CHAIN_ID: u64 = 31337;
 
-/// Staking precompile address (0x0000000000000000000000000000000000000100).
-///
-/// This precompile handles validator staking operations:
-/// - stake(uint256 amount)
-/// - unstake(uint256 amount)
-/// - delegate(address validator, uint256 amount)
-/// - queryStake(address account) returns uint256
-pub const STAKING_PRECOMPILE_ADDRESS: Address = Address::new([
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x01, 0x00,
-]);
+// MIGRATION(revm33): STAKING_PRECOMPILE_ADDRESS moved to precompiles::provider module
+// It's re-exported from precompiles::STAKING_PRECOMPILE_ADDRESS
 
 /// Default block gas limit (30 million gas).
 pub const DEFAULT_BLOCK_GAS_LIMIT: u64 = 30_000_000;
@@ -54,6 +50,16 @@ pub const MIN_STAKE_AMOUNT: u128 = 1_000_000_000_000_000_000;
 pub const UNBONDING_PERIOD_SECONDS: u64 = 259_200; // 3 days = 3 * 24 * 60 * 60
 
 /// EVM configuration for CipherBFT.
+///
+/// MIGRATION(revm33): This struct is partially broken due to removed types.
+/// Revm 33 eliminated Env, BlockEnv, CfgEnv in favor of Context-based API.
+/// Most methods are stubbed/commented out pending comprehensive refactor.
+///
+/// TODO: Comprehensive refactor (~500-1000 LOC changes):
+/// - Replace Env-based methods with Context builders
+/// - Update all transaction execution to use Context::mainnet()
+/// - Rewrite tests to use new API
+/// - See examples/uniswap_v2_usdc_swap for reference pattern
 ///
 /// Provides methods to create EVM environments and execute transactions.
 #[derive(Debug, Clone)]
@@ -98,59 +104,115 @@ impl CipherBftEvmConfig {
         }
     }
 
-    /// Create configuration environment for the EVM.
+    /// Build an EVM instance with custom precompiles (including staking precompile).
     ///
-    /// This sets up chain-specific parameters like Chain ID and spec version.
-    pub fn cfg_env(&self) -> CfgEnv {
-        let mut cfg = CfgEnv::default();
-        cfg.chain_id = self.chain_id;
-        cfg
-    }
-
-    /// Create block environment for the EVM.
+    /// MIGRATION(revm33): Uses Context-based API instead of Evm::builder().
     ///
     /// # Arguments
+    /// * `database` - Database implementation
     /// * `block_number` - Current block number
-    /// * `timestamp` - Block timestamp (Unix timestamp in seconds)
-    /// * `parent_hash` - Parent block hash (used as prevrandao in PoS)
-    /// * `gas_limit` - Block gas limit (optional, uses config default if None)
-    pub fn block_env(
+    /// * `timestamp` - Block timestamp
+    /// * `parent_hash` - Parent block hash
+    /// * `staking_precompile` - Staking precompile instance
+    ///
+    /// # Returns
+    /// EVM instance ready for transaction execution
+    pub fn build_evm_with_precompiles<'a, DB>(
         &self,
+        database: &'a mut DB,
         block_number: u64,
         timestamp: u64,
         parent_hash: B256,
-        gas_limit: Option<u64>,
-    ) -> BlockEnv {
-        BlockEnv {
-            number: U256::from(block_number),
-            coinbase: Address::ZERO, // No coinbase rewards in PoS
-            timestamp: U256::from(timestamp),
-            gas_limit: U256::from(gas_limit.unwrap_or(self.block_gas_limit)),
-            basefee: U256::from(self.base_fee_per_gas),
-            difficulty: U256::ZERO, // Always zero in PoS
-            prevrandao: Some(parent_hash), // Use parent hash as randomness source
-            blob_excess_gas_and_price: Some(BlobExcessGasAndPrice::new(0, false)), // EIP-4844, not prague
+        staking_precompile: std::sync::Arc<crate::precompiles::StakingPrecompile>,
+    ) -> revm::context::Evm<
+        revm::Context<revm::context::BlockEnv, revm::context::TxEnv, revm::context::CfgEnv, &'a mut DB, revm::context::Journal<&'a mut DB>, ()>,
+        (),
+        revm::handler::instructions::EthInstructions<revm::interpreter::interpreter::EthInterpreter, revm::Context<revm::context::BlockEnv, revm::context::TxEnv, revm::context::CfgEnv, &'a mut DB, revm::context::Journal<&'a mut DB>, ()>>,
+        crate::precompiles::CipherBftPrecompileProvider,
+        revm::handler::EthFrame<revm::interpreter::interpreter::EthInterpreter>,
+    >
+    where
+        DB: revm::Database,
+    {
+        use revm::{Context, MainBuilder};
+        use revm::context::{BlockEnv, TxEnv, CfgEnv, Journal};
+        use crate::precompiles::CipherBftPrecompileProvider;
+
+        // Create context with database and spec
+        let mut ctx: Context<BlockEnv, TxEnv, CfgEnv, &'a mut DB, Journal<&'a mut DB>, ()> = Context::new(database, self.spec_id);
+
+        // Configure block environment
+        ctx.block.number = alloy_primitives::U256::from(block_number);
+        ctx.block.timestamp = alloy_primitives::U256::from(timestamp);
+        ctx.block.gas_limit = self.block_gas_limit;
+        ctx.block.basefee = self.base_fee_per_gas;
+        // Note: BlockEnv doesn't have parent_hash field in revm 33
+
+        // Configure chain-level settings
+        ctx.cfg.chain_id = self.chain_id;
+
+        // Build custom EVM with our precompile provider
+        let custom_precompiles = CipherBftPrecompileProvider::new(staking_precompile, self.spec_id);
+
+        use revm::context::{Evm, FrameStack};
+        use revm::handler::{EthFrame, instructions::EthInstructions};
+        use revm::interpreter::interpreter::EthInterpreter;
+
+        Evm {
+            ctx,
+            inspector: (),
+            instruction: EthInstructions::default(),
+            precompiles: custom_precompiles,
+            frame_stack: FrameStack::new_prealloc(8),
         }
     }
 
-    /// Create block environment from a finalized Cut.
+    /// Execute a transaction using the EVM.
     ///
-    /// This is a convenience method that extracts block parameters from a Cut
-    /// and creates the appropriate BlockEnv for transaction execution.
+    /// MIGRATION(revm33): Uses Context.transact() instead of manual EVM execution.
     ///
     /// # Arguments
-    /// * `cut` - Finalized Cut from the consensus layer
+    /// * `evm` - EVM instance created with build_evm_with_precompiles()
+    /// * `tx_bytes` - Raw transaction bytes
     ///
     /// # Returns
-    /// * BlockEnv configured for the Cut's block
-    pub fn block_env_from_cut(&self, cut: &Cut) -> BlockEnv {
-        self.block_env(
-            cut.block_number,
-            cut.timestamp,
-            cut.parent_hash,
-            Some(cut.gas_limit),
-        )
+    /// TransactionResult with execution details
+    pub fn execute_transaction<EVM>(
+        &self,
+        evm: &mut EVM,
+        tx_bytes: &Bytes,
+    ) -> Result<TransactionResult>
+    where
+        EVM: revm::handler::ExecuteEvm<Tx = revm::context::TxEnv, ExecutionResult = RevmResult>,
+        EVM::Error: std::fmt::Debug,
+    {
+        // Parse transaction to get TxEnv
+        let (tx_env, tx_hash, sender, to) = self.tx_env(tx_bytes)?;
+
+        // Execute transaction using transact_one to keep state in journal for subsequent transactions
+        // NOTE: transact() would call finalize() and clear the journal, preventing nonce increments
+        let result = evm.transact_one(tx_env)
+            .map_err(|e| ExecutionError::evm(format!("Transaction execution failed: {:?}", e)))?;
+
+        // Use the existing helper to process the result
+        self.process_execution_result(result, tx_hash, sender, to)
     }
+
+    // MIGRATION(revm33): These methods are commented out as they use removed types.
+    // Revm 33 eliminated CfgEnv, BlockEnv, BlobExcessGasAndPrice.
+    // Configuration is now done via Context builders.
+    // TODO: Replace with Context-based configuration methods.
+
+    /*
+    /// Create configuration environment for the EVM.
+    pub fn cfg_env(&self) -> CfgEnv { ... }
+
+    /// Create block environment for the EVM.
+    pub fn block_env(&self, ...) -> BlockEnv { ... }
+
+    /// Create block environment from a finalized Cut.
+    pub fn block_env_from_cut(&self, cut: &Cut) -> BlockEnv { ... }
+    */
 
     /// Create transaction environment from raw transaction bytes.
     ///
@@ -208,106 +270,113 @@ impl CipherBftEvmConfig {
             alloy_consensus::TxEnvelope::Legacy(tx) => {
                 let tx = tx.tx();
                 TxEnv {
+                    tx_type: 0, // Legacy transaction type
                     caller: sender,
                     gas_limit: tx.gas_limit,
-                    gas_price: U256::from(tx.gas_price),
-                    transact_to: match tx.to {
+                    gas_price: tx.gas_price as u128,
+                    kind: match tx.to {
                         alloy_primitives::TxKind::Call(to) => TxKind::Call(to),
                         alloy_primitives::TxKind::Create => TxKind::Create,
                     },
                     value: tx.value,
                     data: tx.input.clone(),
-                    nonce: Some(tx.nonce),
+                    nonce: tx.nonce,
                     chain_id: tx.chain_id,
-                    access_list: vec![],
+                    access_list: Default::default(),
                     gas_priority_fee: None,
                     blob_hashes: vec![],
-                    max_fee_per_blob_gas: None,
-                    authorization_list: None,
+                    max_fee_per_blob_gas: 0,
+                    authorization_list: vec![],
                 }
             }
             alloy_consensus::TxEnvelope::Eip2930(tx) => {
                 let tx = tx.tx();
                 TxEnv {
+                    tx_type: 1, // EIP-2930 transaction type
                     caller: sender,
                     gas_limit: tx.gas_limit,
-                    gas_price: U256::from(tx.gas_price),
-                    transact_to: match tx.to {
+                    gas_price: tx.gas_price as u128,
+                    kind: match tx.to {
                         alloy_primitives::TxKind::Call(to) => TxKind::Call(to),
                         alloy_primitives::TxKind::Create => TxKind::Create,
                     },
                     value: tx.value,
                     data: tx.input.clone(),
-                    nonce: Some(tx.nonce),
+                    nonce: tx.nonce,
                     chain_id: Some(tx.chain_id),
-                    access_list: tx
-                        .access_list
-                        .0
-                        .iter()
-                        .map(|item| AccessListItem {
-                            address: item.address,
-                            storage_keys: item.storage_keys.clone(),
-                        })
-                        .collect(),
+                    access_list: AccessList(
+                        tx.access_list
+                            .0
+                            .iter()
+                            .map(|item| AccessListItem {
+                                address: item.address,
+                                storage_keys: item.storage_keys.clone(),
+                            })
+                            .collect(),
+                    ),
                     gas_priority_fee: None,
                     blob_hashes: vec![],
-                    max_fee_per_blob_gas: None,
-                    authorization_list: None,
+                    max_fee_per_blob_gas: 0,
+                    authorization_list: vec![],
                 }
             }
             alloy_consensus::TxEnvelope::Eip1559(tx) => {
                 let tx = tx.tx();
                 TxEnv {
+                    tx_type: 2, // EIP-1559 transaction type
                     caller: sender,
                     gas_limit: tx.gas_limit,
-                    gas_price: U256::from(tx.max_fee_per_gas),
-                    transact_to: match tx.to {
+                    gas_price: tx.max_fee_per_gas as u128,
+                    kind: match tx.to {
                         alloy_primitives::TxKind::Call(to) => TxKind::Call(to),
                         alloy_primitives::TxKind::Create => TxKind::Create,
                     },
                     value: tx.value,
                     data: tx.input.clone(),
-                    nonce: Some(tx.nonce),
+                    nonce: tx.nonce,
                     chain_id: Some(tx.chain_id),
-                    access_list: tx
-                        .access_list
-                        .0
-                        .iter()
-                        .map(|item| AccessListItem {
-                            address: item.address,
-                            storage_keys: item.storage_keys.clone(),
-                        })
-                        .collect(),
-                    gas_priority_fee: Some(U256::from(tx.max_priority_fee_per_gas)),
+                    access_list: AccessList(
+                        tx.access_list
+                            .0
+                            .iter()
+                            .map(|item| AccessListItem {
+                                address: item.address,
+                                storage_keys: item.storage_keys.clone(),
+                            })
+                            .collect(),
+                    ),
+                    gas_priority_fee: Some(tx.max_priority_fee_per_gas as u128),
                     blob_hashes: vec![],
-                    max_fee_per_blob_gas: None,
-                    authorization_list: None,
+                    max_fee_per_blob_gas: 0,
+                    authorization_list: vec![],
                 }
             }
             alloy_consensus::TxEnvelope::Eip4844(tx) => {
                 let tx = tx.tx().tx();
                 TxEnv {
+                    tx_type: 3, // EIP-4844 transaction type
                     caller: sender,
                     gas_limit: tx.gas_limit,
-                    gas_price: U256::from(tx.max_fee_per_gas),
-                    transact_to: TxKind::Call(tx.to),
+                    gas_price: tx.max_fee_per_gas as u128,
+                    kind: TxKind::Call(tx.to),
                     value: tx.value,
                     data: tx.input.clone(),
-                    nonce: Some(tx.nonce),
+                    nonce: tx.nonce,
                     chain_id: Some(tx.chain_id),
-                    access_list: tx
-                        .access_list
-                        .0
-                        .iter()
-                        .map(|item| AccessListItem {
-                            address: item.address,
-                            storage_keys: item.storage_keys.clone(),
-                        })
-                        .collect(),
-                    gas_priority_fee: Some(U256::from(tx.max_priority_fee_per_gas)),
+                    access_list: AccessList(
+                        tx.access_list
+                            .0
+                            .iter()
+                            .map(|item| AccessListItem {
+                                address: item.address,
+                                storage_keys: item.storage_keys.clone(),
+                            })
+                            .collect(),
+                    ),
+                    gas_priority_fee: Some(tx.max_priority_fee_per_gas as u128),
                     blob_hashes: tx.blob_versioned_hashes.clone(),
-                    max_fee_per_blob_gas: Some(U256::from(tx.max_fee_per_blob_gas)),
-                    authorization_list: None,
+                    max_fee_per_blob_gas: tx.max_fee_per_blob_gas as u128,
+                    authorization_list: vec![],
                 }
             }
             _ => {
@@ -342,152 +411,51 @@ impl CipherBftEvmConfig {
     ///
     /// This creates a configured EVM ready for transaction execution.
     ///
-    /// # Type Parameters
-    /// * `DB` - Database type implementing the revm Database trait
-    ///
-    /// # Arguments
-    /// * `database` - Database backend for state access
-    /// * `block_number` - Current block number
-    /// * `timestamp` - Block timestamp
-    /// * `parent_hash` - Parent block hash
+    // MIGRATION(revm33): build_evm method removed - uses old Evm::builder() API
+    // TODO: Replace with Context::mainnet().with_db(database).build_mainnet()
+    /*
     pub fn build_evm<DB: Database>(
         &self,
         database: DB,
         block_number: u64,
         timestamp: u64,
         parent_hash: B256,
-    ) -> Evm<'static, (), DB> {
-        let env = Env {
-            cfg: self.cfg_env(),
-            block: self.block_env(block_number, timestamp, parent_hash, None),
-            tx: TxEnv::default(),
-        };
-
-        Evm::builder()
-            .with_db(database)
-            .with_env(Box::new(env))
-            .build()
-    }
+    ) -> Evm<'static, (), DB> { ... }
+    */
 
     /// Build a configured EVM instance with custom precompiles.
     ///
-    /// This creates an EVM with the staking precompile registered at address 0x100.
+    /// MIGRATION(revm33): Precompile provider is now a type parameter on Evm.
+    /// This method has been removed in favor of manual EVM construction with CipherBftPrecompileProvider.
     ///
-    /// # Type Parameters
-    /// * `DB` - Database type implementing the revm Database trait
+    /// # Example
+    /// ```rust,ignore
+    /// use crate::precompiles::{CipherBftPrecompileProvider, StakingPrecompile};
+    /// use revm::Evm;
+    /// use std::sync::Arc;
     ///
-    /// # Arguments
-    /// * `database` - Database backend for state access
-    /// * `block_number` - Current block number
-    /// * `timestamp` - Block timestamp
-    /// * `parent_hash` - Parent block hash
-    /// * `staking_precompile` - StakingPrecompile instance to register
+    /// let staking = Arc::new(StakingPrecompile::new());
+    /// let provider = CipherBftPrecompileProvider::new(staking, SpecId::CANCUN);
     ///
-    /// # Returns
-    /// Configured EVM with custom precompiles registered.
-    pub fn build_evm_with_precompiles<'a, DB: Database>(
-        &self,
-        database: DB,
-        block_number: u64,
-        timestamp: u64,
-        parent_hash: B256,
-        staking_precompile: Arc<StakingPrecompile>,
-    ) -> Evm<'a, (), DB> {
-        let env = Env {
-            cfg: self.cfg_env(),
-            block: self.block_env(block_number, timestamp, parent_hash, None),
-            tx: TxEnv::default(),
-        };
+    /// // Note: Full EVM construction requires Context type with proper trait bounds
+    /// // See integration tests for complete examples
+    /// ```
+    ///
+    /// # Note
+    /// The PrecompileProvider trait allows precompiles to access full transaction context
+    /// (caller, value, block number) which is essential for the staking precompile.
+    /// See `precompiles::provider` module for implementation details.
 
-        // Create precompiles with standard Cancun + our custom staking precompile
-        let precompiles = self.create_precompiles(staking_precompile);
-
-        // Build EVM and set custom precompiles on the context
-        let mut evm = Evm::builder()
-            .with_db(database)
-            .with_env(Box::new(env))
-            .build();
-
-        // Set the custom precompiles on the EVM context
-        evm.context.evm.precompiles = precompiles;
-
-        evm
-    }
-
-    /// Create a ContextPrecompiles instance with standard Cancun precompiles plus our custom staking precompile.
-    ///
-    /// This builds a revm ContextPrecompiles object with all standard precompiles and our custom ones.
-    ///
-    /// # Arguments
-    /// * `staking_precompile` - The StakingPrecompile instance to register at 0x100
-    ///
-    /// # Returns
-    /// ContextPrecompiles instance with both standard and custom precompiles.
-    fn create_precompiles<DB: Database>(
-        &self,
-        staking_precompile: Arc<StakingPrecompile>,
-    ) -> ContextPrecompiles<DB> {
-        // Start with standard Cancun precompiles
-        let mut precompiles = ContextPrecompiles::new(PrecompileSpecId::CANCUN);
-
-        // Create adapter for our staking precompile
-        let adapter = StakingPrecompileAdapter::new(staking_precompile);
-
-        // Wrap as ContextStateful precompile and add to the precompiles map
-        let context_precompile = ContextPrecompile::ContextStateful(Arc::new(adapter));
-
-        // Register staking precompile at 0x100
-        precompiles.extend([(STAKING_PRECOMPILE_ADDRESS, context_precompile)]);
-
-        precompiles
-    }
-
-    /// Install custom precompiles (staking precompile at 0x100).
-    ///
-    /// This method should be called after building the EVM to register
-    /// the staking precompile at address 0x100.
-    ///
-    /// Note: In the current implementation, precompiles are statically configured.
-    /// The StakingPrecompile will be integrated more deeply in Phase 4.
-    ///
-    /// # Returns
-    /// A StakingPrecompile instance that can be used to manage validator state.
-    pub fn install_precompiles(&self) -> StakingPrecompile {
-        // Create and return staking precompile
-        // In a full implementation, this would be registered with the EVM handler
-        StakingPrecompile::new()
-    }
-
-    /// Execute a transaction and return the result.
-    ///
-    /// This is the main entry point for transaction execution.
-    ///
-    /// # Arguments
-    /// * `evm` - Configured EVM instance
-    /// * `tx_bytes` - RLP-encoded transaction bytes
-    ///
-    /// # Returns
-    /// * Transaction execution result including gas used, logs, and output
+    // MIGRATION(revm33): execute_transaction method removed - uses old Evm API
+    // TODO: Replace with Context-based transaction execution
+    // Use: evm.transact_one(TxEnv::builder()...build()?)
+    /*
     pub fn execute_transaction<DB: Database + revm::DatabaseCommit>(
         &self,
         evm: &mut Evm<'_, (), DB>,
         tx_bytes: &Bytes,
-    ) -> Result<TransactionResult> {
-        // Parse transaction and create TxEnv
-        let (tx_env, tx_hash, sender, to_addr) = self.tx_env(tx_bytes)?;
-
-        // Set transaction environment
-        evm.context.evm.env.tx = tx_env;
-
-        // Execute transaction and commit state changes
-        // This ensures subsequent transactions in the same block see updated nonces
-        let result = evm
-            .transact_commit()
-            .map_err(|_| ExecutionError::evm("Transaction execution failed"))?;
-
-        // Convert revm result to our result type
-        self.process_execution_result(result, tx_hash, sender, to_addr)
-    }
+    ) -> Result<TransactionResult> { ... }
+    */
 
     /// Process the execution result from revm.
     fn process_execution_result(
@@ -624,8 +592,8 @@ pub struct TransactionResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use revm::db::EmptyDB;
     use std::str::FromStr;
+    use crate::precompiles::STAKING_PRECOMPILE_ADDRESS;
 
     #[test]
     fn test_constants() {
@@ -649,73 +617,8 @@ mod tests {
         assert_eq!(config.base_fee_per_gas, DEFAULT_BASE_FEE_PER_GAS);
     }
 
-    #[test]
-    fn test_cfg_env() {
-        let config = CipherBftEvmConfig::default();
-        let cfg_env = config.cfg_env();
-
-        assert_eq!(cfg_env.chain_id, CIPHERBFT_CHAIN_ID);
-    }
-
-    #[test]
-    fn test_block_env() {
-        let config = CipherBftEvmConfig::default();
-        let parent_hash = B256::from([1u8; 32]);
-        let block_env = config.block_env(42, 1234567890, parent_hash, None);
-
-        assert_eq!(block_env.number, U256::from(42));
-        assert_eq!(block_env.timestamp, U256::from(1234567890));
-        assert_eq!(block_env.gas_limit, U256::from(DEFAULT_BLOCK_GAS_LIMIT));
-        assert_eq!(block_env.basefee, U256::from(DEFAULT_BASE_FEE_PER_GAS));
-        assert_eq!(block_env.coinbase, Address::ZERO);
-        assert_eq!(block_env.difficulty, U256::ZERO);
-        assert_eq!(block_env.prevrandao, Some(parent_hash));
-    }
-
-    #[test]
-    fn test_block_env_custom_gas_limit() {
-        let config = CipherBftEvmConfig::default();
-        let parent_hash = B256::from([1u8; 32]);
-        let custom_limit = 15_000_000;
-        let block_env = config.block_env(42, 1234567890, parent_hash, Some(custom_limit));
-
-        assert_eq!(block_env.gas_limit, U256::from(custom_limit));
-    }
-
-    #[test]
-    fn test_build_evm() {
-        let config = CipherBftEvmConfig::default();
-        let db = EmptyDB::default();
-        let parent_hash = B256::from([1u8; 32]);
-
-        let evm = config.build_evm(db, 1, 1234567890, parent_hash);
-
-        assert_eq!(evm.context.evm.env.cfg.chain_id, CIPHERBFT_CHAIN_ID);
-        assert_eq!(evm.context.evm.env.block.number, U256::from(1));
-        assert_eq!(evm.context.evm.env.block.timestamp, U256::from(1234567890));
-    }
-
-    #[test]
-    fn test_block_env_from_cut() {
-        use crate::types::Cut;
-
-        let config = CipherBftEvmConfig::default();
-        let parent_hash = B256::from([1u8; 32]);
-
-        let cut = Cut {
-            block_number: 100,
-            timestamp: 1234567890,
-            parent_hash,
-            cars: vec![],
-            gas_limit: 25_000_000,
-            base_fee_per_gas: Some(2_000_000_000),
-        };
-
-        let block_env = config.block_env_from_cut(&cut);
-
-        assert_eq!(block_env.number, U256::from(100));
-        assert_eq!(block_env.timestamp, U256::from(1234567890));
-        assert_eq!(block_env.gas_limit, U256::from(25_000_000));
-        assert_eq!(block_env.prevrandao, Some(parent_hash));
-    }
+    // NOTE: Tests for cfg_env(), block_env(), build_evm(), and block_env_from_cut()
+    // were removed during revm 33 migration as these methods no longer exist.
+    // Revm 33 uses Context-based API instead of Env-based API.
+    // See build_evm_with_precompiles() for the new pattern.
 }
