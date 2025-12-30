@@ -21,7 +21,10 @@ use alloy_primitives::{Address, Bytes, B256, U256};
 // - Primitives like TxKind in revm::primitives
 use revm::{
     context::TxEnv,
-    context_interface::result::{ExecutionResult as RevmResult, Output},
+    context_interface::{
+        result::{ExecutionResult as RevmResult, Output},
+        transaction::{AccessList, AccessListItem},
+    },
     database_interface::Database,
     primitives::{hardfork::SpecId, TxKind},
 };
@@ -101,59 +104,21 @@ impl CipherBftEvmConfig {
         }
     }
 
+    // MIGRATION(revm33): These methods are commented out as they use removed types.
+    // Revm 33 eliminated CfgEnv, BlockEnv, BlobExcessGasAndPrice.
+    // Configuration is now done via Context builders.
+    // TODO: Replace with Context-based configuration methods.
+
+    /*
     /// Create configuration environment for the EVM.
-    ///
-    /// This sets up chain-specific parameters like Chain ID and spec version.
-    pub fn cfg_env(&self) -> CfgEnv {
-        let mut cfg = CfgEnv::default();
-        cfg.chain_id = self.chain_id;
-        cfg
-    }
+    pub fn cfg_env(&self) -> CfgEnv { ... }
 
     /// Create block environment for the EVM.
-    ///
-    /// # Arguments
-    /// * `block_number` - Current block number
-    /// * `timestamp` - Block timestamp (Unix timestamp in seconds)
-    /// * `parent_hash` - Parent block hash (used as prevrandao in PoS)
-    /// * `gas_limit` - Block gas limit (optional, uses config default if None)
-    pub fn block_env(
-        &self,
-        block_number: u64,
-        timestamp: u64,
-        parent_hash: B256,
-        gas_limit: Option<u64>,
-    ) -> BlockEnv {
-        BlockEnv {
-            number: U256::from(block_number),
-            coinbase: Address::ZERO, // No coinbase rewards in PoS
-            timestamp: U256::from(timestamp),
-            gas_limit: U256::from(gas_limit.unwrap_or(self.block_gas_limit)),
-            basefee: U256::from(self.base_fee_per_gas),
-            difficulty: U256::ZERO, // Always zero in PoS
-            prevrandao: Some(parent_hash), // Use parent hash as randomness source
-            blob_excess_gas_and_price: Some(BlobExcessGasAndPrice::new(0, false)), // EIP-4844, not prague
-        }
-    }
+    pub fn block_env(&self, ...) -> BlockEnv { ... }
 
     /// Create block environment from a finalized Cut.
-    ///
-    /// This is a convenience method that extracts block parameters from a Cut
-    /// and creates the appropriate BlockEnv for transaction execution.
-    ///
-    /// # Arguments
-    /// * `cut` - Finalized Cut from the consensus layer
-    ///
-    /// # Returns
-    /// * BlockEnv configured for the Cut's block
-    pub fn block_env_from_cut(&self, cut: &Cut) -> BlockEnv {
-        self.block_env(
-            cut.block_number,
-            cut.timestamp,
-            cut.parent_hash,
-            Some(cut.gas_limit),
-        )
-    }
+    pub fn block_env_from_cut(&self, cut: &Cut) -> BlockEnv { ... }
+    */
 
     /// Create transaction environment from raw transaction bytes.
     ///
@@ -211,106 +176,113 @@ impl CipherBftEvmConfig {
             alloy_consensus::TxEnvelope::Legacy(tx) => {
                 let tx = tx.tx();
                 TxEnv {
+                    tx_type: 0, // Legacy transaction type
                     caller: sender,
                     gas_limit: tx.gas_limit,
-                    gas_price: U256::from(tx.gas_price),
-                    transact_to: match tx.to {
+                    gas_price: tx.gas_price as u128,
+                    kind: match tx.to {
                         alloy_primitives::TxKind::Call(to) => TxKind::Call(to),
                         alloy_primitives::TxKind::Create => TxKind::Create,
                     },
                     value: tx.value,
                     data: tx.input.clone(),
-                    nonce: Some(tx.nonce),
+                    nonce: tx.nonce,
                     chain_id: tx.chain_id,
-                    access_list: vec![],
+                    access_list: Default::default(),
                     gas_priority_fee: None,
                     blob_hashes: vec![],
-                    max_fee_per_blob_gas: None,
-                    authorization_list: None,
+                    max_fee_per_blob_gas: 0,
+                    authorization_list: vec![],
                 }
             }
             alloy_consensus::TxEnvelope::Eip2930(tx) => {
                 let tx = tx.tx();
                 TxEnv {
+                    tx_type: 1, // EIP-2930 transaction type
                     caller: sender,
                     gas_limit: tx.gas_limit,
-                    gas_price: U256::from(tx.gas_price),
-                    transact_to: match tx.to {
+                    gas_price: tx.gas_price as u128,
+                    kind: match tx.to {
                         alloy_primitives::TxKind::Call(to) => TxKind::Call(to),
                         alloy_primitives::TxKind::Create => TxKind::Create,
                     },
                     value: tx.value,
                     data: tx.input.clone(),
-                    nonce: Some(tx.nonce),
+                    nonce: tx.nonce,
                     chain_id: Some(tx.chain_id),
-                    access_list: tx
-                        .access_list
-                        .0
-                        .iter()
-                        .map(|item| AccessListItem {
-                            address: item.address,
-                            storage_keys: item.storage_keys.clone(),
-                        })
-                        .collect(),
+                    access_list: AccessList(
+                        tx.access_list
+                            .0
+                            .iter()
+                            .map(|item| AccessListItem {
+                                address: item.address,
+                                storage_keys: item.storage_keys.clone(),
+                            })
+                            .collect(),
+                    ),
                     gas_priority_fee: None,
                     blob_hashes: vec![],
-                    max_fee_per_blob_gas: None,
-                    authorization_list: None,
+                    max_fee_per_blob_gas: 0,
+                    authorization_list: vec![],
                 }
             }
             alloy_consensus::TxEnvelope::Eip1559(tx) => {
                 let tx = tx.tx();
                 TxEnv {
+                    tx_type: 2, // EIP-1559 transaction type
                     caller: sender,
                     gas_limit: tx.gas_limit,
-                    gas_price: U256::from(tx.max_fee_per_gas),
-                    transact_to: match tx.to {
+                    gas_price: tx.max_fee_per_gas as u128,
+                    kind: match tx.to {
                         alloy_primitives::TxKind::Call(to) => TxKind::Call(to),
                         alloy_primitives::TxKind::Create => TxKind::Create,
                     },
                     value: tx.value,
                     data: tx.input.clone(),
-                    nonce: Some(tx.nonce),
+                    nonce: tx.nonce,
                     chain_id: Some(tx.chain_id),
-                    access_list: tx
-                        .access_list
-                        .0
-                        .iter()
-                        .map(|item| AccessListItem {
-                            address: item.address,
-                            storage_keys: item.storage_keys.clone(),
-                        })
-                        .collect(),
-                    gas_priority_fee: Some(U256::from(tx.max_priority_fee_per_gas)),
+                    access_list: AccessList(
+                        tx.access_list
+                            .0
+                            .iter()
+                            .map(|item| AccessListItem {
+                                address: item.address,
+                                storage_keys: item.storage_keys.clone(),
+                            })
+                            .collect(),
+                    ),
+                    gas_priority_fee: Some(tx.max_priority_fee_per_gas as u128),
                     blob_hashes: vec![],
-                    max_fee_per_blob_gas: None,
-                    authorization_list: None,
+                    max_fee_per_blob_gas: 0,
+                    authorization_list: vec![],
                 }
             }
             alloy_consensus::TxEnvelope::Eip4844(tx) => {
                 let tx = tx.tx().tx();
                 TxEnv {
+                    tx_type: 3, // EIP-4844 transaction type
                     caller: sender,
                     gas_limit: tx.gas_limit,
-                    gas_price: U256::from(tx.max_fee_per_gas),
-                    transact_to: TxKind::Call(tx.to),
+                    gas_price: tx.max_fee_per_gas as u128,
+                    kind: TxKind::Call(tx.to),
                     value: tx.value,
                     data: tx.input.clone(),
-                    nonce: Some(tx.nonce),
+                    nonce: tx.nonce,
                     chain_id: Some(tx.chain_id),
-                    access_list: tx
-                        .access_list
-                        .0
-                        .iter()
-                        .map(|item| AccessListItem {
-                            address: item.address,
-                            storage_keys: item.storage_keys.clone(),
-                        })
-                        .collect(),
-                    gas_priority_fee: Some(U256::from(tx.max_priority_fee_per_gas)),
+                    access_list: AccessList(
+                        tx.access_list
+                            .0
+                            .iter()
+                            .map(|item| AccessListItem {
+                                address: item.address,
+                                storage_keys: item.storage_keys.clone(),
+                            })
+                            .collect(),
+                    ),
+                    gas_priority_fee: Some(tx.max_priority_fee_per_gas as u128),
                     blob_hashes: tx.blob_versioned_hashes.clone(),
-                    max_fee_per_blob_gas: Some(U256::from(tx.max_fee_per_blob_gas)),
-                    authorization_list: None,
+                    max_fee_per_blob_gas: tx.max_fee_per_blob_gas as u128,
+                    authorization_list: vec![],
                 }
             }
             _ => {
@@ -345,32 +317,17 @@ impl CipherBftEvmConfig {
     ///
     /// This creates a configured EVM ready for transaction execution.
     ///
-    /// # Type Parameters
-    /// * `DB` - Database type implementing the revm Database trait
-    ///
-    /// # Arguments
-    /// * `database` - Database backend for state access
-    /// * `block_number` - Current block number
-    /// * `timestamp` - Block timestamp
-    /// * `parent_hash` - Parent block hash
+    // MIGRATION(revm33): build_evm method removed - uses old Evm::builder() API
+    // TODO: Replace with Context::mainnet().with_db(database).build_mainnet()
+    /*
     pub fn build_evm<DB: Database>(
         &self,
         database: DB,
         block_number: u64,
         timestamp: u64,
         parent_hash: B256,
-    ) -> Evm<'static, (), DB> {
-        let env = Env {
-            cfg: self.cfg_env(),
-            block: self.block_env(block_number, timestamp, parent_hash, None),
-            tx: TxEnv::default(),
-        };
-
-        Evm::builder()
-            .with_db(database)
-            .with_env(Box::new(env))
-            .build()
-    }
+    ) -> Evm<'static, (), DB> { ... }
+    */
 
     /// Build a configured EVM instance with custom precompiles.
     ///
@@ -395,36 +352,16 @@ impl CipherBftEvmConfig {
     /// (caller, value, block number) which is essential for the staking precompile.
     /// See `precompiles::provider` module for implementation details.
 
-    /// Execute a transaction and return the result.
-    ///
-    /// This is the main entry point for transaction execution.
-    ///
-    /// # Arguments
-    /// * `evm` - Configured EVM instance
-    /// * `tx_bytes` - RLP-encoded transaction bytes
-    ///
-    /// # Returns
-    /// * Transaction execution result including gas used, logs, and output
+    // MIGRATION(revm33): execute_transaction method removed - uses old Evm API
+    // TODO: Replace with Context-based transaction execution
+    // Use: evm.transact_one(TxEnv::builder()...build()?)
+    /*
     pub fn execute_transaction<DB: Database + revm::DatabaseCommit>(
         &self,
         evm: &mut Evm<'_, (), DB>,
         tx_bytes: &Bytes,
-    ) -> Result<TransactionResult> {
-        // Parse transaction and create TxEnv
-        let (tx_env, tx_hash, sender, to_addr) = self.tx_env(tx_bytes)?;
-
-        // Set transaction environment
-        evm.context.evm.env.tx = tx_env;
-
-        // Execute transaction and commit state changes
-        // This ensures subsequent transactions in the same block see updated nonces
-        let result = evm
-            .transact_commit()
-            .map_err(|_| ExecutionError::evm("Transaction execution failed"))?;
-
-        // Convert revm result to our result type
-        self.process_execution_result(result, tx_hash, sender, to_addr)
-    }
+    ) -> Result<TransactionResult> { ... }
+    */
 
     /// Process the execution result from revm.
     fn process_execution_result(
