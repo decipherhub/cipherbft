@@ -183,67 +183,19 @@ impl CipherBftEvmConfig {
         tx_bytes: &Bytes,
     ) -> Result<TransactionResult>
     where
-        EVM: revm::handler::ExecuteEvm<Tx = revm::context::TxEnv>,
+        EVM: revm::handler::ExecuteEvm<Tx = revm::context::TxEnv, ExecutionResult = RevmResult>,
         EVM::Error: std::fmt::Debug,
-        EVM::ExecutionResult: std::fmt::Debug + Clone,
     {
-        use revm::handler::ExecuteEvm;
-
         // Parse transaction to get TxEnv
         let (tx_env, tx_hash, sender, to) = self.tx_env(tx_bytes)?;
 
-        // Capture nonce before moving tx_env
-        let nonce = tx_env.nonce;
-
-        // Execute transaction
-        let result = evm.transact(tx_env)
+        // Execute transaction using transact_one to keep state in journal for subsequent transactions
+        // NOTE: transact() would call finalize() and clear the journal, preventing nonce increments
+        let result = evm.transact_one(tx_env)
             .map_err(|e| ExecutionError::evm(format!("Transaction execution failed: {:?}", e)))?;
 
-        // Extract execution results
-        // For now, return a simple success/failure based on debug output
-        // TODO: Properly extract execution details once we understand the ExecutionResult type
-        let (success, gas_used, output, logs, revert_reason) = (
-            true,
-            0_u64,
-            Bytes::new(),
-            vec![],
-            None::<String>,
-        );
-
-        // Convert revm logs to our Log type (empty for now)
-        // TODO: Extract actual logs from ExecutionResult
-
-        // Extract contract address for contract creation
-        let contract_address = to.is_none().then(|| {
-            // For contract creation, compute CREATE address
-            // address = keccak256(rlp([sender, nonce]))[12:]
-            use alloy_primitives::keccak256;
-            use alloy_rlp::{RlpEncodable, Encodable};
-
-            #[derive(RlpEncodable)]
-            struct CreateAddress {
-                sender: Address,
-                nonce: u64,
-            }
-
-            let create_data = CreateAddress { sender, nonce };
-            let mut rlp_buf = Vec::new();
-            create_data.encode(&mut rlp_buf);
-            let hash = keccak256(&rlp_buf);
-            Address::from_slice(&hash[12..])
-        });
-
-        Ok(TransactionResult {
-            tx_hash,
-            sender,
-            to,
-            success,
-            gas_used,
-            output,
-            logs,
-            contract_address,
-            revert_reason,
-        })
+        // Use the existing helper to process the result
+        self.process_execution_result(result, tx_hash, sender, to)
     }
 
     // MIGRATION(revm33): These methods are commented out as they use removed types.
@@ -640,8 +592,8 @@ pub struct TransactionResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use revm::db::EmptyDB;
     use std::str::FromStr;
+    use crate::precompiles::STAKING_PRECOMPILE_ADDRESS;
 
     #[test]
     fn test_constants() {
@@ -665,73 +617,8 @@ mod tests {
         assert_eq!(config.base_fee_per_gas, DEFAULT_BASE_FEE_PER_GAS);
     }
 
-    #[test]
-    fn test_cfg_env() {
-        let config = CipherBftEvmConfig::default();
-        let cfg_env = config.cfg_env();
-
-        assert_eq!(cfg_env.chain_id, CIPHERBFT_CHAIN_ID);
-    }
-
-    #[test]
-    fn test_block_env() {
-        let config = CipherBftEvmConfig::default();
-        let parent_hash = B256::from([1u8; 32]);
-        let block_env = config.block_env(42, 1234567890, parent_hash, None);
-
-        assert_eq!(block_env.number, U256::from(42));
-        assert_eq!(block_env.timestamp, U256::from(1234567890));
-        assert_eq!(block_env.gas_limit, U256::from(DEFAULT_BLOCK_GAS_LIMIT));
-        assert_eq!(block_env.basefee, U256::from(DEFAULT_BASE_FEE_PER_GAS));
-        assert_eq!(block_env.coinbase, Address::ZERO);
-        assert_eq!(block_env.difficulty, U256::ZERO);
-        assert_eq!(block_env.prevrandao, Some(parent_hash));
-    }
-
-    #[test]
-    fn test_block_env_custom_gas_limit() {
-        let config = CipherBftEvmConfig::default();
-        let parent_hash = B256::from([1u8; 32]);
-        let custom_limit = 15_000_000;
-        let block_env = config.block_env(42, 1234567890, parent_hash, Some(custom_limit));
-
-        assert_eq!(block_env.gas_limit, U256::from(custom_limit));
-    }
-
-    #[test]
-    fn test_build_evm() {
-        let config = CipherBftEvmConfig::default();
-        let db = EmptyDB::default();
-        let parent_hash = B256::from([1u8; 32]);
-
-        let evm = config.build_evm(db, 1, 1234567890, parent_hash);
-
-        assert_eq!(evm.context.evm.env.cfg.chain_id, CIPHERBFT_CHAIN_ID);
-        assert_eq!(evm.context.evm.env.block.number, U256::from(1));
-        assert_eq!(evm.context.evm.env.block.timestamp, U256::from(1234567890));
-    }
-
-    #[test]
-    fn test_block_env_from_cut() {
-        use crate::types::Cut;
-
-        let config = CipherBftEvmConfig::default();
-        let parent_hash = B256::from([1u8; 32]);
-
-        let cut = Cut {
-            block_number: 100,
-            timestamp: 1234567890,
-            parent_hash,
-            cars: vec![],
-            gas_limit: 25_000_000,
-            base_fee_per_gas: Some(2_000_000_000),
-        };
-
-        let block_env = config.block_env_from_cut(&cut);
-
-        assert_eq!(block_env.number, U256::from(100));
-        assert_eq!(block_env.timestamp, U256::from(1234567890));
-        assert_eq!(block_env.gas_limit, U256::from(25_000_000));
-        assert_eq!(block_env.prevrandao, Some(parent_hash));
-    }
+    // NOTE: Tests for cfg_env(), block_env(), build_evm(), and block_env_from_cut()
+    // were removed during revm 33 migration as these methods no longer exist.
+    // Revm 33 uses Context-based API instead of Env-based API.
+    // See build_evm_with_precompiles() for the new pattern.
 }
