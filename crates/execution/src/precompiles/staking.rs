@@ -93,9 +93,9 @@ impl BlsPublicKey {
     /// Create from bytes (must be 48 bytes).
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, PrecompileError> {
         if bytes.len() != 48 {
-            return Err(PrecompileError::Fatal {
-                msg: "BLS public key must be 48 bytes".to_string(),
-            });
+            return Err(PrecompileError::Fatal(
+                "BLS public key must be 48 bytes".to_string(),
+            ));
         }
 
         let mut key = [0u8; 48];
@@ -243,7 +243,7 @@ impl StakingPrecompile {
     /// Decodes function selector and routes to appropriate handler.
     pub fn run(&self, input: &Bytes, gas_limit: u64, caller: Address, value: U256, block_number: u64) -> PrecompileResult {
         if input.len() < 4 {
-            return Err(PrecompileError::Fatal { msg: "Input too short".to_string() });
+            return Err(PrecompileError::Fatal("Input too short".to_string()));
         }
 
         // Extract function selector (first 4 bytes)
@@ -271,7 +271,7 @@ impl StakingPrecompile {
             [0x02, 0xfb, 0x4d, 0x85] => {
                 self.slash(data, gas_limit, caller)
             }
-            _ => Err(PrecompileError::Fatal { msg: "Unknown function selector".to_string() }),
+            _ => Err(PrecompileError::Fatal("Unknown function selector".to_string())),
         }
     }
 
@@ -291,12 +291,12 @@ impl StakingPrecompile {
         const GAS_COST: u64 = gas::REGISTER_VALIDATOR;
 
         if gas_limit < GAS_COST {
-            return Err(PrecompileError::Fatal { msg: "Out of gas".to_string() });
+            return Err(PrecompileError::Fatal("Out of gas".to_string()));
         }
 
         // Decode BLS public key (bytes32, padded from 48 bytes)
         if data.len() < 32 {
-            return Err(PrecompileError::Fatal { msg: "Invalid BLS pubkey data".to_string() });
+            return Err(PrecompileError::Fatal("Invalid BLS pubkey data".to_string()));
         }
 
         // For bytes32, we expect the 48-byte BLS key to be right-padded with zeros
@@ -310,18 +310,18 @@ impl StakingPrecompile {
 
         // Check minimum stake
         if value < U256::from(MIN_VALIDATOR_STAKE) {
-            return Err(PrecompileError::Fatal {
-                msg: format!("Insufficient stake: minimum {} wei required", MIN_VALIDATOR_STAKE),
-            });
+            return Err(PrecompileError::Fatal(
+                format!("Insufficient stake: minimum {} wei required", MIN_VALIDATOR_STAKE),
+            ));
         }
 
         // Check if already registered
         let mut state = self.state.write().map_err(|_| {
-            PrecompileError::Fatal { msg: "Failed to acquire state lock".to_string() }
+            PrecompileError::Fatal("Failed to acquire state lock".to_string())
         })?;
 
         if state.is_validator(&caller) {
-            return Err(PrecompileError::Fatal { msg: "Already registered as validator".to_string() });
+            return Err(PrecompileError::Fatal("Already registered as validator".to_string()));
         }
 
         // Add to validator set
@@ -337,7 +337,9 @@ impl StakingPrecompile {
 
         Ok(PrecompileOutput {
             gas_used: GAS_COST,
+            gas_refunded: 0,
             bytes: Bytes::new(),
+            reverted: false,
         })
     }
 
@@ -350,26 +352,28 @@ impl StakingPrecompile {
         const GAS_COST: u64 = gas::DEREGISTER_VALIDATOR;
 
         if gas_limit < GAS_COST {
-            return Err(PrecompileError::Fatal { msg: "Out of gas".to_string() });
+            return Err(PrecompileError::Fatal("Out of gas".to_string()));
         }
 
         let mut state = self.state.write().map_err(|_| {
-            PrecompileError::Fatal { msg: "Failed to acquire state lock".to_string() }
+            PrecompileError::Fatal("Failed to acquire state lock".to_string())
         })?;
 
         if !state.is_validator(&caller) {
-            return Err(PrecompileError::Fatal { msg: "Not a registered validator".to_string() });
+            return Err(PrecompileError::Fatal("Not a registered validator".to_string()));
         }
 
         // Mark for exit at next epoch
         let exit_epoch = state.epoch + 1;
         state.mark_for_exit(&caller, exit_epoch).map_err(|e| {
-            PrecompileError::Fatal { msg: e.to_string() }
+            PrecompileError::Fatal(e.to_string())
         })?;
 
         Ok(PrecompileOutput {
             gas_used: GAS_COST,
+            gas_refunded: 0,
             bytes: Bytes::new(),
+            reverted: false,
         })
     }
 
@@ -380,14 +384,14 @@ impl StakingPrecompile {
     /// Gas: 2,100 + 100 per validator
     fn get_validator_set(&self, gas_limit: u64) -> PrecompileResult {
         let state = self.state.read().map_err(|_| {
-            PrecompileError::Fatal { msg: "Failed to acquire state lock".to_string() }
+            PrecompileError::Fatal("Failed to acquire state lock".to_string())
         })?;
 
         let validator_count = state.validators.len();
         let gas_cost = gas::GET_VALIDATOR_SET_BASE + (gas::GET_VALIDATOR_SET_PER_VALIDATOR * validator_count as u64);
 
         if gas_limit < gas_cost {
-            return Err(PrecompileError::Fatal { msg: "Out of gas".to_string() });
+            return Err(PrecompileError::Fatal("Out of gas".to_string()));
         }
 
         // Collect addresses and stakes
@@ -404,7 +408,9 @@ impl StakingPrecompile {
 
         Ok(PrecompileOutput {
             gas_used: gas_cost,
+            gas_refunded: 0,
             bytes: output,
+            reverted: false,
         })
     }
 
@@ -417,18 +423,18 @@ impl StakingPrecompile {
         const GAS_COST: u64 = gas::GET_STAKE;
 
         if gas_limit < GAS_COST {
-            return Err(PrecompileError::Fatal { msg: "Out of gas".to_string() });
+            return Err(PrecompileError::Fatal("Out of gas".to_string()));
         }
 
         if data.len() < 32 {
-            return Err(PrecompileError::Fatal { msg: "Invalid address data".to_string() });
+            return Err(PrecompileError::Fatal("Invalid address data".to_string()));
         }
 
         // Address is right-aligned in 32 bytes (bytes 12..32)
         let address = Address::from_slice(&data[12..32]);
 
         let state = self.state.read().map_err(|_| {
-            PrecompileError::Fatal { msg: "Failed to acquire state lock".to_string() }
+            PrecompileError::Fatal("Failed to acquire state lock".to_string())
         })?;
 
         let stake = state.get_stake(&address);
@@ -438,7 +444,9 @@ impl StakingPrecompile {
 
         Ok(PrecompileOutput {
             gas_used: GAS_COST,
+            gas_refunded: 0,
             bytes: output,
+            reverted: false,
         })
     }
 
@@ -451,16 +459,16 @@ impl StakingPrecompile {
         const GAS_COST: u64 = gas::SLASH;
 
         if gas_limit < GAS_COST {
-            return Err(PrecompileError::Fatal { msg: "Out of gas".to_string() });
+            return Err(PrecompileError::Fatal("Out of gas".to_string()));
         }
 
         // Only callable by system
         if caller != SYSTEM_ADDRESS {
-            return Err(PrecompileError::Fatal { msg: "Unauthorized: system-only function".to_string() });
+            return Err(PrecompileError::Fatal("Unauthorized: system-only function".to_string()));
         }
 
         if data.len() < 64 {
-            return Err(PrecompileError::Fatal { msg: "Invalid slash data".to_string() });
+            return Err(PrecompileError::Fatal("Invalid slash data".to_string()));
         }
 
         // Decode address (bytes 12..32)
@@ -470,16 +478,18 @@ impl StakingPrecompile {
         let amount = U256::from_be_slice(&data[32..64]);
 
         let mut state = self.state.write().map_err(|_| {
-            PrecompileError::Fatal { msg: "Failed to acquire state lock".to_string() }
+            PrecompileError::Fatal("Failed to acquire state lock".to_string())
         })?;
 
         state.slash_validator(&validator, amount).map_err(|e| {
-            PrecompileError::Fatal { msg: e.to_string() }
+            PrecompileError::Fatal(e.to_string())
         })?;
 
         Ok(PrecompileOutput {
             gas_used: GAS_COST,
+            gas_refunded: 0,
             bytes: Bytes::new(),
+            reverted: false,
         })
     }
 }
