@@ -22,6 +22,7 @@ alloy-primitives = "0.8"
 alloy-consensus = { version = "0.8", features = ["serde"] }
 alloy-eips = "0.8"
 alloy-rlp = "0.3"
+alloy-sol-types = "0.8"
 
 # Error handling
 thiserror = "2"

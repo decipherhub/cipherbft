@@ -6,7 +6,12 @@
 //! - Transaction execution with revm
 //! - Environment configuration (block, tx, cfg)
 
-use crate::{error::ExecutionError, types::{Cut, Log}, Result};
+use crate::{
+    error::ExecutionError,
+    precompiles::StakingPrecompile,
+    types::{Cut, Log},
+    Result,
+};
 use alloy_eips::eip2718::Decodable2718;
 use alloy_primitives::{Address, Bytes, B256, U256};
 use revm::{
@@ -315,6 +320,22 @@ impl CipherBftEvmConfig {
             .with_db(database)
             .with_env(Box::new(env))
             .build()
+    }
+
+    /// Install custom precompiles (staking precompile at 0x100).
+    ///
+    /// This method should be called after building the EVM to register
+    /// the staking precompile at address 0x100.
+    ///
+    /// Note: In the current implementation, precompiles are statically configured.
+    /// The StakingPrecompile will be integrated more deeply in Phase 4.
+    ///
+    /// # Returns
+    /// A StakingPrecompile instance that can be used to manage validator state.
+    pub fn install_precompiles(&self) -> StakingPrecompile {
+        // Create and return staking precompile
+        // In a full implementation, this would be registered with the EVM handler
+        StakingPrecompile::new()
     }
 
     /// Execute a transaction and return the result.

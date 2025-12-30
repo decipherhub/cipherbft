@@ -49,6 +49,7 @@
 
 pub mod error;
 pub mod evm;
+pub mod precompiles;
 pub mod receipts;
 pub mod types;
 
@@ -59,6 +60,7 @@ pub use evm::{
     DEFAULT_BLOCK_GAS_LIMIT, MIN_STAKE_AMOUNT, STAKING_PRECOMPILE_ADDRESS,
     UNBONDING_PERIOD_SECONDS,
 };
+pub use precompiles::{StakingPrecompile, StakingState, ValidatorInfo};
 pub use receipts::{
     aggregate_bloom, compute_logs_bloom_from_transactions, compute_receipts_root,
     compute_transactions_root, logs_bloom,
