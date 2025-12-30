@@ -7,6 +7,7 @@ use crate::{
     database::{CipherBftDatabase, Provider},
     error::{ExecutionError, Result},
     evm::CipherBftEvmConfig,
+    precompiles::StakingPrecompile,
     receipts::{compute_logs_bloom_from_transactions, compute_receipts_root, compute_transactions_root},
     state::StateManager,
     types::{
@@ -17,6 +18,7 @@ use crate::{
 use alloy_consensus::Header as AlloyHeader;
 use alloy_primitives::{Address, Bytes, B256, B64, U256};
 use parking_lot::RwLock;
+use std::sync::Arc;
 
 /// ExecutionLayer trait defines the interface for block execution.
 ///
@@ -90,6 +92,7 @@ pub trait ExecutionLayer {
 /// - StateManager for state roots and snapshots
 /// - EVM configuration for transaction execution
 /// - Block processing and sealing
+/// - Staking precompile for validator management
 pub struct ExecutionEngine<P: Provider> {
     /// Chain configuration.
     chain_config: ChainConfig,
@@ -102,6 +105,9 @@ pub struct ExecutionEngine<P: Provider> {
 
     /// EVM configuration.
     evm_config: CipherBftEvmConfig,
+
+    /// Staking precompile instance (shared across all EVM instances).
+    staking_precompile: Arc<StakingPrecompile>,
 
     /// Block hash storage (for BLOCKHASH opcode and delayed commitment).
     block_hashes: RwLock<lru::LruCache<u64, B256>>,
@@ -130,11 +136,15 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
         let database = CipherBftDatabase::new(provider.clone());
         let state_manager = StateManager::new(provider, Some(chain_config.state_root_interval));
 
+        // Create staking precompile instance (shared across all EVM instances)
+        let staking_precompile = Arc::new(StakingPrecompile::new());
+
         Self {
             chain_config,
             database,
             state_manager,
             evm_config,
+            staking_precompile,
             block_hashes: RwLock::new(lru::LruCache::new(std::num::NonZeroUsize::new(256).unwrap())),
             current_block: 0,
         }
@@ -148,26 +158,20 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
         timestamp: u64,
         parent_hash: B256,
     ) -> Result<(Vec<TransactionReceipt>, u64, Vec<Vec<Log>>)> {
-        use revm::{primitives::Env, Evm};
-
         let mut receipts = Vec::new();
         let mut cumulative_gas_used = 0u64;
         let mut all_logs = Vec::new();
 
         // Scope for EVM execution to ensure it's dropped before commit
         {
-            // Build environment
-            let env = Env {
-                cfg: self.evm_config.cfg_env(),
-                block: self.evm_config.block_env(block_number, timestamp, parent_hash, None),
-                tx: revm::primitives::TxEnv::default(),
-            };
-
-            // Build EVM instance with mutable reference to database
-            let mut evm = Evm::builder()
-                .with_db(&mut self.database)
-                .with_env(Box::new(env))
-                .build();
+            // Build EVM instance with custom precompiles (including staking precompile at 0x100)
+            let mut evm = self.evm_config.build_evm_with_precompiles(
+                &mut self.database,
+                block_number,
+                timestamp,
+                parent_hash,
+                Arc::clone(&self.staking_precompile),
+            );
 
             for (tx_index, tx_bytes) in transactions.iter().enumerate() {
                 // Execute transaction
