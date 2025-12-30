@@ -3,10 +3,10 @@
 //! These tests verify that ExecutionResult contains all required fields
 //! that the consensus layer needs for block construction.
 
+use alloy_consensus::{SignableTransaction, TxEip1559};
 use alloy_primitives::{Address, Bytes, TxKind, U256};
 use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
-use alloy_consensus::{SignableTransaction, TxEip1559};
 use cipherbft_execution::{
     Account, BlockInput, ChainConfig, ExecutionEngine, ExecutionLayerTrait, InMemoryProvider,
     Provider,
@@ -142,11 +142,7 @@ fn test_execution_result_completeness_50_transactions() {
             "Receipt {} should have from address",
             i
         );
-        assert!(
-            receipt.to.is_some(),
-            "Receipt {} should have to address",
-            i
-        );
+        assert!(receipt.to.is_some(), "Receipt {} should have to address", i);
         assert_eq!(
             receipt.gas_used, 21_000,
             "Receipt {} should have gas used",

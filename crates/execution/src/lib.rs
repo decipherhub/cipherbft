@@ -65,7 +65,10 @@ pub use evm::{
     DEFAULT_BLOCK_GAS_LIMIT, MIN_STAKE_AMOUNT, UNBONDING_PERIOD_SECONDS,
 };
 // MIGRATION(revm33): STAKING_PRECOMPILE_ADDRESS moved from evm to precompiles::provider
-pub use precompiles::{StakingPrecompile, StakingState, ValidatorInfo, STAKING_PRECOMPILE_ADDRESS, CipherBftPrecompileProvider};
+pub use precompiles::{
+    CipherBftPrecompileProvider, StakingPrecompile, StakingState, ValidatorInfo,
+    STAKING_PRECOMPILE_ADDRESS,
+};
 pub use receipts::{
     aggregate_bloom, compute_logs_bloom_from_transactions, compute_receipts_root,
     compute_transactions_root, logs_bloom,
@@ -192,12 +195,7 @@ impl ExecutionLayer {
     /// # Returns
     ///
     /// Returns the storage slot value.
-    pub fn get_storage(
-        &self,
-        _address: Address,
-        _slot: U256,
-        _block_number: u64,
-    ) -> Result<U256> {
+    pub fn get_storage(&self, _address: Address, _slot: U256, _block_number: u64) -> Result<U256> {
         // Placeholder: actual implementation in Phase 7
         Err(ExecutionError::Internal(
             "get_storage not yet implemented".into(),

@@ -5,7 +5,7 @@
 
 use cipherbft_data_chain::worker::TransactionValidator;
 use cipherbft_execution::{
-    ChainConfig, ExecutionLayer, ExecutionResult, Bytes, Cut as ExecutionCut, Car as ExecutionCar,
+    Bytes, Car as ExecutionCar, ChainConfig, Cut as ExecutionCut, ExecutionLayer, ExecutionResult,
     B256, U256,
 };
 use std::sync::Arc;
@@ -86,7 +86,10 @@ impl ExecutionBridge {
     /// Convert a consensus Cut to an execution Cut
     ///
     /// This converts the data-chain Cut format to the execution layer format.
-    fn convert_cut(&self, consensus_cut: cipherbft_data_chain::Cut) -> anyhow::Result<ExecutionCut> {
+    fn convert_cut(
+        &self,
+        consensus_cut: cipherbft_data_chain::Cut,
+    ) -> anyhow::Result<ExecutionCut> {
         // Convert Cars from HashMap to sorted Vec
         let mut execution_cars = Vec::new();
 
@@ -115,7 +118,7 @@ impl ExecutionBridge {
                 .as_secs(),
             parent_hash: B256::ZERO, // TODO: Track parent hash properly
             cars: execution_cars,
-            gas_limit: 30_000_000, // Default gas limit
+            gas_limit: 30_000_000,                 // Default gas limit
             base_fee_per_gas: Some(1_000_000_000), // Default base fee
         })
     }

@@ -270,11 +270,7 @@ impl<P: Provider> StateManager<P> {
             .find_snapshot_for_rollback(target_block)
             .ok_or(ExecutionError::RollbackNoSnapshot(target_block))?;
 
-        tracing::debug!(
-            snapshot_block,
-            target_block,
-            "Found snapshot for rollback"
-        );
+        tracing::debug!(snapshot_block, target_block, "Found snapshot for rollback");
 
         // Restore state root
         *self.current_state_root.write() = snapshot_root;

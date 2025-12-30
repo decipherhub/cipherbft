@@ -141,7 +141,10 @@ pub fn aggregate_bloom(blooms: &[Bloom]) -> Bloom {
 /// # Returns
 /// * Aggregated bloom filter for all logs
 pub fn compute_logs_bloom_from_transactions(transaction_logs: &[Vec<Log>]) -> Bloom {
-    let blooms: Vec<Bloom> = transaction_logs.iter().map(|logs| logs_bloom(logs)).collect();
+    let blooms: Vec<Bloom> = transaction_logs
+        .iter()
+        .map(|logs| logs_bloom(logs))
+        .collect();
     aggregate_bloom(&blooms)
 }
 

@@ -61,7 +61,10 @@ pub trait Provider: Send + Sync {
 
     /// Get multiple accounts in batch (optimization).
     fn get_accounts_batch(&self, addresses: &[Address]) -> Result<Vec<Option<Account>>> {
-        addresses.iter().map(|addr| self.get_account(*addr)).collect()
+        addresses
+            .iter()
+            .map(|addr| self.get_account(*addr))
+            .collect()
     }
 }
 
@@ -341,7 +344,6 @@ impl<P: Provider> revm::Database for CipherBftDatabase<P> {
     }
 }
 
-
 /// Implement revm's DatabaseCommit trait for writing state changes.
 impl<P: Provider> revm::DatabaseCommit for CipherBftDatabase<P> {
     fn commit(&mut self, changes: RevmHashMap<Address, RevmAccount>) {
@@ -392,7 +394,9 @@ mod tests {
             code_hash: B256::ZERO,
             storage_root: B256::ZERO,
         };
-        provider.set_account(Address::ZERO, account.clone()).unwrap();
+        provider
+            .set_account(Address::ZERO, account.clone())
+            .unwrap();
 
         // Get account
         let retrieved = provider.get_account(Address::ZERO).unwrap().unwrap();
@@ -522,7 +526,10 @@ mod tests {
 
         let result = db.block_hash(999);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), DatabaseError::BlockHashNotFound(999)));
+        assert!(matches!(
+            result.unwrap_err(),
+            DatabaseError::BlockHashNotFound(999)
+        ));
     }
 
     #[test]

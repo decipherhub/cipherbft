@@ -7,11 +7,10 @@
 //! - Block sealing
 //! - Delayed commitment
 
-use cipherbft_execution::{
-    BlockInput, ChainConfig, ConsensusBlock, ExecutionEngine, ExecutionLayerTrait,
-    InMemoryProvider,
-};
 use alloy_primitives::{Bloom, Bytes, B256};
+use cipherbft_execution::{
+    BlockInput, ChainConfig, ConsensusBlock, ExecutionEngine, ExecutionLayerTrait, InMemoryProvider,
+};
 
 fn create_test_engine() -> ExecutionEngine<InMemoryProvider> {
     let provider = InMemoryProvider::new();
@@ -109,7 +108,9 @@ fn test_seal_block() {
         base_fee_per_gas: Some(1_000_000_000),
     };
 
-    let sealed = engine.seal_block(consensus_block, execution_result).unwrap();
+    let sealed = engine
+        .seal_block(consensus_block, execution_result)
+        .unwrap();
 
     assert_eq!(sealed.header.number, 1);
     assert_ne!(sealed.hash, B256::ZERO);
@@ -149,7 +150,9 @@ fn test_delayed_commitment() {
             base_fee_per_gas: input.base_fee_per_gas,
         };
 
-        let sealed = engine.seal_block(consensus_block, execution_result).unwrap();
+        let sealed = engine
+            .seal_block(consensus_block, execution_result)
+            .unwrap();
         block_hashes.push(sealed.hash);
     }
 
@@ -302,7 +305,9 @@ fn test_complete_block_lifecycle() {
         base_fee_per_gas: input.base_fee_per_gas,
     };
 
-    let sealed = engine.seal_block(consensus_block, execution_result).unwrap();
+    let sealed = engine
+        .seal_block(consensus_block, execution_result)
+        .unwrap();
 
     // 5. Verify sealed block
     assert_eq!(sealed.header.number, 1);

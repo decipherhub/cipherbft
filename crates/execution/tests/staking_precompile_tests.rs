@@ -54,10 +54,19 @@ fn test_register_validator_success() {
     let block_number = 100;
     let gas_limit = 100_000;
 
-    let result = precompile.run(&input, gas_limit, validator_addr, stake_amount, block_number);
+    let result = precompile.run(
+        &input,
+        gas_limit,
+        validator_addr,
+        stake_amount,
+        block_number,
+    );
 
     // Verify success
-    assert!(result.is_ok(), "registerValidator should succeed with minimum stake");
+    assert!(
+        result.is_ok(),
+        "registerValidator should succeed with minimum stake"
+    );
     let output = result.unwrap();
     assert!(output.gas_used > 0, "Should consume gas");
     assert!(output.gas_used < gas_limit, "Should not exceed gas limit");
@@ -65,9 +74,19 @@ fn test_register_validator_success() {
     // Verify validator was added to state
     let state = precompile.state();
     let state_lock = state.read().unwrap();
-    assert!(state_lock.is_validator(&validator_addr), "Validator should be registered");
-    assert_eq!(state_lock.get_stake(&validator_addr), stake_amount, "Stake should match");
-    assert_eq!(state_lock.total_stake, stake_amount, "Total stake should be updated");
+    assert!(
+        state_lock.is_validator(&validator_addr),
+        "Validator should be registered"
+    );
+    assert_eq!(
+        state_lock.get_stake(&validator_addr),
+        stake_amount,
+        "Stake should match"
+    );
+    assert_eq!(
+        state_lock.total_stake, stake_amount,
+        "Total stake should be updated"
+    );
 }
 
 /// T064: Test registration with stake above minimum.
@@ -87,7 +106,10 @@ fn test_register_validator_high_stake() {
     let stake_amount = U256::from(50_000_000_000_000_000_000u128);
 
     let result = precompile.run(&input, 100_000, validator_addr, stake_amount, 100);
-    assert!(result.is_ok(), "registerValidator should succeed with high stake");
+    assert!(
+        result.is_ok(),
+        "registerValidator should succeed with high stake"
+    );
 
     let state = precompile.state();
     let state_lock = state.read().unwrap();
@@ -115,12 +137,18 @@ fn test_register_validator_insufficient_stake() {
     let result = precompile.run(&input, 100_000, validator_addr, stake_amount, 100);
 
     // Should fail
-    assert!(result.is_err(), "registerValidator should fail with insufficient stake");
+    assert!(
+        result.is_err(),
+        "registerValidator should fail with insufficient stake"
+    );
 
     // Verify validator was NOT added
     let state = precompile.state();
     let state_lock = state.read().unwrap();
-    assert!(!state_lock.is_validator(&validator_addr), "Validator should not be registered");
+    assert!(
+        !state_lock.is_validator(&validator_addr),
+        "Validator should not be registered"
+    );
 }
 
 /// T068: Test that zero stake is rejected.
@@ -137,7 +165,10 @@ fn test_register_validator_zero_stake() {
     let input = Bytes::from(call_data);
 
     let result = precompile.run(&input, 100_000, validator_addr, U256::ZERO, 100);
-    assert!(result.is_err(), "registerValidator should fail with zero stake");
+    assert!(
+        result.is_err(),
+        "registerValidator should fail with zero stake"
+    );
 }
 
 /// T065: Integration test for deregisterValidator().
@@ -188,7 +219,10 @@ fn test_deregister_validator() {
     let state = precompile.state();
     let state_lock = state.read().unwrap();
     let validator = state_lock.validators.get(&validator_addr).unwrap();
-    assert!(validator.pending_exit.is_some(), "Pending exit should be set");
+    assert!(
+        validator.pending_exit.is_some(),
+        "Pending exit should be set"
+    );
 }
 
 /// T065: Test deregistration of non-existent validator fails.
@@ -206,7 +240,10 @@ fn test_deregister_nonexistent_validator() {
         100,
     );
 
-    assert!(result.is_err(), "deregisterValidator should fail for non-existent validator");
+    assert!(
+        result.is_err(),
+        "deregisterValidator should fail for non-existent validator"
+    );
 }
 
 /// T067: Integration test for getStake() function.
@@ -252,7 +289,10 @@ fn test_get_stake() {
 
     // Decode returned stake amount
     let returned_stake = U256::from_be_slice(&output.bytes);
-    assert_eq!(returned_stake, stake_amount, "Returned stake should match deposited amount");
+    assert_eq!(
+        returned_stake, stake_amount,
+        "Returned stake should match deposited amount"
+    );
 }
 
 /// T067: Test getStake for non-existent validator returns zero.
@@ -274,10 +314,17 @@ fn test_get_stake_nonexistent() {
         100,
     );
 
-    assert!(result.is_ok(), "getStake should succeed for non-existent validator");
+    assert!(
+        result.is_ok(),
+        "getStake should succeed for non-existent validator"
+    );
     let output = result.unwrap();
     let returned_stake = U256::from_be_slice(&output.bytes);
-    assert_eq!(returned_stake, U256::ZERO, "Stake should be zero for non-existent validator");
+    assert_eq!(
+        returned_stake,
+        U256::ZERO,
+        "Stake should be zero for non-existent validator"
+    );
 }
 
 /// T069: Integration test for slash() function (system-only).
@@ -326,8 +373,15 @@ fn test_slash_validator() {
     let state = precompile.state();
     let state_lock = state.read().unwrap();
     let expected_stake = initial_stake - slash_amount;
-    assert_eq!(state_lock.get_stake(&validator_addr), expected_stake, "Stake should be reduced by slash amount");
-    assert_eq!(state_lock.total_stake, expected_stake, "Total stake should be reduced");
+    assert_eq!(
+        state_lock.get_stake(&validator_addr),
+        expected_stake,
+        "Stake should be reduced by slash amount"
+    );
+    assert_eq!(
+        state_lock.total_stake, expected_stake,
+        "Total stake should be reduced"
+    );
 }
 
 /// T069: Test slash access control - non-system address should fail.
@@ -366,7 +420,10 @@ fn test_slash_unauthorized() {
         110,
     );
 
-    assert!(result.is_err(), "slash should fail when called by non-system address");
+    assert!(
+        result.is_err(),
+        "slash should fail when called by non-system address"
+    );
 }
 
 /// T069: Integration test for getValidatorSet() function.
@@ -378,16 +435,25 @@ fn test_get_validator_set() {
 
     // Register 3 validators
     let validators = vec![
-        (test_address(14), test_bls_pubkey(10), U256::from(10_000_000_000_000_000_000u128)),
-        (test_address(15), test_bls_pubkey(11), U256::from(20_000_000_000_000_000_000u128)),
-        (test_address(16), test_bls_pubkey(12), U256::from(15_000_000_000_000_000_000u128)),
+        (
+            test_address(14),
+            test_bls_pubkey(10),
+            U256::from(10_000_000_000_000_000_000u128),
+        ),
+        (
+            test_address(15),
+            test_bls_pubkey(11),
+            U256::from(20_000_000_000_000_000_000u128),
+        ),
+        (
+            test_address(16),
+            test_bls_pubkey(12),
+            U256::from(15_000_000_000_000_000_000u128),
+        ),
     ];
 
     for (addr, bls, stake) in &validators {
-        let register_call = IStaking::registerValidatorCall {
-            blsPubkey: *bls,
-        }
-        .abi_encode();
+        let register_call = IStaking::registerValidatorCall { blsPubkey: *bls }.abi_encode();
         let _ = precompile.run(&Bytes::from(register_call), 100_000, *addr, *stake, 100);
     }
 
@@ -408,7 +474,10 @@ fn test_get_validator_set() {
     let base_gas = 2_100;
     let per_validator_gas = 100;
     let expected_min_gas = base_gas + (per_validator_gas * validators.len() as u64);
-    assert!(output.gas_used >= expected_min_gas, "Gas should scale with validator count");
+    assert!(
+        output.gas_used >= expected_min_gas,
+        "Gas should scale with validator count"
+    );
 
     // Note: Full ABI decoding would require parsing the tuple (address[], uint256[])
     // For now, we verify the call succeeded and consumed appropriate gas
@@ -443,13 +512,20 @@ fn test_atomic_operations() {
     let result1 = precompile.run(&Bytes::from(register1), 100_000, val1, stake1, block_number);
     let result2 = precompile.run(&Bytes::from(register2), 100_000, val2, stake2, block_number);
 
-    assert!(result1.is_ok() && result2.is_ok(), "Both registrations should succeed");
+    assert!(
+        result1.is_ok() && result2.is_ok(),
+        "Both registrations should succeed"
+    );
 
     // Verify both are registered with correct total stake
     let state = precompile.state();
     let state_lock = state.read().unwrap();
     assert!(state_lock.is_validator(&val1) && state_lock.is_validator(&val2));
-    assert_eq!(state_lock.total_stake, stake1 + stake2, "Total stake should sum both validators");
+    assert_eq!(
+        state_lock.total_stake,
+        stake1 + stake2,
+        "Total stake should sum both validators"
+    );
 
     // Verify individual stakes
     assert_eq!(state_lock.get_stake(&val1), stake1);
@@ -480,7 +556,10 @@ fn test_register_gas_consumption() {
     let gas_used = result.unwrap().gas_used;
 
     // Gas should be deterministic (50,000 per spec)
-    assert!(gas_used > 0 && gas_used <= 50_000, "Gas should be deterministic and <= 50,000");
+    assert!(
+        gas_used > 0 && gas_used <= 50_000,
+        "Gas should be deterministic and <= 50,000"
+    );
 }
 
 /// Test that validators can be queried individually.

@@ -125,21 +125,39 @@ impl CipherBftEvmConfig {
         parent_hash: B256,
         staking_precompile: std::sync::Arc<crate::precompiles::StakingPrecompile>,
     ) -> revm::context::Evm<
-        revm::Context<revm::context::BlockEnv, revm::context::TxEnv, revm::context::CfgEnv, &'a mut DB, revm::context::Journal<&'a mut DB>, ()>,
+        revm::Context<
+            revm::context::BlockEnv,
+            revm::context::TxEnv,
+            revm::context::CfgEnv,
+            &'a mut DB,
+            revm::context::Journal<&'a mut DB>,
+            (),
+        >,
         (),
-        revm::handler::instructions::EthInstructions<revm::interpreter::interpreter::EthInterpreter, revm::Context<revm::context::BlockEnv, revm::context::TxEnv, revm::context::CfgEnv, &'a mut DB, revm::context::Journal<&'a mut DB>, ()>>,
+        revm::handler::instructions::EthInstructions<
+            revm::interpreter::interpreter::EthInterpreter,
+            revm::Context<
+                revm::context::BlockEnv,
+                revm::context::TxEnv,
+                revm::context::CfgEnv,
+                &'a mut DB,
+                revm::context::Journal<&'a mut DB>,
+                (),
+            >,
+        >,
         crate::precompiles::CipherBftPrecompileProvider,
         revm::handler::EthFrame<revm::interpreter::interpreter::EthInterpreter>,
     >
     where
         DB: revm::Database,
     {
-        use revm::{Context, MainBuilder};
-        use revm::context::{BlockEnv, TxEnv, CfgEnv, Journal};
         use crate::precompiles::CipherBftPrecompileProvider;
+        use revm::context::{BlockEnv, CfgEnv, Journal, TxEnv};
+        use revm::{Context, MainBuilder};
 
         // Create context with database and spec
-        let mut ctx: Context<BlockEnv, TxEnv, CfgEnv, &'a mut DB, Journal<&'a mut DB>, ()> = Context::new(database, self.spec_id);
+        let mut ctx: Context<BlockEnv, TxEnv, CfgEnv, &'a mut DB, Journal<&'a mut DB>, ()> =
+            Context::new(database, self.spec_id);
 
         // Configure block environment
         ctx.block.number = alloy_primitives::U256::from(block_number);
@@ -155,7 +173,7 @@ impl CipherBftEvmConfig {
         let custom_precompiles = CipherBftPrecompileProvider::new(staking_precompile, self.spec_id);
 
         use revm::context::{Evm, FrameStack};
-        use revm::handler::{EthFrame, instructions::EthInstructions};
+        use revm::handler::{instructions::EthInstructions, EthFrame};
         use revm::interpreter::interpreter::EthInterpreter;
 
         Evm {
@@ -191,7 +209,8 @@ impl CipherBftEvmConfig {
 
         // Execute transaction using transact_one to keep state in journal for subsequent transactions
         // NOTE: transact() would call finalize() and clear the journal, preventing nonce increments
-        let result = evm.transact_one(tx_env)
+        let result = evm
+            .transact_one(tx_env)
             .map_err(|e| ExecutionError::evm(format!("Transaction execution failed: {:?}", e)))?;
 
         // Use the existing helper to process the result
@@ -229,7 +248,9 @@ impl CipherBftEvmConfig {
     pub fn tx_env(&self, tx_bytes: &Bytes) -> Result<(TxEnv, B256, Address, Option<Address>)> {
         // Decode transaction using alloy-consensus
         let tx_envelope = alloy_consensus::TxEnvelope::decode_2718(&mut tx_bytes.as_ref())
-            .map_err(|e| ExecutionError::invalid_transaction(format!("Failed to decode transaction: {}", e)))?;
+            .map_err(|e| {
+                ExecutionError::invalid_transaction(format!("Failed to decode transaction: {}", e))
+            })?;
 
         // Compute transaction hash
         let tx_hash = tx_envelope.tx_hash();
@@ -240,23 +261,51 @@ impl CipherBftEvmConfig {
         let sender = match &tx_envelope {
             alloy_consensus::TxEnvelope::Legacy(signed) => {
                 let sig_hash = signed.signature_hash();
-                signed.signature().recover_address_from_prehash(&sig_hash)
-                    .map_err(|e: SignatureError| ExecutionError::invalid_transaction(format!("Failed to recover sender: {}", e)))?
+                signed
+                    .signature()
+                    .recover_address_from_prehash(&sig_hash)
+                    .map_err(|e: SignatureError| {
+                        ExecutionError::invalid_transaction(format!(
+                            "Failed to recover sender: {}",
+                            e
+                        ))
+                    })?
             }
             alloy_consensus::TxEnvelope::Eip2930(signed) => {
                 let sig_hash = signed.signature_hash();
-                signed.signature().recover_address_from_prehash(&sig_hash)
-                    .map_err(|e: SignatureError| ExecutionError::invalid_transaction(format!("Failed to recover sender: {}", e)))?
+                signed
+                    .signature()
+                    .recover_address_from_prehash(&sig_hash)
+                    .map_err(|e: SignatureError| {
+                        ExecutionError::invalid_transaction(format!(
+                            "Failed to recover sender: {}",
+                            e
+                        ))
+                    })?
             }
             alloy_consensus::TxEnvelope::Eip1559(signed) => {
                 let sig_hash = signed.signature_hash();
-                signed.signature().recover_address_from_prehash(&sig_hash)
-                    .map_err(|e: SignatureError| ExecutionError::invalid_transaction(format!("Failed to recover sender: {}", e)))?
+                signed
+                    .signature()
+                    .recover_address_from_prehash(&sig_hash)
+                    .map_err(|e: SignatureError| {
+                        ExecutionError::invalid_transaction(format!(
+                            "Failed to recover sender: {}",
+                            e
+                        ))
+                    })?
             }
             alloy_consensus::TxEnvelope::Eip4844(signed) => {
                 let sig_hash = signed.signature_hash();
-                signed.signature().recover_address_from_prehash(&sig_hash)
-                    .map_err(|e: SignatureError| ExecutionError::invalid_transaction(format!("Failed to recover sender: {}", e)))?
+                signed
+                    .signature()
+                    .recover_address_from_prehash(&sig_hash)
+                    .map_err(|e: SignatureError| {
+                        ExecutionError::invalid_transaction(format!(
+                            "Failed to recover sender: {}",
+                            e
+                        ))
+                    })?
             }
             _ => {
                 return Err(ExecutionError::invalid_transaction(
@@ -516,7 +565,10 @@ impl CipherBftEvmConfig {
 
                 (output_data, converted_logs)
             }
-            RevmResult::Revert { gas_used: _, output } => {
+            RevmResult::Revert {
+                gas_used: _,
+                output,
+            } => {
                 return Ok(TransactionResult {
                     tx_hash,
                     sender,
@@ -529,7 +581,10 @@ impl CipherBftEvmConfig {
                     revert_reason: Some(format!("Revert: {}", hex::encode(&output))),
                 });
             }
-            RevmResult::Halt { reason, gas_used: _ } => {
+            RevmResult::Halt {
+                reason,
+                gas_used: _,
+            } => {
                 return Ok(TransactionResult {
                     tx_hash,
                     sender,
@@ -592,8 +647,8 @@ pub struct TransactionResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::str::FromStr;
     use crate::precompiles::STAKING_PRECOMPILE_ADDRESS;
+    use std::str::FromStr;
 
     #[test]
     fn test_constants() {

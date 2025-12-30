@@ -3,10 +3,10 @@
 //! These tests verify that state roots are computed at the correct intervals
 //! (every 100 blocks by default) and that they are deterministic.
 
+use alloy_primitives::B256;
 use cipherbft_execution::{
     BlockInput, ChainConfig, ExecutionEngine, ExecutionLayerTrait, InMemoryProvider,
 };
-use alloy_primitives::B256;
 
 fn create_test_engine() -> ExecutionEngine<InMemoryProvider> {
     let provider = InMemoryProvider::new();
@@ -156,8 +156,7 @@ fn test_state_root_checkpoints_at_intervals() {
         } else {
             // Non-checkpoint: returns current state root (from last checkpoint)
             assert_eq!(
-                result.state_root,
-                current_state_root,
+                result.state_root, current_state_root,
                 "Block {} should return current state root from last checkpoint",
                 block_num
             );
@@ -176,7 +175,12 @@ fn test_state_root_checkpoints_at_intervals() {
     // Note: in current implementation they might be the same since it's a simple hash
     // but they should all be non-zero
     for (block_num, root) in &checkpoint_roots {
-        assert_ne!(*root, B256::ZERO, "Checkpoint {} root should be non-zero", block_num);
+        assert_ne!(
+            *root,
+            B256::ZERO,
+            "Checkpoint {} root should be non-zero",
+            block_num
+        );
     }
 
     println!("✅ State root checkpoints at correct intervals");
@@ -275,11 +279,20 @@ fn test_state_root_progression() {
 
         // At checkpoint blocks, state root should be computed (non-zero)
         if block_num % 100 == 0 {
-            assert_ne!(result.state_root, B256::ZERO, "Checkpoint block {} should compute state root", block_num);
+            assert_ne!(
+                result.state_root,
+                B256::ZERO,
+                "Checkpoint block {} should compute state root",
+                block_num
+            );
             current_state_root = result.state_root;
         } else {
             // Non-checkpoint blocks return current state root
-            assert_eq!(result.state_root, current_state_root, "Block {} should return current state root", block_num);
+            assert_eq!(
+                result.state_root, current_state_root,
+                "Block {} should return current state root",
+                block_num
+            );
         }
     }
 

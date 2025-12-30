@@ -52,8 +52,8 @@ impl Default for ChainConfig {
             block_gas_limit: 30_000_000,
             state_root_interval: STATE_ROOT_SNAPSHOT_INTERVAL,
             staking_min_stake: U256::from(1_000_000_000_000_000_000u64), // 1 ETH
-            staking_unbonding_period: 259_200, // 3 days
-            base_fee_per_gas: 1_000_000_000, // 1 gwei
+            staking_unbonding_period: 259_200,                           // 3 days
+            base_fee_per_gas: 1_000_000_000,                             // 1 gwei
         }
     }
 }

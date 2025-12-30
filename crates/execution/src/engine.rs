@@ -8,7 +8,9 @@ use crate::{
     error::{ExecutionError, Result},
     evm::CipherBftEvmConfig,
     precompiles::StakingPrecompile,
-    receipts::{compute_logs_bloom_from_transactions, compute_receipts_root, compute_transactions_root},
+    receipts::{
+        compute_logs_bloom_from_transactions, compute_receipts_root, compute_transactions_root,
+    },
     state::StateManager,
     types::{
         BlockHeader, BlockInput, ChainConfig, ConsensusBlock, ExecutionResult, Log, SealedBlock,
@@ -147,7 +149,9 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
             state_manager,
             evm_config,
             staking_precompile,
-            block_hashes: RwLock::new(lru::LruCache::new(std::num::NonZeroUsize::new(256).unwrap())),
+            block_hashes: RwLock::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(256).unwrap(),
+            )),
             current_block: 0,
         }
     }
@@ -275,15 +279,14 @@ impl<P: Provider + Clone> ExecutionLayer for ExecutionEngine<P> {
         let logs_bloom = compute_logs_bloom_from_transactions(&all_logs);
 
         // Get delayed block hash (block N-2 for block N)
-        let delayed_height = input
-            .block_number
-            .saturating_sub(DELAYED_COMMITMENT_DEPTH);
+        let delayed_height = input.block_number.saturating_sub(DELAYED_COMMITMENT_DEPTH);
         let block_hash = if delayed_height == 0 || delayed_height < DELAYED_COMMITMENT_DEPTH {
             // Early blocks don't have enough history for delayed commitment
             B256::ZERO
         } else {
             // Try to get the hash, but if not found (e.g., not sealed yet), use zero
-            self.get_delayed_block_hash(delayed_height).unwrap_or(B256::ZERO)
+            self.get_delayed_block_hash(delayed_height)
+                .unwrap_or(B256::ZERO)
         };
 
         // Update current block number
@@ -353,7 +356,7 @@ impl<P: Provider + Clone> ExecutionLayer for ExecutionEngine<P> {
         let header = BlockHeader {
             parent_hash: consensus_block.parent_hash,
             ommers_hash: alloy_primitives::keccak256([]), // Empty ommers
-            beneficiary: Address::ZERO,                    // No coinbase in PoS
+            beneficiary: Address::ZERO,                   // No coinbase in PoS
             state_root: execution_result.state_root,
             transactions_root: execution_result.transactions_root,
             receipts_root: execution_result.receipts_root,
@@ -524,7 +527,9 @@ mod tests {
             logs_bloom: Bloom::ZERO,
         };
 
-        let sealed = engine.seal_block(consensus_block, execution_result).unwrap();
+        let sealed = engine
+            .seal_block(consensus_block, execution_result)
+            .unwrap();
 
         assert_eq!(sealed.header.number, 1);
         assert_eq!(sealed.header.gas_used, 0);

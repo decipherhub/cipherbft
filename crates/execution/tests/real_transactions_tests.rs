@@ -16,12 +16,10 @@ use cipherbft_execution::{
 };
 
 /// Test account 1 with known private key
-const TEST_PRIVATE_KEY_1: &str =
-    "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const TEST_PRIVATE_KEY_1: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
 /// Test account 2 with known private key
-const TEST_PRIVATE_KEY_2: &str =
-    "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+const TEST_PRIVATE_KEY_2: &str = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 
 /// Create a test engine with funded accounts
 fn create_test_engine_with_accounts() -> (
@@ -303,8 +301,8 @@ fn test_legacy_transaction() {
         &signer1,
         addr2,
         transfer_amount,
-        0, // nonce
-        21_000, // gas limit
+        0,             // nonce
+        21_000,        // gas limit
         2_000_000_000, // 2 gwei gas price
         Bytes::new(),
     );
@@ -338,8 +336,8 @@ fn test_contract_deployment() {
 
     let tx = create_contract_creation_transaction(
         &signer1,
-        0, // nonce
-        100_000, // gas limit
+        0,             // nonce
+        100_000,       // gas limit
         2_000_000_000, // 2 gwei
         bytecode,
     );
@@ -533,10 +531,7 @@ fn test_receipts_root_with_real_transactions() {
 
     // Receipts root should be computed
     assert_ne!(result.receipts_root, alloy_primitives::B256::ZERO);
-    assert_ne!(
-        result.receipts_root,
-        alloy_trie::EMPTY_ROOT_HASH
-    );
+    assert_ne!(result.receipts_root, alloy_trie::EMPTY_ROOT_HASH);
 
     println!("✅ Receipts root computation test passed");
     println!("   Receipts root: {:?}", result.receipts_root);
