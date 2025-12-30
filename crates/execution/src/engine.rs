@@ -18,6 +18,8 @@ use crate::{
 use alloy_consensus::Header as AlloyHeader;
 use alloy_primitives::{Address, Bytes, B256, B64, U256};
 use parking_lot::RwLock;
+// MIGRATION(revm33): SpecId is at revm::primitives::hardfork::SpecId
+use revm::primitives::hardfork::SpecId;
 use std::sync::Arc;
 
 /// ExecutionLayer trait defines the interface for block execution.
@@ -128,7 +130,7 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
     pub fn new(chain_config: ChainConfig, provider: P) -> Self {
         let evm_config = CipherBftEvmConfig::new(
             chain_config.chain_id,
-            revm::primitives::SpecId::CANCUN,
+            SpecId::CANCUN,
             chain_config.block_gas_limit,
             chain_config.base_fee_per_gas,
         );

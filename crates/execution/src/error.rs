@@ -4,6 +4,8 @@
 //! including database errors, EVM execution errors, and state management errors.
 
 use alloy_primitives::{Address, B256};
+// MIGRATION(revm33): DBErrorMarker required for Database trait error types
+use revm::database_interface::DBErrorMarker;
 
 /// Result type alias for execution layer operations.
 pub type Result<T> = std::result::Result<T, ExecutionError>;
@@ -140,3 +142,6 @@ impl DatabaseError {
         Self::Serialization(msg.into())
     }
 }
+
+// MIGRATION(revm33): Implement DBErrorMarker to satisfy Database trait requirements
+impl DBErrorMarker for DatabaseError {}

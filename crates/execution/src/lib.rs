@@ -62,10 +62,10 @@ pub use engine::{ExecutionEngine, ExecutionLayer as ExecutionLayerTrait};
 pub use error::{DatabaseError, ExecutionError, Result};
 pub use evm::{
     CipherBftEvmConfig, TransactionResult, CIPHERBFT_CHAIN_ID, DEFAULT_BASE_FEE_PER_GAS,
-    DEFAULT_BLOCK_GAS_LIMIT, MIN_STAKE_AMOUNT, STAKING_PRECOMPILE_ADDRESS,
-    UNBONDING_PERIOD_SECONDS,
+    DEFAULT_BLOCK_GAS_LIMIT, MIN_STAKE_AMOUNT, UNBONDING_PERIOD_SECONDS,
 };
-pub use precompiles::{StakingPrecompile, StakingState, ValidatorInfo};
+// MIGRATION(revm33): STAKING_PRECOMPILE_ADDRESS moved from evm to precompiles::provider
+pub use precompiles::{StakingPrecompile, StakingState, ValidatorInfo, STAKING_PRECOMPILE_ADDRESS, CipherBftPrecompileProvider};
 pub use receipts::{
     aggregate_bloom, compute_logs_bloom_from_transactions, compute_receipts_root,
     compute_transactions_root, logs_bloom,
