@@ -6,13 +6,9 @@
 //! - Transaction execution with revm
 //! - Environment configuration (block, tx, cfg)
 
-use crate::{
-    error::ExecutionError,
-    types::{Cut, Log},
-    Result,
-};
+use crate::{error::ExecutionError, types::Log, Result};
 use alloy_eips::eip2718::Decodable2718;
-use alloy_primitives::{Address, Bytes, B256, U256};
+use alloy_primitives::{Address, Bytes, B256};
 // MIGRATION(revm33): Complete API restructuring
 // - Use Context::mainnet() to build EVM (not Evm::builder())
 // - No Env/BlockEnv/CfgEnv - configuration handled differently
@@ -25,7 +21,6 @@ use revm::{
         result::{ExecutionResult as RevmResult, Output},
         transaction::{AccessList, AccessListItem},
     },
-    database_interface::Database,
     primitives::{hardfork::SpecId, TxKind},
 };
 
@@ -117,12 +112,13 @@ impl CipherBftEvmConfig {
     ///
     /// # Returns
     /// EVM instance ready for transaction execution
+    #[allow(clippy::type_complexity)]
     pub fn build_evm_with_precompiles<'a, DB>(
         &self,
         database: &'a mut DB,
         block_number: u64,
         timestamp: u64,
-        parent_hash: B256,
+        _parent_hash: B256,
         staking_precompile: std::sync::Arc<crate::precompiles::StakingPrecompile>,
     ) -> revm::context::Evm<
         revm::Context<
@@ -153,7 +149,7 @@ impl CipherBftEvmConfig {
     {
         use crate::precompiles::CipherBftPrecompileProvider;
         use revm::context::{BlockEnv, CfgEnv, Journal, TxEnv};
-        use revm::{Context, MainBuilder};
+        use revm::Context;
 
         // Create context with database and spec
         let mut ctx: Context<BlockEnv, TxEnv, CfgEnv, &'a mut DB, Journal<&'a mut DB>, ()> =
@@ -173,8 +169,7 @@ impl CipherBftEvmConfig {
         let custom_precompiles = CipherBftPrecompileProvider::new(staking_precompile, self.spec_id);
 
         use revm::context::{Evm, FrameStack};
-        use revm::handler::{instructions::EthInstructions, EthFrame};
-        use revm::interpreter::interpreter::EthInterpreter;
+        use revm::handler::instructions::EthInstructions;
 
         Evm {
             ctx,
@@ -322,7 +317,7 @@ impl CipherBftEvmConfig {
                     tx_type: 0, // Legacy transaction type
                     caller: sender,
                     gas_limit: tx.gas_limit,
-                    gas_price: tx.gas_price as u128,
+                    gas_price: tx.gas_price,
                     kind: match tx.to {
                         alloy_primitives::TxKind::Call(to) => TxKind::Call(to),
                         alloy_primitives::TxKind::Create => TxKind::Create,
@@ -344,7 +339,7 @@ impl CipherBftEvmConfig {
                     tx_type: 1, // EIP-2930 transaction type
                     caller: sender,
                     gas_limit: tx.gas_limit,
-                    gas_price: tx.gas_price as u128,
+                    gas_price: tx.gas_price,
                     kind: match tx.to {
                         alloy_primitives::TxKind::Call(to) => TxKind::Call(to),
                         alloy_primitives::TxKind::Create => TxKind::Create,
@@ -375,7 +370,7 @@ impl CipherBftEvmConfig {
                     tx_type: 2, // EIP-1559 transaction type
                     caller: sender,
                     gas_limit: tx.gas_limit,
-                    gas_price: tx.max_fee_per_gas as u128,
+                    gas_price: tx.max_fee_per_gas,
                     kind: match tx.to {
                         alloy_primitives::TxKind::Call(to) => TxKind::Call(to),
                         alloy_primitives::TxKind::Create => TxKind::Create,
@@ -394,7 +389,7 @@ impl CipherBftEvmConfig {
                             })
                             .collect(),
                     ),
-                    gas_priority_fee: Some(tx.max_priority_fee_per_gas as u128),
+                    gas_priority_fee: Some(tx.max_priority_fee_per_gas),
                     blob_hashes: vec![],
                     max_fee_per_blob_gas: 0,
                     authorization_list: vec![],
@@ -406,7 +401,7 @@ impl CipherBftEvmConfig {
                     tx_type: 3, // EIP-4844 transaction type
                     caller: sender,
                     gas_limit: tx.gas_limit,
-                    gas_price: tx.max_fee_per_gas as u128,
+                    gas_price: tx.max_fee_per_gas,
                     kind: TxKind::Call(tx.to),
                     value: tx.value,
                     data: tx.input.clone(),
@@ -422,9 +417,9 @@ impl CipherBftEvmConfig {
                             })
                             .collect(),
                     ),
-                    gas_priority_fee: Some(tx.max_priority_fee_per_gas as u128),
+                    gas_priority_fee: Some(tx.max_priority_fee_per_gas),
                     blob_hashes: tx.blob_versioned_hashes.clone(),
-                    max_fee_per_blob_gas: tx.max_fee_per_blob_gas as u128,
+                    max_fee_per_blob_gas: tx.max_fee_per_blob_gas,
                     authorization_list: vec![],
                 }
             }
@@ -456,10 +451,10 @@ impl CipherBftEvmConfig {
         Ok((tx_env, *tx_hash, sender, to_addr))
     }
 
-    /// Build an EVM instance with the given database.
-    ///
-    /// This creates a configured EVM ready for transaction execution.
-    ///
+    // Build an EVM instance with the given database.
+    //
+    // This creates a configured EVM ready for transaction execution.
+    //
     // MIGRATION(revm33): build_evm method removed - uses old Evm::builder() API
     // TODO: Replace with Context::mainnet().with_db(database).build_mainnet()
     /*
@@ -472,29 +467,28 @@ impl CipherBftEvmConfig {
     ) -> Evm<'static, (), DB> { ... }
     */
 
-    /// Build a configured EVM instance with custom precompiles.
-    ///
-    /// MIGRATION(revm33): Precompile provider is now a type parameter on Evm.
-    /// This method has been removed in favor of manual EVM construction with CipherBftPrecompileProvider.
-    ///
-    /// # Example
-    /// ```rust,ignore
-    /// use crate::precompiles::{CipherBftPrecompileProvider, StakingPrecompile};
-    /// use revm::Evm;
-    /// use std::sync::Arc;
-    ///
-    /// let staking = Arc::new(StakingPrecompile::new());
-    /// let provider = CipherBftPrecompileProvider::new(staking, SpecId::CANCUN);
-    ///
-    /// // Note: Full EVM construction requires Context type with proper trait bounds
-    /// // See integration tests for complete examples
-    /// ```
-    ///
-    /// # Note
-    /// The PrecompileProvider trait allows precompiles to access full transaction context
-    /// (caller, value, block number) which is essential for the staking precompile.
-    /// See `precompiles::provider` module for implementation details.
-
+    // Build a configured EVM instance with custom precompiles.
+    //
+    // MIGRATION(revm33): Precompile provider is now a type parameter on Evm.
+    // This method has been removed in favor of manual EVM construction with CipherBftPrecompileProvider.
+    //
+    // Example:
+    // ```rust,ignore
+    // use crate::precompiles::{CipherBftPrecompileProvider, StakingPrecompile};
+    // use revm::Evm;
+    // use std::sync::Arc;
+    //
+    // let staking = Arc::new(StakingPrecompile::new());
+    // let provider = CipherBftPrecompileProvider::new(staking, SpecId::CANCUN);
+    //
+    // // Note: Full EVM construction requires Context type with proper trait bounds
+    // // See integration tests for complete examples
+    // ```
+    //
+    // Note: The PrecompileProvider trait allows precompiles to access full transaction context
+    // (caller, value, block number) which is essential for the staking precompile.
+    // See `precompiles::provider` module for implementation details.
+    //
     // MIGRATION(revm33): execute_transaction method removed - uses old Evm API
     // TODO: Replace with Context-based transaction execution
     // Use: evm.transact_one(TxEnv::builder()...build()?)

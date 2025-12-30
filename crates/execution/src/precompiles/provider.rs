@@ -20,8 +20,8 @@ use std::sync::Arc;
 
 /// Staking precompile address (0x0000000000000000000000000000000000000100).
 pub const STAKING_PRECOMPILE_ADDRESS: Address = Address::new([
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x01, 0x00,
 ]);
 
 /// CipherBFT precompile provider that handles both standard Ethereum precompiles
@@ -87,7 +87,11 @@ where
     ) -> Result<Option<Self::Output>, String> {
         // Check if this is our staking precompile
         if inputs.bytecode_address == STAKING_PRECOMPILE_ADDRESS {
-            return Ok(Some(run_staking_precompile(&self.staking, context, inputs)?));
+            return Ok(Some(run_staking_precompile(
+                &self.staking,
+                context,
+                inputs,
+            )?));
         }
 
         // Delegate to standard Ethereum precompiles
@@ -154,7 +158,13 @@ where
 
     // Call the staking precompile with extracted context
     let result = staking
-        .run(&input_bytes_owned, inputs.gas_limit, caller, value, block_number)
+        .run(
+            &input_bytes_owned,
+            inputs.gas_limit,
+            caller,
+            value,
+            block_number,
+        )
         .map_err(|e| format!("Staking precompile error: {:?}", e))?;
 
     // Convert PrecompileResult to InterpreterResult
@@ -166,7 +176,7 @@ where
             InstructionResult::Return
         },
         gas: Gas::new(inputs.gas_limit),
-        output: result.bytes.into(),
+        output: result.bytes,
     };
 
     // Record gas usage

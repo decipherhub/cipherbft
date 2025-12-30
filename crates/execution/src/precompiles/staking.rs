@@ -241,7 +241,14 @@ impl StakingPrecompile {
     /// Main precompile entry point.
     ///
     /// Decodes function selector and routes to appropriate handler.
-    pub fn run(&self, input: &Bytes, gas_limit: u64, caller: Address, value: U256, block_number: u64) -> PrecompileResult {
+    pub fn run(
+        &self,
+        input: &Bytes,
+        gas_limit: u64,
+        caller: Address,
+        value: U256,
+        block_number: u64,
+    ) -> PrecompileResult {
         if input.len() < 4 {
             return Err(PrecompileError::Fatal("Input too short".to_string()));
         }
@@ -256,22 +263,16 @@ impl StakingPrecompile {
                 self.register_validator(data, gas_limit, caller, value, block_number)
             }
             // deregisterValidator() - selector: 0x6a911ccf
-            [0x6a, 0x91, 0x1c, 0xcf] => {
-                self.deregister_validator(gas_limit, caller)
-            }
+            [0x6a, 0x91, 0x1c, 0xcf] => self.deregister_validator(gas_limit, caller),
             // getValidatorSet() - selector: 0xcf331250
-            [0xcf, 0x33, 0x12, 0x50] => {
-                self.get_validator_set(gas_limit)
-            }
+            [0xcf, 0x33, 0x12, 0x50] => self.get_validator_set(gas_limit),
             // getStake(address) - selector: 0x7a766460
-            [0x7a, 0x76, 0x64, 0x60] => {
-                self.get_stake(data, gas_limit)
-            }
+            [0x7a, 0x76, 0x64, 0x60] => self.get_stake(data, gas_limit),
             // slash(address, uint256) - selector: 0x02fb4d85
-            [0x02, 0xfb, 0x4d, 0x85] => {
-                self.slash(data, gas_limit, caller)
-            }
-            _ => Err(PrecompileError::Fatal("Unknown function selector".to_string())),
+            [0x02, 0xfb, 0x4d, 0x85] => self.slash(data, gas_limit, caller),
+            _ => Err(PrecompileError::Fatal(
+                "Unknown function selector".to_string(),
+            )),
         }
     }
 
@@ -296,7 +297,9 @@ impl StakingPrecompile {
 
         // Decode BLS public key (bytes32, padded from 48 bytes)
         if data.len() < 32 {
-            return Err(PrecompileError::Fatal("Invalid BLS pubkey data".to_string()));
+            return Err(PrecompileError::Fatal(
+                "Invalid BLS pubkey data".to_string(),
+            ));
         }
 
         // For bytes32, we expect the 48-byte BLS key to be right-padded with zeros
@@ -310,18 +313,22 @@ impl StakingPrecompile {
 
         // Check minimum stake
         if value < U256::from(MIN_VALIDATOR_STAKE) {
-            return Err(PrecompileError::Fatal(
-                format!("Insufficient stake: minimum {} wei required", MIN_VALIDATOR_STAKE),
-            ));
+            return Err(PrecompileError::Fatal(format!(
+                "Insufficient stake: minimum {} wei required",
+                MIN_VALIDATOR_STAKE
+            )));
         }
 
         // Check if already registered
-        let mut state = self.state.write().map_err(|_| {
-            PrecompileError::Fatal("Failed to acquire state lock".to_string())
-        })?;
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| PrecompileError::Fatal("Failed to acquire state lock".to_string()))?;
 
         if state.is_validator(&caller) {
-            return Err(PrecompileError::Fatal("Already registered as validator".to_string()));
+            return Err(PrecompileError::Fatal(
+                "Already registered as validator".to_string(),
+            ));
         }
 
         // Add to validator set
@@ -355,19 +362,22 @@ impl StakingPrecompile {
             return Err(PrecompileError::Fatal("Out of gas".to_string()));
         }
 
-        let mut state = self.state.write().map_err(|_| {
-            PrecompileError::Fatal("Failed to acquire state lock".to_string())
-        })?;
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| PrecompileError::Fatal("Failed to acquire state lock".to_string()))?;
 
         if !state.is_validator(&caller) {
-            return Err(PrecompileError::Fatal("Not a registered validator".to_string()));
+            return Err(PrecompileError::Fatal(
+                "Not a registered validator".to_string(),
+            ));
         }
 
         // Mark for exit at next epoch
         let exit_epoch = state.epoch + 1;
-        state.mark_for_exit(&caller, exit_epoch).map_err(|e| {
-            PrecompileError::Fatal(e.to_string())
-        })?;
+        state
+            .mark_for_exit(&caller, exit_epoch)
+            .map_err(|e| PrecompileError::Fatal(e.to_string()))?;
 
         Ok(PrecompileOutput {
             gas_used: GAS_COST,
@@ -383,12 +393,14 @@ impl StakingPrecompile {
     /// Selector: 0xe7b5c8a9
     /// Gas: 2,100 + 100 per validator
     fn get_validator_set(&self, gas_limit: u64) -> PrecompileResult {
-        let state = self.state.read().map_err(|_| {
-            PrecompileError::Fatal("Failed to acquire state lock".to_string())
-        })?;
+        let state = self
+            .state
+            .read()
+            .map_err(|_| PrecompileError::Fatal("Failed to acquire state lock".to_string()))?;
 
         let validator_count = state.validators.len();
-        let gas_cost = gas::GET_VALIDATOR_SET_BASE + (gas::GET_VALIDATOR_SET_PER_VALIDATOR * validator_count as u64);
+        let gas_cost = gas::GET_VALIDATOR_SET_BASE
+            + (gas::GET_VALIDATOR_SET_PER_VALIDATOR * validator_count as u64);
 
         if gas_limit < gas_cost {
             return Err(PrecompileError::Fatal("Out of gas".to_string()));
@@ -433,9 +445,10 @@ impl StakingPrecompile {
         // Address is right-aligned in 32 bytes (bytes 12..32)
         let address = Address::from_slice(&data[12..32]);
 
-        let state = self.state.read().map_err(|_| {
-            PrecompileError::Fatal("Failed to acquire state lock".to_string())
-        })?;
+        let state = self
+            .state
+            .read()
+            .map_err(|_| PrecompileError::Fatal("Failed to acquire state lock".to_string()))?;
 
         let stake = state.get_stake(&address);
 
@@ -464,7 +477,9 @@ impl StakingPrecompile {
 
         // Only callable by system
         if caller != SYSTEM_ADDRESS {
-            return Err(PrecompileError::Fatal("Unauthorized: system-only function".to_string()));
+            return Err(PrecompileError::Fatal(
+                "Unauthorized: system-only function".to_string(),
+            ));
         }
 
         if data.len() < 64 {
@@ -477,13 +492,14 @@ impl StakingPrecompile {
         // Decode amount (bytes 32..64)
         let amount = U256::from_be_slice(&data[32..64]);
 
-        let mut state = self.state.write().map_err(|_| {
-            PrecompileError::Fatal("Failed to acquire state lock".to_string())
-        })?;
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| PrecompileError::Fatal("Failed to acquire state lock".to_string()))?;
 
-        state.slash_validator(&validator, amount).map_err(|e| {
-            PrecompileError::Fatal(e.to_string())
-        })?;
+        state
+            .slash_validator(&validator, amount)
+            .map_err(|e| PrecompileError::Fatal(e.to_string()))?;
 
         Ok(PrecompileOutput {
             gas_used: GAS_COST,
@@ -572,7 +588,6 @@ mod tests {
             pending_exit: None,
         };
 
-
         // Add validator
         state.add_validator(validator);
         assert!(state.is_validator(&addr));
@@ -656,7 +671,9 @@ mod tests {
         input.extend_from_slice(&[1u8; 32]);
         let caller = Address::with_last_byte(5);
         let value = U256::from(MIN_VALIDATOR_STAKE);
-        precompile.run(&Bytes::from(input), 100_000, caller, value, 1).unwrap();
+        precompile
+            .run(&Bytes::from(input), 100_000, caller, value, 1)
+            .unwrap();
 
         // Now deregister
         let dereg_input = vec![0x6a, 0x91, 0x1c, 0xcf]; // selector
@@ -681,7 +698,9 @@ mod tests {
         reg_input.extend_from_slice(&[1u8; 32]);
         let validator_addr = Address::with_last_byte(6);
         let stake = U256::from(MIN_VALIDATOR_STAKE * 2);
-        precompile.run(&Bytes::from(reg_input), 100_000, validator_addr, stake, 1).unwrap();
+        precompile
+            .run(&Bytes::from(reg_input), 100_000, validator_addr, stake, 1)
+            .unwrap();
 
         // Query stake
         let mut input = vec![0x7a, 0x76, 0x64, 0x60]; // selector
@@ -709,13 +728,17 @@ mod tests {
         let stake1 = U256::from(MIN_VALIDATOR_STAKE);
         let mut input1 = vec![0x60, 0x70, 0x49, 0xd8];
         input1.extend_from_slice(&[1u8; 32]);
-        precompile.run(&Bytes::from(input1), 100_000, addr1, stake1, 1).unwrap();
+        precompile
+            .run(&Bytes::from(input1), 100_000, addr1, stake1, 1)
+            .unwrap();
 
         let addr2 = Address::with_last_byte(8);
         let stake2 = U256::from(MIN_VALIDATOR_STAKE * 2);
         let mut input2 = vec![0x60, 0x70, 0x49, 0xd8];
         input2.extend_from_slice(&[2u8; 32]);
-        precompile.run(&Bytes::from(input2), 100_000, addr2, stake2, 2).unwrap();
+        precompile
+            .run(&Bytes::from(input2), 100_000, addr2, stake2, 2)
+            .unwrap();
 
         // Query validator set
         let input = vec![0xcf, 0x33, 0x12, 0x50]; // selector
@@ -746,7 +769,13 @@ mod tests {
         input.extend_from_slice(&U256::from(1000u64).to_be_bytes::<32>());
 
         let unauthorized_caller = Address::with_last_byte(10);
-        let result = precompile.run(&Bytes::from(input), 100_000, unauthorized_caller, U256::ZERO, 1);
+        let result = precompile.run(
+            &Bytes::from(input),
+            100_000,
+            unauthorized_caller,
+            U256::ZERO,
+            1,
+        );
 
         assert!(result.is_err());
     }
