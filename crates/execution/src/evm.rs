@@ -8,7 +8,7 @@
 
 use crate::{
     error::ExecutionError,
-    precompiles::StakingPrecompile,
+    precompiles::{StakingPrecompile, StakingPrecompileAdapter},
     types::{Cut, Log},
     Result,
 };
@@ -19,8 +19,10 @@ use revm::{
         AccessListItem, BlobExcessGasAndPrice, BlockEnv, CfgEnv, Env,
         ExecutionResult as RevmResult, Output, SpecId, TxEnv, TxKind,
     },
-    Database, Evm,
+    ContextPrecompile, ContextPrecompiles, Database, Evm,
 };
+use revm::precompile::PrecompileSpecId;
+use std::sync::Arc;
 
 /// CipherBFT Chain ID (31337 - Ethereum testnet/development chain ID).
 ///
@@ -365,6 +367,79 @@ impl CipherBftEvmConfig {
             .with_db(database)
             .with_env(Box::new(env))
             .build()
+    }
+
+    /// Build a configured EVM instance with custom precompiles.
+    ///
+    /// This creates an EVM with the staking precompile registered at address 0x100.
+    ///
+    /// # Type Parameters
+    /// * `DB` - Database type implementing the revm Database trait
+    ///
+    /// # Arguments
+    /// * `database` - Database backend for state access
+    /// * `block_number` - Current block number
+    /// * `timestamp` - Block timestamp
+    /// * `parent_hash` - Parent block hash
+    /// * `staking_precompile` - StakingPrecompile instance to register
+    ///
+    /// # Returns
+    /// Configured EVM with custom precompiles registered.
+    pub fn build_evm_with_precompiles<'a, DB: Database>(
+        &self,
+        database: DB,
+        block_number: u64,
+        timestamp: u64,
+        parent_hash: B256,
+        staking_precompile: Arc<StakingPrecompile>,
+    ) -> Evm<'a, (), DB> {
+        let env = Env {
+            cfg: self.cfg_env(),
+            block: self.block_env(block_number, timestamp, parent_hash, None),
+            tx: TxEnv::default(),
+        };
+
+        // Create precompiles with standard Cancun + our custom staking precompile
+        let precompiles = self.create_precompiles(staking_precompile);
+
+        // Build EVM and set custom precompiles on the context
+        let mut evm = Evm::builder()
+            .with_db(database)
+            .with_env(Box::new(env))
+            .build();
+
+        // Set the custom precompiles on the EVM context
+        evm.context.evm.precompiles = precompiles;
+
+        evm
+    }
+
+    /// Create a ContextPrecompiles instance with standard Cancun precompiles plus our custom staking precompile.
+    ///
+    /// This builds a revm ContextPrecompiles object with all standard precompiles and our custom ones.
+    ///
+    /// # Arguments
+    /// * `staking_precompile` - The StakingPrecompile instance to register at 0x100
+    ///
+    /// # Returns
+    /// ContextPrecompiles instance with both standard and custom precompiles.
+    fn create_precompiles<DB: Database>(
+        &self,
+        staking_precompile: Arc<StakingPrecompile>,
+    ) -> ContextPrecompiles<DB> {
+        // Start with standard Cancun precompiles
+        let mut precompiles = ContextPrecompiles::new(PrecompileSpecId::CANCUN);
+
+        // Create adapter for our staking precompile
+        let adapter = StakingPrecompileAdapter::new(staking_precompile);
+
+        // Wrap as ContextStateful precompile and add to the precompiles map
+        let context_precompile = ContextPrecompile::ContextStateful(Arc::new(adapter));
+
+        // Register staking precompile at 0x100
+        precompiles.extend([(STAKING_PRECOMPILE_ADDRESS, context_precompile)]);
+
+        precompiles
     }
 
     /// Install custom precompiles (staking precompile at 0x100).
