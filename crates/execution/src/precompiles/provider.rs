@@ -61,7 +61,7 @@ impl CipherBftPrecompileProvider {
 /// allowing precompiles to read transaction data and block information.
 impl<CTX> PrecompileProvider<CTX> for CipherBftPrecompileProvider
 where
-    CTX: ContextTr + Transaction + Block,
+    CTX: ContextTr,
 {
     type Output = InterpreterResult;
 
@@ -127,7 +127,7 @@ fn run_staking_precompile<CTX>(
     inputs: &CallInputs,
 ) -> Result<InterpreterResult, String>
 where
-    CTX: ContextTr + Transaction + Block,
+    CTX: ContextTr,
 {
     // Extract input bytes from CallInputs
     // MIGRATION(revm33): Input is accessed via the CallInputs enum
