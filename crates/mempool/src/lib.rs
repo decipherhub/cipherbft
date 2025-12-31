@@ -17,8 +17,10 @@ pub mod error;
 pub mod config;
 pub mod transaction;
 pub mod pool;
+pub mod validator;
 
 pub use error::MempoolError;
 pub use config::MempoolConfig;
 pub use transaction::TransactionOrdering;
 pub use pool::CipherBftPool;
+pub use validator::CipherBftValidator;
