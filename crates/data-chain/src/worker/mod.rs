@@ -15,5 +15,7 @@ pub mod state;
 pub mod synchronizer;
 
 pub use config::WorkerConfig;
-pub use core::{Worker, WorkerCommand, WorkerEvent, WorkerHandle, WorkerNetwork};
+pub use core::{
+    TransactionValidator, Worker, WorkerCommand, WorkerEvent, WorkerHandle, WorkerNetwork,
+};
 pub use state::WorkerState;

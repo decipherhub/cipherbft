@@ -1,6 +1,7 @@
 //! Node runner - ties Primary, Workers, and Network together
 
 use crate::config::NodeConfig;
+use crate::execution_bridge::ExecutionBridge;
 use crate::network::TcpPrimaryNetwork;
 use crate::util::validator_id_from_bls;
 use anyhow::Result;
@@ -9,12 +10,13 @@ use cipherbft_data_chain::{
     primary::{Primary, PrimaryConfig, PrimaryEvent},
     DclMessage,
 };
+use cipherbft_execution::ChainConfig;
 use cipherbft_types::ValidatorId;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// A running CipherBFT node
 pub struct Node {
@@ -26,6 +28,8 @@ pub struct Node {
     validator_id: ValidatorId,
     /// Known validators and their public keys
     validators: HashMap<ValidatorId, BlsPublicKey>,
+    /// Execution layer bridge
+    execution_bridge: Option<Arc<ExecutionBridge>>,
 }
 
 impl Node {
@@ -48,12 +52,23 @@ impl Node {
             keypair,
             validator_id,
             validators: HashMap::new(),
+            execution_bridge: None,
         })
     }
 
     /// Add a known validator
     pub fn add_validator(&mut self, id: ValidatorId, pubkey: BlsPublicKey) {
         self.validators.insert(id, pubkey);
+    }
+
+    /// Enable execution layer integration
+    ///
+    /// Must be called before `run()` to enable Cut execution.
+    pub fn with_execution_layer(mut self) -> Result<Self> {
+        let chain_config = ChainConfig::default();
+        let bridge = ExecutionBridge::new(chain_config)?;
+        self.execution_bridge = Some(Arc::new(bridge));
+        Ok(self)
     }
 
     /// Run the node
@@ -129,6 +144,22 @@ impl Node {
                                 cut.height,
                                 cut.validator_count()
                             );
+
+                            // Execute Cut if execution layer is enabled
+                            if let Some(ref bridge) = self.execution_bridge {
+                                match bridge.execute_cut(cut).await {
+                                    Ok(result) => {
+                                        info!(
+                                            "Cut executed successfully - state_root: {}, gas_used: {}",
+                                            result.state_root,
+                                            result.gas_used
+                                        );
+                                    }
+                                    Err(e) => {
+                                        error!("Cut execution failed: {}", e);
+                                    }
+                                }
+                            }
                         }
                         PrimaryEvent::CarCreated(car) => {
                             debug!(

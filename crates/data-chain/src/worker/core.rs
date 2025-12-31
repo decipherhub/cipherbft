@@ -66,6 +66,21 @@ pub trait WorkerNetwork: Send + Sync {
     async fn request_batches(&self, peer: ValidatorId, digests: Vec<Hash>);
 }
 
+/// Transaction validator for mempool CheckTx
+#[async_trait::async_trait]
+pub trait TransactionValidator: Send + Sync {
+    /// Validate a transaction before accepting it into the mempool
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - Transaction bytes to validate
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if valid, or an error if validation fails.
+    async fn validate_transaction(&self, tx: &[u8]) -> Result<(), String>;
+}
+
 /// Handle for a spawned Worker task
 pub struct WorkerHandle {
     /// Join handle for the worker task
@@ -159,6 +174,8 @@ pub struct Worker {
     network: Box<dyn WorkerNetwork>,
     /// Optional persistent storage for batches
     storage: Option<Arc<dyn BatchStore>>,
+    /// Optional transaction validator for CheckTx
+    validator: Option<Arc<dyn TransactionValidator>>,
     /// Shutdown flag
     shutdown: bool,
 }
@@ -168,7 +185,7 @@ impl Worker {
     ///
     /// Returns a handle that can be used to interact with the worker
     pub fn spawn(config: WorkerConfig, network: Box<dyn WorkerNetwork>) -> WorkerHandle {
-        Self::spawn_with_storage(config, network, None)
+        Self::spawn_with_all(config, network, None, None)
     }
 
     /// Spawn a new Worker task with optional persistent storage
@@ -181,6 +198,22 @@ impl Worker {
         config: WorkerConfig,
         network: Box<dyn WorkerNetwork>,
         storage: Option<Arc<dyn BatchStore>>,
+    ) -> WorkerHandle {
+        Self::spawn_with_all(config, network, storage, None)
+    }
+
+    /// Spawn a new Worker task with all optional features
+    ///
+    /// # Arguments
+    /// * `config` - Worker configuration
+    /// * `network` - Network interface for peer communication
+    /// * `storage` - Optional persistent batch storage
+    /// * `validator` - Optional transaction validator for CheckTx
+    pub fn spawn_with_all(
+        config: WorkerConfig,
+        network: Box<dyn WorkerNetwork>,
+        storage: Option<Arc<dyn BatchStore>>,
+        validator: Option<Arc<dyn TransactionValidator>>,
     ) -> WorkerHandle {
         let (to_primary_tx, to_primary_rx) = mpsc::channel(1024);
         let (from_primary_tx, from_primary_rx) = mpsc::channel(256);
@@ -198,6 +231,7 @@ impl Worker {
                 Some(peer_receiver),
                 network,
                 storage,
+                validator,
             );
             worker.run().await;
         });
@@ -228,6 +262,7 @@ impl Worker {
             None,
             network,
             None,
+            None,
         )
     }
 
@@ -248,10 +283,12 @@ impl Worker {
             None,
             network,
             storage,
+            None,
         )
     }
 
     /// Internal constructor with all options
+    #[allow(clippy::too_many_arguments)]
     fn new_internal(
         config: WorkerConfig,
         to_primary: mpsc::Sender<WorkerToPrimary>,
@@ -260,6 +297,7 @@ impl Worker {
         peer_receiver: Option<mpsc::Receiver<(ValidatorId, WorkerMessage)>>,
         network: Box<dyn WorkerNetwork>,
         storage: Option<Arc<dyn BatchStore>>,
+        validator: Option<Arc<dyn TransactionValidator>>,
     ) -> Self {
         let state = WorkerState::new(config.validator_id, config.worker_id);
         let batch_maker = BatchMaker::new(
@@ -283,6 +321,7 @@ impl Worker {
             peer_receiver,
             network,
             storage,
+            validator,
             shutdown: false,
         }
     }
@@ -363,6 +402,26 @@ impl Worker {
             tx_size = tx.len(),
             "Received transaction"
         );
+
+        // Validate transaction if validator is available (CheckTx)
+        if let Some(ref validator) = self.validator {
+            match validator.validate_transaction(&tx).await {
+                Ok(()) => {
+                    trace!(
+                        worker_id = self.config.worker_id,
+                        "Transaction validation passed"
+                    );
+                }
+                Err(e) => {
+                    debug!(
+                        worker_id = self.config.worker_id,
+                        error = %e,
+                        "Transaction validation failed, rejecting"
+                    );
+                    return; // Reject invalid transaction
+                }
+            }
+        }
 
         // Add to batch maker
         if let Some(batch) = self.batch_maker.add_transaction(tx) {

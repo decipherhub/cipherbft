@@ -8,7 +8,11 @@ all-features = true
 [advisories]
 version = 2
 db-path = "~/.cargo/advisory-db"
-ignore = []
+ignore = [
+    # paste crate unmaintained - transitive dependency from alloy-primitives 1.x
+    # Used as proc-macro only, not a runtime security concern
+    "RUSTSEC-2024-0436",
+]
 
 [licenses]
 version = 2
