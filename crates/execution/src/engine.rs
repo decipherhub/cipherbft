@@ -138,7 +138,7 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
         );
 
         let database = CipherBftDatabase::new(provider.clone());
-        let state_manager = StateManager::new(provider, Some(chain_config.state_root_interval));
+        let state_manager = StateManager::new(provider);
 
         // Create staking precompile instance (shared across all EVM instances)
         let staking_precompile = Arc::new(StakingPrecompile::new());

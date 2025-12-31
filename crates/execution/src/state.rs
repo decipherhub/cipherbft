@@ -41,9 +41,6 @@ pub struct StateManager<P: Provider> {
     /// Last block number where state root was computed.
     last_checkpoint_block: Arc<RwLock<u64>>,
 
-    /// Interval for state root computation (e.g., every 100 blocks).
-    state_root_interval: u64,
-
     /// Snapshots for rollback (block_number -> snapshot).
     ///
     /// Stores recent snapshots to enable efficient rollback without
@@ -63,13 +60,16 @@ impl<P: Provider> StateManager<P> {
     /// # Arguments
     ///
     /// * `provider` - Storage provider for reading/writing state
-    /// * `state_root_interval` - Blocks between state root computations (default: 100)
-    pub fn new(provider: P, state_root_interval: Option<u64>) -> Self {
+    ///
+    /// # Note
+    ///
+    /// State root computation interval is fixed at `STATE_ROOT_SNAPSHOT_INTERVAL` (100 blocks)
+    /// and cannot be changed. This ensures consensus across all validators.
+    pub fn new(provider: P) -> Self {
         Self {
             provider: Arc::new(provider),
             current_state_root: Arc::new(RwLock::new(B256::ZERO)),
             last_checkpoint_block: Arc::new(RwLock::new(0)),
-            state_root_interval: state_root_interval.unwrap_or(STATE_ROOT_SNAPSHOT_INTERVAL),
             snapshots: Arc::new(RwLock::new(BTreeMap::new())),
             max_snapshots: 100, // Keep last 10,000 blocks worth (100 snapshots * 100 blocks)
             state_root_cache: Arc::new(RwLock::new(lru::LruCache::new(
@@ -80,10 +80,12 @@ impl<P: Provider> StateManager<P> {
 
     /// Determine if state root should be computed for this block.
     ///
-    /// State roots are computed at regular intervals (e.g., every 100 blocks)
+    /// State roots are computed at regular intervals (every 100 blocks)
     /// to balance performance with state commitment.
+    ///
+    /// This interval is a consensus-critical constant and cannot be changed.
     pub fn should_compute_state_root(&self, block_number: u64) -> bool {
-        block_number > 0 && block_number % self.state_root_interval == 0
+        block_number > 0 && block_number % STATE_ROOT_SNAPSHOT_INTERVAL == 0
     }
 
     /// Compute state root for the current state (expensive operation).
@@ -100,7 +102,7 @@ impl<P: Provider> StateManager<P> {
         tracing::debug!(
             block_number,
             "Computing state root (checkpoint interval: {})",
-            self.state_root_interval
+            STATE_ROOT_SNAPSHOT_INTERVAL
         );
 
         // Collect all accounts from provider
@@ -299,11 +301,6 @@ impl<P: Provider> StateManager<P> {
         *self.last_checkpoint_block.read()
     }
 
-    /// Get the state root interval.
-    pub fn state_root_interval(&self) -> u64 {
-        self.state_root_interval
-    }
-
     /// Get snapshot count (for monitoring).
     pub fn snapshot_count(&self) -> usize {
         self.snapshots.read().len()
@@ -318,7 +315,7 @@ mod tests {
     #[test]
     fn test_should_compute_state_root() {
         let provider = InMemoryProvider::new();
-        let state_manager = StateManager::new(provider, Some(100));
+        let state_manager = StateManager::new(provider);
 
         assert!(!state_manager.should_compute_state_root(0));
         assert!(!state_manager.should_compute_state_root(50));
@@ -331,7 +328,7 @@ mod tests {
     #[test]
     fn test_compute_and_get_state_root() {
         let provider = InMemoryProvider::new();
-        let state_manager = StateManager::new(provider, Some(100));
+        let state_manager = StateManager::new(provider);
 
         // Compute state root at block 100
         let root = state_manager.compute_state_root(100).unwrap();
@@ -351,7 +348,7 @@ mod tests {
     #[test]
     fn test_state_root_caching() {
         let provider = InMemoryProvider::new();
-        let state_manager = StateManager::new(provider, Some(100));
+        let state_manager = StateManager::new(provider);
 
         // Compute state root
         let root = state_manager.compute_state_root(100).unwrap();
@@ -369,7 +366,7 @@ mod tests {
     #[test]
     fn test_snapshot_storage_and_retrieval() {
         let provider = InMemoryProvider::new();
-        let state_manager = StateManager::new(provider, Some(100));
+        let state_manager = StateManager::new(provider);
 
         // Create snapshots at multiple checkpoints
         let root1 = state_manager.compute_state_root(100).unwrap();
@@ -388,7 +385,7 @@ mod tests {
     #[test]
     fn test_find_snapshot_for_rollback() {
         let provider = InMemoryProvider::new();
-        let state_manager = StateManager::new(provider, Some(100));
+        let state_manager = StateManager::new(provider);
 
         // Create snapshots
         let root1 = state_manager.compute_state_root(100).unwrap();
@@ -417,7 +414,7 @@ mod tests {
     #[test]
     fn test_rollback_to_exact_snapshot() {
         let provider = InMemoryProvider::new();
-        let state_manager = StateManager::new(provider, Some(100));
+        let state_manager = StateManager::new(provider);
 
         // Create snapshots
         let root1 = state_manager.compute_state_root(100).unwrap();
@@ -441,7 +438,7 @@ mod tests {
     #[test]
     fn test_rollback_no_snapshot() {
         let provider = InMemoryProvider::new();
-        let state_manager = StateManager::new(provider, Some(100));
+        let state_manager = StateManager::new(provider);
 
         // Try to rollback with no snapshots
         let result = state_manager.rollback_to(50);
@@ -455,12 +452,12 @@ mod tests {
     #[test]
     fn test_snapshot_pruning() {
         let provider = InMemoryProvider::new();
-        let mut state_manager = StateManager::new(provider, Some(10));
+        let mut state_manager = StateManager::new(provider);
         state_manager.max_snapshots = 5; // Set low limit for testing
 
-        // Create more snapshots than max
+        // Create snapshots at multiples of STATE_ROOT_SNAPSHOT_INTERVAL
         for i in 1..=10 {
-            state_manager.compute_state_root(i * 10).unwrap();
+            state_manager.compute_state_root(i * STATE_ROOT_SNAPSHOT_INTERVAL).unwrap();
         }
 
         // Should be pruned to max_snapshots
@@ -468,35 +465,35 @@ mod tests {
 
         // Should keep the most recent ones in snapshots
         let snapshots = state_manager.snapshots.read();
-        assert!(snapshots.contains_key(&100));
-        assert!(snapshots.contains_key(&90));
-        assert!(snapshots.contains_key(&80));
-        assert!(snapshots.contains_key(&70));
-        assert!(snapshots.contains_key(&60));
+        assert!(snapshots.contains_key(&1000));
+        assert!(snapshots.contains_key(&900));
+        assert!(snapshots.contains_key(&800));
+        assert!(snapshots.contains_key(&700));
+        assert!(snapshots.contains_key(&600));
 
         // Older ones should be pruned from snapshots
-        assert!(!snapshots.contains_key(&50));
-        assert!(!snapshots.contains_key(&10));
+        assert!(!snapshots.contains_key(&500));
+        assert!(!snapshots.contains_key(&100));
     }
 
     #[test]
-    fn test_state_root_interval() {
+    fn test_state_root_interval_constant() {
+        // Verify the consensus-critical constant
+        assert_eq!(STATE_ROOT_SNAPSHOT_INTERVAL, 100);
+
+        // Verify StateManager uses the constant
         let provider = InMemoryProvider::new();
-
-        // Test default interval
-        let sm1 = StateManager::new(provider.clone(), None);
-        assert_eq!(sm1.state_root_interval(), STATE_ROOT_SNAPSHOT_INTERVAL);
-        assert_eq!(sm1.state_root_interval(), 100);
-
-        // Test custom interval
-        let sm2 = StateManager::new(provider, Some(50));
-        assert_eq!(sm2.state_root_interval(), 50);
+        let sm = StateManager::new(provider);
+        assert!(sm.should_compute_state_root(100));
+        assert!(sm.should_compute_state_root(200));
+        assert!(!sm.should_compute_state_root(50));
+        assert!(!sm.should_compute_state_root(150));
     }
 
     #[test]
     fn test_last_checkpoint_block() {
         let provider = InMemoryProvider::new();
-        let state_manager = StateManager::new(provider, Some(100));
+        let state_manager = StateManager::new(provider);
 
         // Initially 0
         assert_eq!(state_manager.last_checkpoint_block(), 0);
@@ -512,7 +509,7 @@ mod tests {
     #[test]
     fn test_commit() {
         let provider = InMemoryProvider::new();
-        let state_manager = StateManager::new(provider, Some(100));
+        let state_manager = StateManager::new(provider);
 
         // Commit should succeed (even though it's a no-op with InMemoryProvider)
         assert!(state_manager.commit().is_ok());
@@ -528,8 +525,8 @@ mod tests {
             let provider1 = InMemoryProvider::new();
             let provider2 = InMemoryProvider::new();
 
-            let sm1 = StateManager::new(provider1, Some(100));
-            let sm2 = StateManager::new(provider2, Some(100));
+            let sm1 = StateManager::new(provider1);
+            let sm2 = StateManager::new(provider2);
 
             // Compute state roots at same block number
             let root1 = sm1.compute_state_root(block_number).unwrap();
@@ -547,7 +544,7 @@ mod tests {
         let roots: Vec<B256> = (0..10)
             .map(|_| {
                 let p = InMemoryProvider::new();
-                let sm = StateManager::new(p, Some(100));
+                let sm = StateManager::new(p);
                 sm.compute_state_root(100).unwrap()
             })
             .collect();
@@ -570,8 +567,8 @@ mod tests {
         let provider1 = InMemoryProvider::new();
         let provider2 = InMemoryProvider::new();
 
-        let sm1 = StateManager::new(provider1, Some(100));
-        let sm2 = StateManager::new(provider2, Some(100));
+        let sm1 = StateManager::new(provider1);
+        let sm2 = StateManager::new(provider2);
 
         // Compute state roots at different checkpoint blocks
         let root_100 = sm1.compute_state_root(100).unwrap();
@@ -588,8 +585,8 @@ mod tests {
         let provider1 = InMemoryProvider::new();
         let provider2 = InMemoryProvider::new();
 
-        let sm1 = StateManager::new(provider1, Some(100));
-        let sm2 = StateManager::new(provider2, Some(100));
+        let sm1 = StateManager::new(provider1);
+        let sm2 = StateManager::new(provider2);
 
         // Compute in different order
         // sm1: compute at 100, then 200

@@ -30,11 +30,6 @@ pub struct ChainConfig {
     /// Block gas limit (default: 30M).
     pub block_gas_limit: u64,
 
-    /// State root computation interval in blocks (default: 100).
-    ///
-    /// Must be agreed by all validators via network-wide consensus parameter.
-    pub state_root_interval: u64,
-
     /// Minimum stake amount in wei for validators (default: 1 ETH = 1e18 wei).
     pub staking_min_stake: U256,
 
@@ -50,7 +45,6 @@ impl Default for ChainConfig {
         Self {
             chain_id: 31337,
             block_gas_limit: 30_000_000,
-            state_root_interval: STATE_ROOT_SNAPSHOT_INTERVAL,
             staking_min_stake: U256::from(1_000_000_000_000_000_000u64), // 1 ETH
             staking_unbonding_period: 259_200,                           // 3 days
             base_fee_per_gas: 1_000_000_000,                             // 1 gwei
