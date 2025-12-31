@@ -457,7 +457,9 @@ mod tests {
 
         // Create snapshots at multiples of STATE_ROOT_SNAPSHOT_INTERVAL
         for i in 1..=10 {
-            state_manager.compute_state_root(i * STATE_ROOT_SNAPSHOT_INTERVAL).unwrap();
+            state_manager
+                .compute_state_root(i * STATE_ROOT_SNAPSHOT_INTERVAL)
+                .unwrap();
         }
 
         // Should be pruned to max_snapshots
