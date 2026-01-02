@@ -856,46 +856,183 @@ impl DclStore for MdbxDclStore {
     // ============================================================
 
     async fn prune_before(&self, height: u64) -> Result<u64> {
-        use super::tables::FinalizedCuts;
+        use super::tables::{
+            Attestations, Batches, Cars, CarsByHash, FinalizedCuts, HashKey, HeightKey,
+        };
         use reth_db_api::cursor::{DbCursorRO, DbCursorRW};
         use reth_db_api::transaction::DbTxMut;
+        use std::collections::HashSet;
 
-        trace!(height, "Pruning before height");
+        trace!(height, "Pruning before height with reference tracking");
 
+        // Phase 1: Collect all referenced Car hashes and Batch hashes from retained Cuts
+        let mut retained_car_hashes: HashSet<[u8; 32]> = HashSet::new();
+        let mut retained_batch_hashes: HashSet<[u8; 32]> = HashSet::new();
+
+        {
+            let tx = self.db.tx()?;
+            let mut cursor = tx
+                .cursor_read::<FinalizedCuts>()
+                .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
+
+            // Seek to the threshold height
+            let mut current = cursor
+                .seek(HeightKey::new(height))
+                .map_err(|e| StorageError::Database(format!("Cursor seek failed: {e}")))?;
+
+            // Collect all references from retained Cuts (height >= threshold)
+            while let Some((_, value)) = current {
+                for car_entry in &value.0.cars {
+                    retained_car_hashes.insert(car_entry.car.hash);
+                    for batch_digest in &car_entry.car.batch_digests {
+                        retained_batch_hashes.insert(batch_digest.hash);
+                    }
+                }
+                current = cursor
+                    .next()
+                    .map_err(|e| StorageError::Database(format!("Cursor next failed: {e}")))?;
+            }
+        }
+
+        debug!(
+            retained_cars = retained_car_hashes.len(),
+            retained_batches = retained_batch_hashes.len(),
+            "Collected retained references"
+        );
+
+        // Phase 2: Collect Car hashes and Batch hashes to prune from Cuts below threshold
+        let mut car_hashes_to_prune: HashSet<[u8; 32]> = HashSet::new();
+        let mut batch_hashes_to_prune: HashSet<[u8; 32]> = HashSet::new();
+        let mut car_keys_to_delete: Vec<CarTableKey> = Vec::new();
+
+        {
+            let tx = self.db.tx()?;
+            let mut cursor = tx
+                .cursor_read::<FinalizedCuts>()
+                .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
+
+            let mut current = cursor
+                .first()
+                .map_err(|e| StorageError::Database(format!("Cursor first failed: {e}")))?;
+
+            while let Some((key, value)) = current {
+                if key.0 >= height {
+                    break;
+                }
+
+                for car_entry in &value.0.cars {
+                    let car_hash = car_entry.car.hash;
+
+                    // Only prune if not retained by any higher Cut
+                    if !retained_car_hashes.contains(&car_hash) {
+                        car_hashes_to_prune.insert(car_hash);
+
+                        // Build car key for deletion
+                        let validator_bytes = &car_entry.validator;
+                        if validator_bytes.len() >= 20 {
+                            let mut validator_prefix = [0u8; 20];
+                            validator_prefix.copy_from_slice(&validator_bytes[..20]);
+                            car_keys_to_delete.push(CarTableKey {
+                                validator_prefix,
+                                position: car_entry.car.position,
+                            });
+                        }
+
+                        // Collect batch hashes for pruning
+                        for batch_digest in &car_entry.car.batch_digests {
+                            if !retained_batch_hashes.contains(&batch_digest.hash) {
+                                batch_hashes_to_prune.insert(batch_digest.hash);
+                            }
+                        }
+                    }
+                }
+
+                current = cursor
+                    .next()
+                    .map_err(|e| StorageError::Database(format!("Cursor next failed: {e}")))?;
+            }
+        }
+
+        debug!(
+            cars_to_prune = car_hashes_to_prune.len(),
+            batches_to_prune = batch_hashes_to_prune.len(),
+            "Collected items to prune"
+        );
+
+        // Phase 3: Perform deletions in a single transaction
         let tx = self.db.tx_mut()?;
-        let mut cursor = tx
-            .cursor_write::<FinalizedCuts>()
-            .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
-
         let mut pruned_count = 0u64;
 
-        // Start from the beginning
-        let mut current = cursor
-            .first()
-            .map_err(|e| StorageError::Database(format!("Cursor first failed: {e}")))?;
+        // 3a: Delete FinalizedCuts below threshold
+        {
+            let mut cursor = tx
+                .cursor_write::<FinalizedCuts>()
+                .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
 
-        while let Some((key, _)) = current {
-            // Stop if we've reached or passed the height threshold
-            if key.0 >= height {
-                break;
+            let mut current = cursor
+                .first()
+                .map_err(|e| StorageError::Database(format!("Cursor first failed: {e}")))?;
+
+            while let Some((key, _)) = current {
+                if key.0 >= height {
+                    break;
+                }
+
+                cursor
+                    .delete_current()
+                    .map_err(|e| StorageError::Database(format!("Failed to delete cut: {e}")))?;
+                pruned_count += 1;
+
+                current = cursor
+                    .next()
+                    .map_err(|e| StorageError::Database(format!("Cursor next failed: {e}")))?;
             }
+        }
 
-            // Delete current entry
-            cursor
-                .delete_current()
-                .map_err(|e| StorageError::Database(format!("Failed to delete: {e}")))?;
+        // 3b: Delete Cars and their CarsByHash index entries
+        for car_key in &car_keys_to_delete {
+            // Delete from Cars table
+            tx.delete::<Cars>(*car_key, None)
+                .map_err(|e| StorageError::Database(format!("Failed to delete car: {e}")))?;
             pruned_count += 1;
+        }
 
-            // Move to next
-            current = cursor
-                .next()
-                .map_err(|e| StorageError::Database(format!("Cursor next failed: {e}")))?;
+        for car_hash in &car_hashes_to_prune {
+            // Delete from CarsByHash index
+            tx.delete::<CarsByHash>(HashKey(*car_hash), None)
+                .map_err(|e| {
+                    StorageError::Database(format!("Failed to delete car hash index: {e}"))
+                })?;
+        }
+
+        // 3c: Delete Attestations for pruned Cars
+        for car_hash in &car_hashes_to_prune {
+            tx.delete::<Attestations>(HashKey(*car_hash), None)
+                .map_err(|e| {
+                    StorageError::Database(format!("Failed to delete attestation: {e}"))
+                })?;
+            pruned_count += 1;
+        }
+
+        // 3d: Delete unreferenced Batches
+        for batch_hash in &batch_hashes_to_prune {
+            tx.delete::<Batches>(HashKey(*batch_hash), None)
+                .map_err(|e| StorageError::Database(format!("Failed to delete batch: {e}")))?;
+            pruned_count += 1;
         }
 
         tx.commit()
             .map_err(|e| StorageError::Database(format!("Failed to commit prune: {e}")))?;
 
-        debug!(height, pruned_count, "Pruning completed");
+        debug!(
+            height,
+            pruned_count,
+            cuts_pruned = car_keys_to_delete.len(),
+            cars_pruned = car_hashes_to_prune.len(),
+            attestations_pruned = car_hashes_to_prune.len(),
+            batches_pruned = batch_hashes_to_prune.len(),
+            "Pruning completed with reference tracking"
+        );
         Ok(pruned_count)
     }
 
@@ -1005,6 +1142,172 @@ impl DclStore for MdbxDclStore {
             finalized_cut_count,
             storage_bytes,
         })
+    }
+}
+
+// ============================================================
+// Transaction Support
+// ============================================================
+
+use crate::dcl::{DclStoreExt, DclStoreTx};
+use reth_db::DatabaseEnv;
+use reth_db_api::transaction::DbTxMut;
+
+type MdbxTx = <DatabaseEnv as reth_db_api::database::Database>::TXMut;
+
+/// MDBX transaction wrapper for atomic batch operations
+pub struct MdbxDclStoreTx {
+    /// The underlying MDBX write transaction
+    tx: Option<MdbxTx>,
+}
+
+impl MdbxDclStoreTx {
+    /// Create a new transaction wrapper
+    fn new(tx: MdbxTx) -> Self {
+        Self { tx: Some(tx) }
+    }
+
+    /// Get a mutable reference to the transaction
+    fn tx_mut(&mut self) -> Result<&mut MdbxTx> {
+        self.tx
+            .as_mut()
+            .ok_or_else(|| StorageError::Database("Transaction already consumed".into()))
+    }
+
+    /// Take ownership of the transaction
+    fn take_tx(&mut self) -> Result<MdbxTx> {
+        self.tx
+            .take()
+            .ok_or_else(|| StorageError::Database("Transaction already consumed".into()))
+    }
+}
+
+#[async_trait]
+impl DclStoreTx for MdbxDclStoreTx {
+    async fn commit(mut self) -> Result<()> {
+        let tx = self.take_tx()?;
+        tx.commit()
+            .map_err(|e| StorageError::Database(format!("Failed to commit transaction: {e}")))?;
+        debug!("Transaction committed");
+        Ok(())
+    }
+
+    async fn abort(mut self) -> Result<()> {
+        let tx = self.take_tx()?;
+        tx.abort();
+        debug!("Transaction aborted");
+        Ok(())
+    }
+
+    async fn put_batch(&mut self, batch: Batch) -> Result<()> {
+        use super::tables::{Batches, BincodeValue};
+
+        let hash = batch.hash();
+        let stored = MdbxDclStore::batch_to_stored(&batch);
+        let key = HashKey::from_slice(hash.as_bytes());
+
+        let tx = self.tx_mut()?;
+        tx.put::<Batches>(key, BincodeValue(stored))
+            .map_err(|e| StorageError::Database(format!("Failed to put batch: {e}")))?;
+
+        trace!(?hash, "Batch added to transaction");
+        Ok(())
+    }
+
+    async fn put_car(&mut self, car: Car) -> Result<()> {
+        use super::tables::{BincodeValue, Cars, CarsByHash};
+
+        let hash = car.hash();
+        let key = CarTableKey::new(car.proposer.as_bytes(), car.position);
+        let stored = MdbxDclStore::car_to_stored(&car);
+        let hash_key = HashKey::from_slice(hash.as_bytes());
+
+        let tx = self.tx_mut()?;
+        tx.put::<Cars>(key, BincodeValue(stored))
+            .map_err(|e| StorageError::Database(format!("Failed to put car: {e}")))?;
+        tx.put::<CarsByHash>(hash_key, key)
+            .map_err(|e| StorageError::Database(format!("Failed to put car index: {e}")))?;
+
+        trace!(?hash, "Car added to transaction");
+        Ok(())
+    }
+
+    async fn put_attestation(&mut self, attestation: AggregatedAttestation) -> Result<()> {
+        use super::tables::{Attestations, BincodeValue};
+
+        let key = HashKey::from_slice(attestation.car_hash.as_bytes());
+        let stored = MdbxDclStore::attestation_to_stored(&attestation);
+
+        let tx = self.tx_mut()?;
+        tx.put::<Attestations>(key, BincodeValue(stored))
+            .map_err(|e| StorageError::Database(format!("Failed to put attestation: {e}")))?;
+
+        trace!(car_hash = ?attestation.car_hash, "Attestation added to transaction");
+        Ok(())
+    }
+
+    async fn put_pending_cut(&mut self, cut: Cut) -> Result<()> {
+        use super::tables::{BincodeValue, HeightKey, PendingCuts};
+
+        let stored = MdbxDclStore::cut_to_stored(&cut);
+        let key = HeightKey::new(cut.height);
+
+        let tx = self.tx_mut()?;
+        tx.put::<PendingCuts>(key, BincodeValue(stored))
+            .map_err(|e| StorageError::Database(format!("Failed to put pending cut: {e}")))?;
+
+        trace!(height = cut.height, "Pending cut added to transaction");
+        Ok(())
+    }
+
+    async fn finalize_cut(&mut self, height: u64) -> Result<Option<Cut>> {
+        use super::tables::{FinalizedCuts, HeightKey, PendingCuts};
+
+        let key = HeightKey::new(height);
+        let tx = self.tx_mut()?;
+
+        // Get the pending cut
+        let pending = tx
+            .get::<PendingCuts>(key)
+            .map_err(|e| StorageError::Database(format!("Failed to get pending cut: {e}")))?;
+
+        match pending {
+            Some(bincode_value) => {
+                // Delete from pending
+                tx.delete::<PendingCuts>(key, None).map_err(|e| {
+                    StorageError::Database(format!("Failed to delete pending cut: {e}"))
+                })?;
+
+                // Insert into finalized
+                tx.put::<FinalizedCuts>(key, bincode_value.clone())
+                    .map_err(|e| {
+                        StorageError::Database(format!("Failed to put finalized cut: {e}"))
+                    })?;
+
+                let cut = MdbxDclStore::stored_to_cut(bincode_value.0)?;
+                trace!(height, "Cut finalized in transaction");
+                Ok(Some(cut))
+            }
+            None => Ok(None),
+        }
+    }
+}
+
+#[async_trait]
+impl DclStoreExt for MdbxDclStore {
+    type Transaction = MdbxDclStoreTx;
+
+    async fn begin_tx(&self) -> Result<Self::Transaction> {
+        use reth_db_api::database::Database as DbTrait;
+
+        let tx = self
+            .db
+            .env()
+            .tx_mut()
+            .map_err(|e| StorageError::Database(format!("Failed to begin transaction: {e}")))?;
+
+        debug!("Transaction started");
+        Ok(MdbxDclStoreTx::new(tx))
     }
 }
 

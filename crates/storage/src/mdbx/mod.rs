@@ -23,7 +23,7 @@ mod tables;
 mod wal;
 
 pub use database::{Database, DatabaseConfig, DatabaseEnv};
-pub use provider::MdbxDclStore;
+pub use provider::{MdbxDclStore, MdbxDclStoreTx};
 pub use tables::{
     // Table types
     Attestations,

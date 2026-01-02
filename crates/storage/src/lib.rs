@@ -53,6 +53,7 @@
 pub mod dcl;
 pub mod error;
 pub mod memory;
+pub mod pruning;
 pub mod tables;
 pub mod wal;
 
@@ -63,6 +64,7 @@ pub mod mdbx;
 pub use dcl::DclStore;
 pub use error::StorageError;
 pub use memory::InMemoryStore;
+pub use pruning::{PruningConfig, PruningHandle, PruningTask};
 pub use wal::{Wal, WalEntry};
 
 // Re-export MDBX types when feature is enabled

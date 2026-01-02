@@ -140,28 +140,33 @@ All values use `BincodeValue<T>` wrapper which:
   - Finds last checkpoint and replays entries
   - Reconstructs `RecoveredState` with all data types
 
-### Phase 3: Transactions
+### Phase 3: Transactions ✅ COMPLETED
 
-- [ ] **Implement DclStoreTx trait**
-  - Wrap MDBX write transactions
-  - Support atomic batch operations
-  - Implement `commit` and `abort`
+- [x] **Implement DclStoreTx trait**
+  - `MdbxDclStoreTx` wraps MDBX write transactions ✅
+  - Support atomic batch operations with all put methods ✅
+  - Implement `commit()` and `abort()` ✅
+  - `finalize_cut()` atomically moves pending → finalized ✅
 
-- [ ] **Implement DclStoreExt trait**
-  - Factory method `begin_tx()` for creating transactions
+- [x] **Implement DclStoreExt trait**
+  - Factory method `begin_tx()` for creating transactions ✅
+  - Returns `MdbxDclStoreTx` for batch operations
 
-### Phase 4: Garbage Collection
+### Phase 4: Garbage Collection ✅ COMPLETED
 
-- [ ] **Implement prune_before()**
-  - Delete finalized Cuts before threshold height
-  - Delete unreferenced Cars (not in any retained Cut)
-  - Delete unreferenced Attestations
-  - Delete unreferenced Batches
-  - Track and return pruned entry count
+- [x] **Implement prune_before()**
+  - Delete finalized Cuts before threshold height ✅
+  - Delete unreferenced Cars (not in any retained Cut) ✅
+  - Delete unreferenced Attestations ✅
+  - Delete unreferenced Batches ✅
+  - Track and return pruned entry count ✅
+  - Reference tracking: collects retained Car/Batch hashes from Cuts >= threshold
 
-- [ ] **Background pruning task**
-  - Periodic pruning based on `PruningConfig`
-  - Default: retain 100,000 blocks, run every 1,000 blocks
+- [x] **Background pruning task**
+  - `PruningConfig` with configurable retention and interval ✅
+  - `PruningTask` and `PruningHandle` for control ✅
+  - Default: retain 100,000 blocks, run every 1,000 blocks ✅
+  - `spawn_pruning_task()` and `spawn_pruning_task_with_config()` helpers ✅
 
 ### Phase 5: Testing and Integration
 
