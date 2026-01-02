@@ -40,14 +40,19 @@
 
 use crate::config::MempoolConfig;
 use crate::error::MempoolError;
+use crate::validator::CipherBftValidator;
 use alloy_eips::eip2718::Decodable2718;
 use alloy_primitives::{Bytes, TxHash};
 use reth_primitives::{
     PooledTransactionsElement, PooledTransactionsElementEcRecovered, TransactionSigned,
     TransactionSignedEcRecovered, TransactionSignedNoHash,
 };
-use reth_storage_api::{StateProvider, StateProviderBox};
-use reth_transaction_pool::{PoolTransaction, TransactionOrigin, TransactionPool};
+use reth_storage_api::{StateProvider, StateProviderBox, StateProviderFactory};
+use reth_transaction_pool::{
+    blobstore::BlobStore, validate::EthTransactionValidator, CoinbaseTipOrdering,
+    EthPooledTransaction, Pool, PoolTransaction, TransactionOrigin, TransactionPool,
+};
+use std::sync::Arc;
 use tracing::{debug, warn};
 
 /// Mempool wrapper that adds BFT-specific pre-validation to Reth's Pool
@@ -67,6 +72,13 @@ pub struct CipherBftPool<P: TransactionPool> {
     state_provider: StateProviderBox,
 }
 
+/// Concrete Reth pool type used by CipherBFT.
+pub type CipherBftRethPool<Client, S> = Pool<
+    CipherBftValidator<EthTransactionValidator<Client, EthPooledTransaction>>,
+    CoinbaseTipOrdering<EthPooledTransaction>,
+    S,
+>;
+
 impl<P: TransactionPool> CipherBftPool<P> {
     /// Create new mempool wrapper
     ///
@@ -80,9 +92,9 @@ impl<P: TransactionPool> CipherBftPool<P> {
     ///     config.to_reth_config(),
     /// );
     /// // Mempool lives in DCL, uses EL's StateProvider for validation
-    /// CipherBftPool::new(reth_pool, config, state_provider)
+    /// CipherBftPool::wrap(reth_pool, config, state_provider)
     /// ```
-    pub fn new(pool: P, config: MempoolConfig, state_provider: StateProviderBox) -> Self {
+    pub fn wrap(pool: P, config: MempoolConfig, state_provider: StateProviderBox) -> Self {
         Self {
             pool,
             config,
@@ -184,6 +196,29 @@ impl<P: TransactionPool> CipherBftPool<P> {
         }
 
         Ok(())
+    }
+}
+
+impl<Client, S> CipherBftPool<CipherBftRethPool<Client, S>>
+where
+    Client: StateProviderFactory,
+    S: BlobStore + Clone,
+{
+    /// Create a CipherBFT mempool that builds the underlying Reth pool internally.
+    pub fn new(
+        chain_spec: Arc<reth_chainspec::ChainSpec>,
+        client: Client,
+        blob_store: S,
+        chain_id: u64,
+        config: MempoolConfig,
+    ) -> Result<Self, MempoolError> {
+        let state_provider = client
+            .latest()
+            .map_err(|err| MempoolError::Internal(format!("Failed to get state provider: {err}")))?;
+        let validator = CipherBftValidator::new(chain_spec, client, blob_store.clone(), chain_id);
+        let pool_config: reth_transaction_pool::PoolConfig = config.clone().into();
+        let pool = Pool::new(validator, CoinbaseTipOrdering::default(), blob_store, pool_config);
+        Ok(Self::wrap(pool, config, state_provider))
     }
 }
 

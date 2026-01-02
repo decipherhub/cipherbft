@@ -26,7 +26,7 @@ fn recovered_tx(
 async fn test_transaction_insertion_and_retrieval() {
     let pool: reth_transaction_pool::test_utils::TestPool = TestPoolBuilder::default().into();
     let mempool: CipherBftPool<reth_transaction_pool::test_utils::TestPool> =
-        CipherBftPool::new(pool, MempoolConfig::default(), noop_state_provider());
+        CipherBftPool::wrap(pool, MempoolConfig::default(), noop_state_provider());
 
     let tx = recovered_tx(
         address!("1000000000000000000000000000000000000001"),
@@ -49,7 +49,7 @@ async fn test_transaction_insertion_and_retrieval() {
 async fn test_priority_ordering_by_gas_price() {
     let pool: reth_transaction_pool::test_utils::TestPool = TestPoolBuilder::default().into();
     let mempool: CipherBftPool<reth_transaction_pool::test_utils::TestPool> =
-        CipherBftPool::new(pool, MempoolConfig::default(), noop_state_provider());
+        CipherBftPool::wrap(pool, MempoolConfig::default(), noop_state_provider());
 
     let low = recovered_tx(
         address!("1000000000000000000000000000000000000002"),
@@ -83,7 +83,7 @@ async fn test_priority_ordering_by_gas_price() {
 async fn test_replacement_logic() {
     let pool: reth_transaction_pool::test_utils::TestPool = TestPoolBuilder::default().into();
     let mempool: CipherBftPool<reth_transaction_pool::test_utils::TestPool> =
-        CipherBftPool::new(pool, MempoolConfig::default(), noop_state_provider());
+        CipherBftPool::wrap(pool, MempoolConfig::default(), noop_state_provider());
 
     let sender = address!("1000000000000000000000000000000000000004");
     let low = recovered_tx(sender, 0, 1_000_000_000);
@@ -108,7 +108,7 @@ async fn test_replacement_logic() {
 async fn test_pending_queued_promotion() {
     let pool: reth_transaction_pool::test_utils::TestPool = TestPoolBuilder::default().into();
     let mempool: CipherBftPool<reth_transaction_pool::test_utils::TestPool> =
-        CipherBftPool::new(pool, MempoolConfig::default(), noop_state_provider());
+        CipherBftPool::wrap(pool, MempoolConfig::default(), noop_state_provider());
 
     let sender = address!("1000000000000000000000000000000000000005");
     let nonce_one = recovered_tx(sender, 1, 2_000_000_000);
@@ -143,7 +143,7 @@ async fn test_eviction_under_pressure() {
     let pool: reth_transaction_pool::test_utils::TestPool =
         TestPoolBuilder::default().with_config(config).into();
     let mempool: CipherBftPool<reth_transaction_pool::test_utils::TestPool> =
-        CipherBftPool::new(pool, MempoolConfig::default(), noop_state_provider());
+        CipherBftPool::wrap(pool, MempoolConfig::default(), noop_state_provider());
 
     let low = recovered_tx(
         address!("1000000000000000000000000000000000000010"),
