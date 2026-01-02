@@ -38,3 +38,5 @@ criterion/
 
 # Testnet data
 testnet/
+
+.serena

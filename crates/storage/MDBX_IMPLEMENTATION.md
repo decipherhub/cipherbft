@@ -25,11 +25,14 @@ crates/storage/src/mdbx/
 |-----------|--------|-------------|
 | `DatabaseConfig` | Done | Configuration for DB path, size limits, read-only mode |
 | `Database` | Done | Wrapper around reth-db MDBX environment |
-| `MdbxDclStore` | Skeleton | DclStore trait implementation with conversion helpers |
+| `MdbxDclStore` | **Done** | Full DclStore trait implementation with MDBX operations |
 | `MdbxWal` | Skeleton | Wal trait implementation for crash recovery |
 | Table Key Types | Done | `CarTableKey`, `HeightRoundKey`, `HashKey`, `HeightKey`, `UnitKey` with Encode/Decode |
 | Stored Value Types | Done | `StoredBatch`, `StoredCar`, `StoredCut`, etc. with Serialize/Deserialize |
 | **Table Definitions** | **Done** | All 11 tables defined with reth-db `Table` trait |
+| **CRUD Operations** | **Done** | All put/get/delete/has methods implemented |
+| **Range Queries** | **Done** | Cursor-based range scans for Cars and Cuts |
+| **Secondary Indexes** | **Done** | CarsByHash index maintained on put/delete |
 
 ### Feature Flag
 
@@ -102,23 +105,26 @@ All values use `BincodeValue<T>` wrapper which:
 
 ## TODO
 
-### Phase 1: Core MDBX Operations
+### Phase 1: Core MDBX Operations ✅ COMPLETED
 
 - [x] **Define tables using reth-db Table trait**
   - ~~Use `define_tables!` macro for type-safe table definitions~~
   - Implemented using direct `Table` trait implementation
   - All 11 tables defined: `Batches`, `Cars`, `CarsByHash`, `Attestations`, `PendingCuts`, `FinalizedCuts`, `ConsensusState`, `ConsensusWal`, `ValidatorSets`, `Votes`, `Proposals`
 
-- [ ] **Implement actual MDBX read/write in MdbxDclStore**
-  - Replace skeleton methods with real database operations
-  - Implement `put_*`, `get_*`, `delete_*` for all data types
-  - Maintain secondary index `CarsByHash` for hash lookups
+- [x] **Implement actual MDBX read/write in MdbxDclStore**
+  - All CRUD operations implemented with proper transaction handling
+  - Implemented `put_*`, `get_*`, `delete_*`, `has_*` for all data types
+  - Secondary index `CarsByHash` maintained on put/delete operations
 
-- [ ] **Implement cursor-based queries**
-  - `get_cars_range`: Range scan for Cars by validator
-  - `get_finalized_cuts_range`: Range scan for Cuts by height
-  - `get_highest_car_position`: Reverse scan to find max position
-  - `get_latest_finalized_cut`: Reverse scan for latest Cut
+- [x] **Implement cursor-based queries**
+  - `get_cars_range`: Range scan for Cars by validator ✅
+  - `get_finalized_cuts_range`: Range scan for Cuts by height ✅
+  - `get_highest_car_position`: Reverse scan to find max position ✅
+  - `get_latest_finalized_cut`: Reverse scan for latest Cut ✅
+  - `get_all_pending_cuts`: Full table scan ✅
+  - `prune_before`: Cursor-based deletion with count tracking ✅
+  - `stats`: Table entry counting ✅
 
 ### Phase 2: WAL and Recovery
 

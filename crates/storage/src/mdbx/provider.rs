@@ -9,6 +9,7 @@ use crate::tables::{CarRange, CutRange};
 use async_trait::async_trait;
 use cipherbft_data_chain::{AggregatedAttestation, Batch, BatchDigest, Car, Cut};
 use cipherbft_types::{Hash, ValidatorId};
+use reth_db_api::transaction::DbTx;
 use std::sync::Arc;
 use tracing::{debug, trace};
 
@@ -223,25 +224,45 @@ impl DclStore for MdbxDclStore {
     // ============================================================
 
     async fn put_batch(&self, batch: Batch) -> Result<()> {
+        use reth_db_api::transaction::DbTxMut;
+        use super::tables::{Batches, BincodeValue};
+
         let hash = batch.hash();
-        let _stored = Self::batch_to_stored(&batch);
-        let _key = HashKey::from_slice(hash.as_bytes());
+        let stored = Self::batch_to_stored(&batch);
+        let key = HashKey::from_slice(hash.as_bytes());
 
         trace!(?hash, "Storing batch");
 
-        // TODO: Implement actual MDBX write when tables are fully integrated
-        debug!(?hash, "Batch stored (skeleton)");
+        let tx = self.db.tx_mut()?;
+        tx.put::<Batches>(key, BincodeValue(stored))
+            .map_err(|e| StorageError::Database(format!("Failed to put batch: {e}")))?;
+        tx.commit()
+            .map_err(|e| StorageError::Database(format!("Failed to commit batch: {e}")))?;
 
+        debug!(?hash, "Batch stored");
         Ok(())
     }
 
     async fn get_batch(&self, hash: &Hash) -> Result<Option<Batch>> {
-        let _key = HashKey::from_slice(hash.as_bytes());
+        use reth_db_api::transaction::DbTx;
+        use super::tables::Batches;
+
+        let key = HashKey::from_slice(hash.as_bytes());
 
         trace!(?hash, "Getting batch");
 
-        // TODO: Implement actual MDBX read
-        Ok(None)
+        let tx = self.db.tx()?;
+        let result = tx
+            .get::<Batches>(key)
+            .map_err(|e| StorageError::Database(format!("Failed to get batch: {e}")))?;
+
+        match result {
+            Some(bincode_value) => {
+                let batch = Self::stored_to_batch(bincode_value.0, *hash);
+                Ok(Some(batch))
+            }
+            None => Ok(None),
+        }
     }
 
     async fn has_batch(&self, hash: &Hash) -> Result<bool> {
@@ -249,12 +270,28 @@ impl DclStore for MdbxDclStore {
     }
 
     async fn delete_batch(&self, hash: &Hash) -> Result<bool> {
-        let _key = HashKey::from_slice(hash.as_bytes());
+        use reth_db_api::transaction::DbTxMut;
+        use super::tables::Batches;
+
+        let key = HashKey::from_slice(hash.as_bytes());
 
         trace!(?hash, "Deleting batch");
 
-        // TODO: Implement actual MDBX delete
-        Ok(false)
+        let tx = self.db.tx_mut()?;
+        let existed = tx
+            .get::<Batches>(key)
+            .map_err(|e| StorageError::Database(format!("Failed to check batch: {e}")))?
+            .is_some();
+
+        if existed {
+            tx.delete::<Batches>(key, None)
+                .map_err(|e| StorageError::Database(format!("Failed to delete batch: {e}")))?;
+            tx.commit()
+                .map_err(|e| StorageError::Database(format!("Failed to commit delete: {e}")))?;
+            debug!(?hash, "Batch deleted");
+        }
+
+        Ok(existed)
     }
 
     // ============================================================
@@ -262,49 +299,202 @@ impl DclStore for MdbxDclStore {
     // ============================================================
 
     async fn put_car(&self, car: Car) -> Result<()> {
+        use reth_db_api::transaction::DbTxMut;
+        use super::tables::{Cars, CarsByHash, BincodeValue};
+
         let hash = car.hash();
-        let _key = CarTableKey::new(car.proposer.as_bytes(), car.position);
-        let _stored = Self::car_to_stored(&car);
+        let key = CarTableKey::new(car.proposer.as_bytes(), car.position);
+        let stored = Self::car_to_stored(&car);
+        let hash_key = HashKey::from_slice(hash.as_bytes());
 
         trace!(proposer = ?car.proposer, position = car.position, "Storing car");
 
-        // TODO: Implement actual MDBX write
-        // Also need to update secondary index (CarsByHash)
-        debug!(?hash, "Car stored (skeleton)");
+        let tx = self.db.tx_mut()?;
+        
+        // Store the car
+        tx.put::<Cars>(key, BincodeValue(stored))
+            .map_err(|e| StorageError::Database(format!("Failed to put car: {e}")))?;
+        
+        // Maintain secondary index (CarsByHash)
+        tx.put::<CarsByHash>(hash_key, key)
+            .map_err(|e| StorageError::Database(format!("Failed to put car index: {e}")))?;
+        
+        tx.commit()
+            .map_err(|e| StorageError::Database(format!("Failed to commit car: {e}")))?;
 
+        debug!(?hash, "Car stored");
         Ok(())
     }
 
     async fn get_car(&self, validator: &ValidatorId, position: u64) -> Result<Option<Car>> {
-        let _key = CarTableKey::new(validator.as_bytes(), position);
+        use reth_db_api::transaction::DbTx;
+        use super::tables::Cars;
+
+        let key = CarTableKey::new(validator.as_bytes(), position);
 
         trace!(?validator, position, "Getting car");
 
-        // TODO: Implement actual MDBX read
-        Ok(None)
+        let tx = self.db.tx()?;
+        let result = tx
+            .get::<Cars>(key)
+            .map_err(|e| StorageError::Database(format!("Failed to get car: {e}")))?;
+
+        match result {
+            Some(bincode_value) => {
+                let car = Self::stored_to_car(bincode_value.0)?;
+                Ok(Some(car))
+            }
+            None => Ok(None),
+        }
     }
 
     async fn get_car_by_hash(&self, hash: &Hash) -> Result<Option<Car>> {
-        let _key = HashKey::from_slice(hash.as_bytes());
+        use reth_db_api::transaction::DbTx;
+        use super::tables::{Cars, CarsByHash};
+
+        let hash_key = HashKey::from_slice(hash.as_bytes());
 
         trace!(?hash, "Getting car by hash");
 
-        // TODO: Look up in CarsByHash index, then fetch from Cars
-        Ok(None)
+        let tx = self.db.tx()?;
+        
+        // Look up the car key in the secondary index
+        let car_key = tx
+            .get::<CarsByHash>(hash_key)
+            .map_err(|e| StorageError::Database(format!("Failed to get car index: {e}")))?;
+
+        match car_key {
+            Some(key) => {
+                // Fetch the actual car
+                let result = tx
+                    .get::<Cars>(key)
+                    .map_err(|e| StorageError::Database(format!("Failed to get car: {e}")))?;
+                
+                match result {
+                    Some(bincode_value) => {
+                        let car = Self::stored_to_car(bincode_value.0)?;
+                        Ok(Some(car))
+                    }
+                    None => Ok(None),
+                }
+            }
+            None => Ok(None),
+        }
     }
 
     async fn get_highest_car_position(&self, validator: &ValidatorId) -> Result<Option<u64>> {
+        use reth_db_api::cursor::DbCursorRO;
+        use reth_db_api::transaction::DbTx;
+        use super::tables::Cars;
+
         trace!(?validator, "Getting highest car position");
 
-        // TODO: Implement cursor-based scan
+        let tx = self.db.tx()?;
+        let mut cursor = tx
+            .cursor_read::<Cars>()
+            .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
+
+        // Create a key with max position for the validator to seek backwards
+        let validator_prefix: [u8; 20] = {
+            let bytes = validator.as_bytes();
+            let mut arr = [0u8; 20];
+            let copy_len = bytes.len().min(20);
+            arr[..copy_len].copy_from_slice(&bytes[..copy_len]);
+            arr
+        };
+
+        // Create key for next validator (to set upper bound)
+        let mut next_prefix = validator_prefix;
+        let mut carry = true;
+        for i in (0..20).rev() {
+            if carry {
+                if next_prefix[i] == 0xFF {
+                    next_prefix[i] = 0;
+                } else {
+                    next_prefix[i] += 1;
+                    carry = false;
+                }
+            }
+        }
+
+        // Seek to the position just before the next validator
+        let seek_key = CarTableKey {
+            validator_prefix: next_prefix,
+            position: 0,
+        };
+
+        // Use prev to find the last entry for this validator
+        if cursor.seek(seek_key).map_err(|e| StorageError::Database(format!("Cursor seek failed: {e}")))?.is_some() {
+            // Go to previous entry
+            if let Some((key, _)) = cursor.prev().map_err(|e| StorageError::Database(format!("Cursor prev failed: {e}")))? {
+                if key.validator_prefix == validator_prefix {
+                    return Ok(Some(key.position));
+                }
+            }
+        } else {
+            // We're at the end, try last
+            if let Some((key, _)) = cursor.last().map_err(|e| StorageError::Database(format!("Cursor last failed: {e}")))? {
+                if key.validator_prefix == validator_prefix {
+                    return Ok(Some(key.position));
+                }
+            }
+        }
+
         Ok(None)
     }
 
     async fn get_cars_range(&self, range: CarRange) -> Result<Vec<Car>> {
+        use reth_db_api::cursor::DbCursorRO;
+        use reth_db_api::transaction::DbTx;
+        use super::tables::Cars;
+
         trace!(?range.validator_id, start = range.start, end = ?range.end, "Getting cars range");
 
-        // TODO: Implement range query
-        Ok(Vec::new())
+        let tx = self.db.tx()?;
+        let mut cursor = tx
+            .cursor_read::<Cars>()
+            .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
+
+        let start_key = CarTableKey::new(range.validator_id.as_bytes(), range.start);
+        let end_position = range.end.unwrap_or(u64::MAX);
+
+        let mut cars = Vec::new();
+
+        // Seek to start position
+        let mut current = cursor
+            .seek(start_key)
+            .map_err(|e| StorageError::Database(format!("Cursor seek failed: {e}")))?;
+
+        let validator_prefix: [u8; 20] = {
+            let bytes = range.validator_id.as_bytes();
+            let mut arr = [0u8; 20];
+            let copy_len = bytes.len().min(20);
+            arr[..copy_len].copy_from_slice(&bytes[..copy_len]);
+            arr
+        };
+
+        while let Some((key, value)) = current {
+            // Check if we're still within the same validator
+            if key.validator_prefix != validator_prefix {
+                break;
+            }
+
+            // Check if we're past the end position
+            if key.position > end_position {
+                break;
+            }
+
+            // Convert and add the car
+            let car = Self::stored_to_car(value.0)?;
+            cars.push(car);
+
+            // Move to next
+            current = cursor
+                .next()
+                .map_err(|e| StorageError::Database(format!("Cursor next failed: {e}")))?;
+        }
+
+        Ok(cars)
     }
 
     async fn has_car(&self, validator: &ValidatorId, position: u64) -> Result<bool> {
@@ -312,13 +502,41 @@ impl DclStore for MdbxDclStore {
     }
 
     async fn delete_car(&self, validator: &ValidatorId, position: u64) -> Result<bool> {
-        let _key = CarTableKey::new(validator.as_bytes(), position);
+        use reth_db_api::transaction::DbTxMut;
+        use super::tables::{Cars, CarsByHash};
+
+        let key = CarTableKey::new(validator.as_bytes(), position);
 
         trace!(?validator, position, "Deleting car");
 
-        // TODO: Implement actual MDBX delete
-        // Also need to update secondary index
-        Ok(false)
+        let tx = self.db.tx_mut()?;
+        
+        // Get the car first to find its hash for index cleanup
+        let car_result = tx
+            .get::<Cars>(key)
+            .map_err(|e| StorageError::Database(format!("Failed to get car: {e}")))?;
+
+        match car_result {
+            Some(bincode_value) => {
+                let hash = bincode_value.0.hash;
+                let hash_key = HashKey::from_slice(&hash);
+                
+                // Delete from Cars table
+                tx.delete::<Cars>(key, None)
+                    .map_err(|e| StorageError::Database(format!("Failed to delete car: {e}")))?;
+                
+                // Delete from secondary index
+                tx.delete::<CarsByHash>(hash_key, None)
+                    .map_err(|e| StorageError::Database(format!("Failed to delete car index: {e}")))?;
+                
+                tx.commit()
+                    .map_err(|e| StorageError::Database(format!("Failed to commit delete: {e}")))?;
+                
+                debug!(?validator, position, "Car deleted");
+                Ok(true)
+            }
+            None => Ok(false),
+        }
     }
 
     // ============================================================
@@ -326,24 +544,44 @@ impl DclStore for MdbxDclStore {
     // ============================================================
 
     async fn put_attestation(&self, attestation: AggregatedAttestation) -> Result<()> {
-        let _key = HashKey::from_slice(attestation.car_hash.as_bytes());
-        let _stored = Self::attestation_to_stored(&attestation);
+        use reth_db_api::transaction::DbTxMut;
+        use super::tables::{Attestations, BincodeValue};
+
+        let key = HashKey::from_slice(attestation.car_hash.as_bytes());
+        let stored = Self::attestation_to_stored(&attestation);
 
         trace!(car_hash = ?attestation.car_hash, "Storing attestation");
 
-        // TODO: Implement actual MDBX write
-        debug!(car_hash = ?attestation.car_hash, "Attestation stored (skeleton)");
+        let tx = self.db.tx_mut()?;
+        tx.put::<Attestations>(key, BincodeValue(stored))
+            .map_err(|e| StorageError::Database(format!("Failed to put attestation: {e}")))?;
+        tx.commit()
+            .map_err(|e| StorageError::Database(format!("Failed to commit attestation: {e}")))?;
 
+        debug!(car_hash = ?attestation.car_hash, "Attestation stored");
         Ok(())
     }
 
     async fn get_attestation(&self, car_hash: &Hash) -> Result<Option<AggregatedAttestation>> {
-        let _key = HashKey::from_slice(car_hash.as_bytes());
+        use reth_db_api::transaction::DbTx;
+        use super::tables::Attestations;
+
+        let key = HashKey::from_slice(car_hash.as_bytes());
 
         trace!(?car_hash, "Getting attestation");
 
-        // TODO: Implement actual MDBX read
-        Ok(None)
+        let tx = self.db.tx()?;
+        let result = tx
+            .get::<Attestations>(key)
+            .map_err(|e| StorageError::Database(format!("Failed to get attestation: {e}")))?;
+
+        match result {
+            Some(bincode_value) => {
+                let attestation = Self::stored_to_attestation(bincode_value.0)?;
+                Ok(Some(attestation))
+            }
+            None => Ok(None),
+        }
     }
 
     async fn has_attestation(&self, car_hash: &Hash) -> Result<bool> {
@@ -351,12 +589,28 @@ impl DclStore for MdbxDclStore {
     }
 
     async fn delete_attestation(&self, car_hash: &Hash) -> Result<bool> {
-        let _key = HashKey::from_slice(car_hash.as_bytes());
+        use reth_db_api::transaction::DbTxMut;
+        use super::tables::Attestations;
+
+        let key = HashKey::from_slice(car_hash.as_bytes());
 
         trace!(?car_hash, "Deleting attestation");
 
-        // TODO: Implement actual MDBX delete
-        Ok(false)
+        let tx = self.db.tx_mut()?;
+        let existed = tx
+            .get::<Attestations>(key)
+            .map_err(|e| StorageError::Database(format!("Failed to check attestation: {e}")))?
+            .is_some();
+
+        if existed {
+            tx.delete::<Attestations>(key, None)
+                .map_err(|e| StorageError::Database(format!("Failed to delete attestation: {e}")))?;
+            tx.commit()
+                .map_err(|e| StorageError::Database(format!("Failed to commit delete: {e}")))?;
+            debug!(?car_hash, "Attestation deleted");
+        }
+
+        Ok(existed)
     }
 
     // ============================================================
@@ -364,28 +618,73 @@ impl DclStore for MdbxDclStore {
     // ============================================================
 
     async fn put_pending_cut(&self, cut: Cut) -> Result<()> {
-        let _stored = Self::cut_to_stored(&cut);
+        use reth_db_api::transaction::DbTxMut;
+        use super::tables::{PendingCuts, HeightKey, BincodeValue};
+
+        let stored = Self::cut_to_stored(&cut);
+        let key = HeightKey::new(cut.height);
 
         trace!(height = cut.height, "Storing pending cut");
 
-        // TODO: Implement actual MDBX write
-        debug!(height = cut.height, "Pending cut stored (skeleton)");
+        let tx = self.db.tx_mut()?;
+        tx.put::<PendingCuts>(key, BincodeValue(stored))
+            .map_err(|e| StorageError::Database(format!("Failed to put pending cut: {e}")))?;
+        tx.commit()
+            .map_err(|e| StorageError::Database(format!("Failed to commit pending cut: {e}")))?;
 
+        debug!(height = cut.height, "Pending cut stored");
         Ok(())
     }
 
     async fn get_pending_cut(&self, height: u64) -> Result<Option<Cut>> {
+        use reth_db_api::transaction::DbTx;
+        use super::tables::{PendingCuts, HeightKey};
+
+        let key = HeightKey::new(height);
+
         trace!(height, "Getting pending cut");
 
-        // TODO: Implement actual MDBX read
-        Ok(None)
+        let tx = self.db.tx()?;
+        let result = tx
+            .get::<PendingCuts>(key)
+            .map_err(|e| StorageError::Database(format!("Failed to get pending cut: {e}")))?;
+
+        match result {
+            Some(bincode_value) => {
+                let cut = Self::stored_to_cut(bincode_value.0)?;
+                Ok(Some(cut))
+            }
+            None => Ok(None),
+        }
     }
 
     async fn get_all_pending_cuts(&self) -> Result<Vec<Cut>> {
+        use reth_db_api::cursor::DbCursorRO;
+        use reth_db_api::transaction::DbTx;
+        use super::tables::PendingCuts;
+
         trace!("Getting all pending cuts");
 
-        // TODO: Implement cursor scan
-        Ok(Vec::new())
+        let tx = self.db.tx()?;
+        let mut cursor = tx
+            .cursor_read::<PendingCuts>()
+            .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
+
+        let mut cuts = Vec::new();
+        let mut current = cursor
+            .first()
+            .map_err(|e| StorageError::Database(format!("Cursor first failed: {e}")))?;
+
+        while let Some((_, value)) = current {
+            let cut = Self::stored_to_cut(value.0)?;
+            cuts.push(cut);
+
+            current = cursor
+                .next()
+                .map_err(|e| StorageError::Database(format!("Cursor next failed: {e}")))?;
+        }
+
+        Ok(cuts)
     }
 
     async fn finalize_cut(&self, height: u64) -> Result<Option<Cut>> {
@@ -407,42 +706,136 @@ impl DclStore for MdbxDclStore {
     }
 
     async fn delete_pending_cut(&self, height: u64) -> Result<bool> {
+        use reth_db_api::transaction::DbTxMut;
+        use super::tables::{PendingCuts, HeightKey};
+
+        let key = HeightKey::new(height);
+
         trace!(height, "Deleting pending cut");
 
-        // TODO: Implement actual MDBX delete
-        Ok(false)
+        let tx = self.db.tx_mut()?;
+        let existed = tx
+            .get::<PendingCuts>(key)
+            .map_err(|e| StorageError::Database(format!("Failed to check pending cut: {e}")))?
+            .is_some();
+
+        if existed {
+            tx.delete::<PendingCuts>(key, None)
+                .map_err(|e| StorageError::Database(format!("Failed to delete pending cut: {e}")))?;
+            tx.commit()
+                .map_err(|e| StorageError::Database(format!("Failed to commit delete: {e}")))?;
+            debug!(height, "Pending cut deleted");
+        }
+
+        Ok(existed)
     }
 
     async fn put_finalized_cut(&self, cut: Cut) -> Result<()> {
-        let _stored = Self::cut_to_stored(&cut);
+        use reth_db_api::transaction::DbTxMut;
+        use super::tables::{FinalizedCuts, HeightKey, BincodeValue};
+
+        let stored = Self::cut_to_stored(&cut);
+        let key = HeightKey::new(cut.height);
 
         trace!(height = cut.height, "Storing finalized cut");
 
-        // TODO: Implement actual MDBX write
-        debug!(height = cut.height, "Finalized cut stored (skeleton)");
+        let tx = self.db.tx_mut()?;
+        tx.put::<FinalizedCuts>(key, BincodeValue(stored))
+            .map_err(|e| StorageError::Database(format!("Failed to put finalized cut: {e}")))?;
+        tx.commit()
+            .map_err(|e| StorageError::Database(format!("Failed to commit finalized cut: {e}")))?;
 
+        debug!(height = cut.height, "Finalized cut stored");
         Ok(())
     }
 
     async fn get_finalized_cut(&self, height: u64) -> Result<Option<Cut>> {
+        use reth_db_api::transaction::DbTx;
+        use super::tables::{FinalizedCuts, HeightKey};
+
+        let key = HeightKey::new(height);
+
         trace!(height, "Getting finalized cut");
 
-        // TODO: Implement actual MDBX read
-        Ok(None)
+        let tx = self.db.tx()?;
+        let result = tx
+            .get::<FinalizedCuts>(key)
+            .map_err(|e| StorageError::Database(format!("Failed to get finalized cut: {e}")))?;
+
+        match result {
+            Some(bincode_value) => {
+                let cut = Self::stored_to_cut(bincode_value.0)?;
+                Ok(Some(cut))
+            }
+            None => Ok(None),
+        }
     }
 
     async fn get_latest_finalized_cut(&self) -> Result<Option<Cut>> {
+        use reth_db_api::cursor::DbCursorRO;
+        use reth_db_api::transaction::DbTx;
+        use super::tables::FinalizedCuts;
+
         trace!("Getting latest finalized cut");
 
-        // TODO: Implement cursor-based reverse scan
-        Ok(None)
+        let tx = self.db.tx()?;
+        let mut cursor = tx
+            .cursor_read::<FinalizedCuts>()
+            .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
+
+        // Get the last entry (highest height due to big-endian ordering)
+        let result = cursor
+            .last()
+            .map_err(|e| StorageError::Database(format!("Cursor last failed: {e}")))?;
+
+        match result {
+            Some((_, value)) => {
+                let cut = Self::stored_to_cut(value.0)?;
+                Ok(Some(cut))
+            }
+            None => Ok(None),
+        }
     }
 
     async fn get_finalized_cuts_range(&self, range: CutRange) -> Result<Vec<Cut>> {
+        use reth_db_api::cursor::DbCursorRO;
+        use reth_db_api::transaction::DbTx;
+        use super::tables::{FinalizedCuts, HeightKey};
+
         trace!(start = range.start, end = ?range.end, "Getting finalized cuts range");
 
-        // TODO: Implement range query
-        Ok(Vec::new())
+        let tx = self.db.tx()?;
+        let mut cursor = tx
+            .cursor_read::<FinalizedCuts>()
+            .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
+
+        let start_key = HeightKey::new(range.start);
+        let end_height = range.end.unwrap_or(u64::MAX);
+
+        let mut cuts = Vec::new();
+
+        // Seek to start position
+        let mut current = cursor
+            .seek(start_key)
+            .map_err(|e| StorageError::Database(format!("Cursor seek failed: {e}")))?;
+
+        while let Some((key, value)) = current {
+            // Check if we're past the end height
+            if key.0 > end_height {
+                break;
+            }
+
+            // Convert and add the cut
+            let cut = Self::stored_to_cut(value.0)?;
+            cuts.push(cut);
+
+            // Move to next
+            current = cursor
+                .next()
+                .map_err(|e| StorageError::Database(format!("Cursor next failed: {e}")))?;
+        }
+
+        Ok(cuts)
     }
 
     // ============================================================
@@ -450,26 +843,129 @@ impl DclStore for MdbxDclStore {
     // ============================================================
 
     async fn prune_before(&self, height: u64) -> Result<u64> {
+        use reth_db_api::cursor::{DbCursorRO, DbCursorRW};
+        use reth_db_api::transaction::DbTxMut;
+        use super::tables::FinalizedCuts;
+
         trace!(height, "Pruning before height");
 
-        // TODO: Implement pruning logic
-        // 1. Delete finalized cuts before height
-        // 2. Delete unreferenced cars
-        // 3. Delete unreferenced attestations
-        // 4. Delete unreferenced batches
+        let tx = self.db.tx_mut()?;
+        let mut cursor = tx
+            .cursor_write::<FinalizedCuts>()
+            .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
 
-        Ok(0)
+        let mut pruned_count = 0u64;
+
+        // Start from the beginning
+        let mut current = cursor
+            .first()
+            .map_err(|e| StorageError::Database(format!("Cursor first failed: {e}")))?;
+
+        while let Some((key, _)) = current {
+            // Stop if we've reached or passed the height threshold
+            if key.0 >= height {
+                break;
+            }
+
+            // Delete current entry
+            cursor
+                .delete_current()
+                .map_err(|e| StorageError::Database(format!("Failed to delete: {e}")))?;
+            pruned_count += 1;
+
+            // Move to next
+            current = cursor
+                .next()
+                .map_err(|e| StorageError::Database(format!("Cursor next failed: {e}")))?;
+        }
+
+        tx.commit()
+            .map_err(|e| StorageError::Database(format!("Failed to commit prune: {e}")))?;
+
+        debug!(height, pruned_count, "Pruning completed");
+        Ok(pruned_count)
     }
 
     async fn stats(&self) -> Result<StorageStats> {
-        // TODO: Implement actual stat collection
+        use reth_db_api::cursor::DbCursorRO;
+        use reth_db_api::transaction::DbTx;
+        use super::tables::{Batches, Cars, Attestations, PendingCuts, FinalizedCuts};
+
+        let tx = self.db.tx()?;
+
+        // Count entries in each table
+        let batch_count = {
+            let mut cursor = tx.cursor_read::<Batches>()
+                .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
+            let mut count = 0u64;
+            let mut current = cursor.first().map_err(|e| StorageError::Database(format!("Cursor failed: {e}")))?;
+            while current.is_some() {
+                count += 1;
+                current = cursor.next().map_err(|e| StorageError::Database(format!("Cursor failed: {e}")))?;
+            }
+            count
+        };
+
+        let car_count = {
+            let mut cursor = tx.cursor_read::<Cars>()
+                .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
+            let mut count = 0u64;
+            let mut current = cursor.first().map_err(|e| StorageError::Database(format!("Cursor failed: {e}")))?;
+            while current.is_some() {
+                count += 1;
+                current = cursor.next().map_err(|e| StorageError::Database(format!("Cursor failed: {e}")))?;
+            }
+            count
+        };
+
+        let attestation_count = {
+            let mut cursor = tx.cursor_read::<Attestations>()
+                .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
+            let mut count = 0u64;
+            let mut current = cursor.first().map_err(|e| StorageError::Database(format!("Cursor failed: {e}")))?;
+            while current.is_some() {
+                count += 1;
+                current = cursor.next().map_err(|e| StorageError::Database(format!("Cursor failed: {e}")))?;
+            }
+            count
+        };
+
+        let pending_cut_count = {
+            let mut cursor = tx.cursor_read::<PendingCuts>()
+                .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
+            let mut count = 0u64;
+            let mut current = cursor.first().map_err(|e| StorageError::Database(format!("Cursor failed: {e}")))?;
+            while current.is_some() {
+                count += 1;
+                current = cursor.next().map_err(|e| StorageError::Database(format!("Cursor failed: {e}")))?;
+            }
+            count
+        };
+
+        let finalized_cut_count = {
+            let mut cursor = tx.cursor_read::<FinalizedCuts>()
+                .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
+            let mut count = 0u64;
+            let mut current = cursor.first().map_err(|e| StorageError::Database(format!("Cursor failed: {e}")))?;
+            while current.is_some() {
+                count += 1;
+                current = cursor.next().map_err(|e| StorageError::Database(format!("Cursor failed: {e}")))?;
+            }
+            count
+        };
+
+        // Get storage size from database stats
+        let db_stats = self.db.stats()?;
+        let storage_bytes = (db_stats.leaf_pages + db_stats.branch_pages + db_stats.overflow_pages) 
+            * db_stats.page_size as u64;
+
         Ok(StorageStats {
-            batch_count: 0,
-            car_count: 0,
-            attestation_count: 0,
-            pending_cut_count: 0,
-            finalized_cut_count: 0,
-            storage_bytes: 0,
+            batch_count,
+            car_count,
+            attestation_count,
+            pending_cut_count,
+            finalized_cut_count,
+            storage_bytes,
         })
     }
 }
