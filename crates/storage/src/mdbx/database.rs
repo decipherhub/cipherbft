@@ -136,7 +136,9 @@ impl Database {
     }
 
     /// Create a write transaction
-    pub fn tx_mut(&self) -> Result<impl reth_db_api::transaction::DbTxMut + reth_db_api::transaction::DbTx + '_> {
+    pub fn tx_mut(
+        &self,
+    ) -> Result<impl reth_db_api::transaction::DbTxMut + reth_db_api::transaction::DbTx + '_> {
         if self.config.read_only {
             return Err(StorageError::Database(
                 "Cannot create write transaction on read-only database".into(),
