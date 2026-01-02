@@ -212,12 +212,17 @@ where
         chain_id: u64,
         config: MempoolConfig,
     ) -> Result<Self, MempoolError> {
-        let state_provider = client
-            .latest()
-            .map_err(|err| MempoolError::Internal(format!("Failed to get state provider: {err}")))?;
+        let state_provider = client.latest().map_err(|err| {
+            MempoolError::Internal(format!("Failed to get state provider: {err}"))
+        })?;
         let validator = CipherBftValidator::new(chain_spec, client, blob_store.clone(), chain_id);
         let pool_config: reth_transaction_pool::PoolConfig = config.clone().into();
-        let pool = Pool::new(validator, CoinbaseTipOrdering::default(), blob_store, pool_config);
+        let pool = Pool::new(
+            validator,
+            CoinbaseTipOrdering::default(),
+            blob_store,
+            pool_config,
+        );
         Ok(Self::wrap(pool, config, state_provider))
     }
 }

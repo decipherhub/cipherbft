@@ -63,7 +63,7 @@ mod tests {
     use reth_provider::test_utils::{ExtendedAccount, MockEthProvider};
     use reth_transaction_pool::blobstore::InMemoryBlobStore;
     use reth_transaction_pool::test_utils::TransactionBuilder;
-    use reth_transaction_pool::validate::{EthTransactionValidator, EthTransactionValidatorBuilder};
+    use reth_transaction_pool::validate::EthTransactionValidator;
     use reth_transaction_pool::EthPooledTransaction;
     use reth_transaction_pool::PoolTransaction;
     use std::sync::Arc;
@@ -86,7 +86,9 @@ mod tests {
         chain_id: u64,
         tx: &EthPooledTransaction,
     ) -> CipherBftValidator<EthTransactionValidator<MockEthProvider, EthPooledTransaction>> {
-        let chain_spec = ChainSpecBuilder::mainnet().chain(Chain::from_id(chain_id)).build();
+        let chain_spec = ChainSpecBuilder::mainnet()
+            .chain(Chain::from_id(chain_id))
+            .build();
         let provider = MockEthProvider::default();
         provider.add_account(tx.sender(), ExtendedAccount::new(tx.nonce(), U256::MAX));
         let blob_store = InMemoryBlobStore::default();
