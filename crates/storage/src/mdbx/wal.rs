@@ -3,14 +3,17 @@
 //! Provides a persistent WAL for crash recovery using MDBX as the backend.
 //! All consensus state changes are logged before being applied.
 
-use crate::error::Result;
+use crate::error::{Result, StorageError};
 use crate::wal::{Wal, WalEntry};
 use async_trait::async_trait;
+use reth_db_api::cursor::DbCursorRO;
+use reth_db_api::transaction::DbTx;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing::{debug, trace};
 
 use super::database::Database;
+use super::tables::{ConsensusWal as ConsensusWalTable, HeightKey, StoredWalEntry};
 
 /// MDBX-backed WAL implementation
 ///
@@ -37,10 +40,20 @@ impl MdbxWal {
     }
 
     /// Load the next WAL index from database
-    fn load_next_index(_db: &Database) -> Result<u64> {
-        // TODO: Implement actual index loading from MDBX
-        // For now, start at 0
-        Ok(0)
+    fn load_next_index(db: &Database) -> Result<u64> {
+        let tx = db.tx()?;
+        let mut cursor = tx
+            .cursor_read::<ConsensusWalTable>()
+            .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
+
+        // Find the last entry to determine next index
+        match cursor
+            .last()
+            .map_err(|e| StorageError::Database(format!("Cursor last failed: {e}")))?
+        {
+            Some((key, _)) => Ok(key.0 + 1),
+            None => Ok(0),
+        }
     }
 
     /// Get the underlying database
@@ -65,23 +78,48 @@ impl MdbxWal {
             ))
         })
     }
+
+    /// Get entry type tag for storage
+    fn entry_type_tag(entry: &WalEntry) -> u8 {
+        match entry {
+            WalEntry::BatchReceived(_) => 0,
+            WalEntry::CarCreated(_) => 1,
+            WalEntry::CarReceived(_) => 2,
+            WalEntry::AttestationAggregated(_) => 3,
+            WalEntry::CutProposed(_) => 4,
+            WalEntry::CutFinalized { .. } => 5,
+            WalEntry::Checkpoint { .. } => 6,
+            WalEntry::PipelineStageChanged { .. } => 7,
+            WalEntry::NextHeightAttestation { .. } => 8,
+            WalEntry::PreservedAttestedCars { .. } => 9,
+        }
+    }
 }
 
 #[async_trait]
 impl Wal for MdbxWal {
     async fn append(&self, entry: WalEntry) -> Result<u64> {
+        use super::tables::BincodeValue;
+        use reth_db_api::transaction::DbTxMut;
+
         let index = self.next_index.fetch_add(1, Ordering::SeqCst);
         let entry_type = entry.entry_type();
 
         trace!(index, entry_type, "Appending WAL entry");
 
-        let _serialized = Self::serialize_entry(&entry)?;
+        let serialized = Self::serialize_entry(&entry)?;
+        let stored = StoredWalEntry {
+            entry_type: Self::entry_type_tag(&entry),
+            data: serialized,
+        };
 
-        // TODO: Implement actual MDBX write
-        // tx.put::<ConsensusWal>(index, serialized)?;
-        // tx.commit()?;
+        let tx = self.db.tx_mut()?;
+        tx.put::<ConsensusWalTable>(HeightKey::new(index), BincodeValue(stored))
+            .map_err(|e| StorageError::Database(format!("Failed to put WAL entry: {e}")))?;
+        tx.commit()
+            .map_err(|e| StorageError::Database(format!("Failed to commit WAL entry: {e}")))?;
 
-        debug!(index, entry_type, "WAL entry appended (skeleton)");
+        debug!(index, entry_type, "WAL entry appended");
 
         Ok(index)
     }
@@ -89,36 +127,71 @@ impl Wal for MdbxWal {
     async fn replay_from(&self, start_index: u64) -> Result<Vec<(u64, WalEntry)>> {
         trace!(start_index, "Replaying WAL from index");
 
-        // TODO: Implement actual MDBX cursor iteration
-        // let tx = self.db.tx()?;
-        // let mut cursor = tx.cursor::<ConsensusWal>()?;
-        // let mut entries = Vec::new();
-        // for (idx, data) in cursor.walk(Some(start_index))? {
-        //     let entry = Self::deserialize_entry(&data)?;
-        //     entries.push((idx, entry));
-        // }
+        let tx = self.db.tx()?;
+        let mut cursor = tx
+            .cursor_read::<ConsensusWalTable>()
+            .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
 
-        Ok(Vec::new())
+        let mut entries = Vec::new();
+
+        // Seek to start index
+        let mut current = cursor
+            .seek(HeightKey::new(start_index))
+            .map_err(|e| StorageError::Database(format!("Cursor seek failed: {e}")))?;
+
+        while let Some((key, value)) = current {
+            let entry = Self::deserialize_entry(&value.0.data)?;
+            entries.push((key.0, entry));
+
+            current = cursor
+                .next()
+                .map_err(|e| StorageError::Database(format!("Cursor next failed: {e}")))?;
+        }
+
+        debug!(start_index, count = entries.len(), "WAL replay completed");
+
+        Ok(entries)
     }
 
     async fn truncate_before(&self, before_index: u64) -> Result<u64> {
+        use reth_db_api::cursor::DbCursorRW;
+        use reth_db_api::transaction::DbTxMut;
+
         trace!(before_index, "Truncating WAL before index");
 
-        // TODO: Implement actual MDBX deletion
-        // let tx = self.db.tx_mut()?;
-        // let mut cursor = tx.cursor::<ConsensusWal>()?;
-        // let mut deleted = 0;
-        // while let Some((idx, _)) = cursor.next()? {
-        //     if idx < before_index {
-        //         cursor.delete()?;
-        //         deleted += 1;
-        //     } else {
-        //         break;
-        //     }
-        // }
-        // tx.commit()?;
+        let tx = self.db.tx_mut()?;
+        let mut cursor = tx
+            .cursor_write::<ConsensusWalTable>()
+            .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
 
-        Ok(0)
+        let mut deleted = 0u64;
+
+        // Start from the beginning
+        let mut current = cursor
+            .first()
+            .map_err(|e| StorageError::Database(format!("Cursor first failed: {e}")))?;
+
+        while let Some((key, _)) = current {
+            if key.0 >= before_index {
+                break;
+            }
+
+            cursor
+                .delete_current()
+                .map_err(|e| StorageError::Database(format!("Failed to delete: {e}")))?;
+            deleted += 1;
+
+            current = cursor
+                .next()
+                .map_err(|e| StorageError::Database(format!("Cursor next failed: {e}")))?;
+        }
+
+        tx.commit()
+            .map_err(|e| StorageError::Database(format!("Failed to commit truncate: {e}")))?;
+
+        debug!(before_index, deleted, "WAL truncation completed");
+
+        Ok(deleted)
     }
 
     async fn next_index(&self) -> Result<u64> {
@@ -129,10 +202,8 @@ impl Wal for MdbxWal {
         trace!("Syncing WAL to disk");
 
         // MDBX provides durable writes by default with proper transaction commits
-        // Additional sync can be called if needed for extra safety
-
-        // TODO: Implement explicit sync if required
-        // self.db.env().sync(true)?;
+        // The MDBX_SAFE_NOSYNC mode is not used, so writes are already durable
+        // No additional sync needed as commits are already synchronous
 
         Ok(())
     }
@@ -140,9 +211,26 @@ impl Wal for MdbxWal {
     async fn last_checkpoint(&self) -> Result<Option<u64>> {
         trace!("Finding last checkpoint");
 
-        // TODO: Implement reverse scan to find last checkpoint entry
-        // Need to iterate backwards through WAL entries and find
-        // the last WalEntry::Checkpoint
+        let tx = self.db.tx()?;
+        let mut cursor = tx
+            .cursor_read::<ConsensusWalTable>()
+            .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
+
+        // Iterate backwards to find the last checkpoint
+        let mut current = cursor
+            .last()
+            .map_err(|e| StorageError::Database(format!("Cursor last failed: {e}")))?;
+
+        while let Some((key, value)) = current {
+            // Check if this is a checkpoint entry (entry_type == 6)
+            if value.0.entry_type == 6 {
+                return Ok(Some(key.0));
+            }
+
+            current = cursor
+                .prev()
+                .map_err(|e| StorageError::Database(format!("Cursor prev failed: {e}")))?;
+        }
 
         Ok(None)
     }

@@ -26,7 +26,7 @@ crates/storage/src/mdbx/
 | `DatabaseConfig` | Done | Configuration for DB path, size limits, read-only mode |
 | `Database` | Done | Wrapper around reth-db MDBX environment |
 | `MdbxDclStore` | **Done** | Full DclStore trait implementation with MDBX operations |
-| `MdbxWal` | Skeleton | Wal trait implementation for crash recovery |
+| `MdbxWal` | **Done** | Full Wal trait implementation with MDBX persistence |
 | Table Key Types | Done | `CarTableKey`, `HeightRoundKey`, `HashKey`, `HeightKey`, `UnitKey` with Encode/Decode |
 | Stored Value Types | Done | `StoredBatch`, `StoredCar`, `StoredCut`, etc. with Serialize/Deserialize |
 | **Table Definitions** | **Done** | All 11 tables defined with reth-db `Table` trait |
@@ -126,17 +126,19 @@ All values use `BincodeValue<T>` wrapper which:
   - `prune_before`: Cursor-based deletion with count tracking ✅
   - `stats`: Table entry counting ✅
 
-### Phase 2: WAL and Recovery
+### Phase 2: WAL and Recovery ✅ COMPLETED
 
-- [ ] **Implement persistent WAL in MdbxWal**
-  - Store WAL entries in `ConsensusWal` table
-  - Implement `append`, `replay_from`, `truncate_before`
-  - Ensure fsync/durability guarantees
+- [x] **Implement persistent WAL in MdbxWal**
+  - Store WAL entries in `ConsensusWal` table ✅
+  - Implement `append`, `replay_from`, `truncate_before` ✅
+  - Implement `last_checkpoint` with reverse scan ✅
+  - Implement `load_next_index` for restart recovery ✅
+  - MDBX provides durable writes by default
 
-- [ ] **Implement RecoveryManager**
-  - Load last committed state from `ConsensusState` table
-  - Replay WAL entries from checkpoint
-  - Restore in-memory state
+- [x] **RecoveryManager already exists**
+  - `WalRecovery<W: Wal>` in `wal.rs` handles recovery
+  - Finds last checkpoint and replays entries
+  - Reconstructs `RecoveredState` with all data types
 
 ### Phase 3: Transactions
 
