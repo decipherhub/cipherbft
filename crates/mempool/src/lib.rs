@@ -13,14 +13,14 @@
 //! - `account`: Per-account state management
 //! - `pool`: Main pool adapter over Reth's TransactionPool
 
-pub mod error;
 pub mod config;
-pub mod transaction;
+pub mod error;
 pub mod pool;
+pub mod transaction;
 pub mod validator;
 
-pub use error::MempoolError;
 pub use config::MempoolConfig;
-pub use transaction::TransactionOrdering;
+pub use error::MempoolError;
 pub use pool::CipherBftPool;
+pub use transaction::TransactionOrdering;
 pub use validator::CipherBftValidator;

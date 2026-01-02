@@ -1,9 +1,7 @@
 //! CipherBFT transaction validator wrapper for Reth's pool.
 
-use reth_primitives::InvalidTransactionError;
 use reth_transaction_pool::{
-    error::InvalidPoolTransactionError, PoolTransaction, TransactionOrigin,
-    TransactionValidationOutcome, TransactionValidator,
+    TransactionOrigin, TransactionValidationOutcome, TransactionValidator,
 };
 
 /// CipherBFT-specific validation that wraps a Reth `TransactionValidator`.
@@ -28,7 +26,7 @@ impl<V: TransactionValidator> TransactionValidator for CipherBftValidator<V> {
         origin: TransactionOrigin,
         transaction: Self::Transaction,
     ) -> TransactionValidationOutcome<Self::Transaction> {
-
+        let _ = self.chain_id;
         self.inner.validate_transaction(origin, transaction).await
     }
 }

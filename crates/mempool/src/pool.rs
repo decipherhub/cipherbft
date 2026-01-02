@@ -41,11 +41,11 @@
 use crate::config::MempoolConfig;
 use crate::error::MempoolError;
 use alloy_eips::eip2718::Decodable2718;
+use alloy_primitives::{Bytes, TxHash};
 use reth_primitives::{
     PooledTransactionsElement, PooledTransactionsElementEcRecovered, TransactionSigned,
     TransactionSignedEcRecovered, TransactionSignedNoHash,
 };
-use alloy_primitives::{Bytes, TxHash};
 use reth_storage_api::{StateProvider, StateProviderBox};
 use reth_transaction_pool::{PoolTransaction, TransactionOrigin, TransactionPool};
 use tracing::{debug, warn};
@@ -66,7 +66,6 @@ pub struct CipherBftPool<P: TransactionPool> {
     /// Uses Reth's standard StateProvider trait from reth-storage-api
     state_provider: StateProviderBox,
 }
-
 
 impl<P: TransactionPool> CipherBftPool<P> {
     /// Create new mempool wrapper
@@ -113,9 +112,7 @@ impl<P: TransactionPool> CipherBftPool<P> {
         &self,
         tx: TransactionSigned,
     ) -> Result<TransactionSignedEcRecovered, MempoolError> {
-        let tx_recovered = tx
-            .try_ecrecovered()
-            .ok_or(MempoolError::InvalidSignature)?;
+        let tx_recovered = tx.try_ecrecovered().ok_or(MempoolError::InvalidSignature)?;
 
         let sender = tx_recovered.signer();
         let tx_ref = tx_recovered.as_ref();
@@ -169,10 +166,11 @@ impl<P: TransactionPool> CipherBftPool<P> {
 
         // BFT Policy 2: Nonce gap enforcement
         // Prevents attackers from bloating the queued pool with distant-future nonces
-        let current_nonce = self.state_provider
+        let current_nonce = self
+            .state_provider
             .account_nonce(sender)
             .map_err(|e| MempoolError::Internal(format!("Failed to get nonce: {}", e)))?
-            .unwrap_or(0);  // Default to 0 if account doesn't exist yet
+            .unwrap_or(0); // Default to 0 if account doesn't exist yet
         let tx_nonce = tx_ref.nonce();
 
         if tx_nonce > current_nonce {
@@ -408,7 +406,7 @@ where
     }
 }
 
-impl<'a, Tx> IntoPoolTransactionInput<Tx> for &'a [u8]
+impl<Tx> IntoPoolTransactionInput<Tx> for &[u8]
 where
     Tx: PoolTransaction,
     Tx::Pooled: From<PooledTransactionsElementEcRecovered>,
@@ -451,21 +449,19 @@ mod tests {
         assert_eq!(config.min_gas_price, 1_000_000_000);
     }
 
-
-
     #[test]
     fn test_bft_policy_min_gas_price() {
         // BFT Policy: Minimum gas price enforcement
         let min_gas_price = 1_000_000_000u128;
-        
+
         // Below minimum - rejected by CipherBFT
         let gas_price = 500_000_000u128;
         assert!(gas_price < min_gas_price);
-        
+
         // At minimum - accepted
         let gas_price = 1_000_000_000u128;
         assert!(gas_price >= min_gas_price);
-        
+
         // Above minimum - accepted
         let gas_price = 2_000_000_000u128;
         assert!(gas_price >= min_gas_price);
@@ -478,19 +474,19 @@ mod tests {
         // CipherBFT adds gap limit for far-future nonces
         let current_nonce = 10u64;
         let max_gap = 16u64;
-        
+
         // No gap (next nonce) - accepted
         let tx_nonce = 11u64;
         let gap = tx_nonce - current_nonce - 1;
         assert_eq!(gap, 0);
         assert!(gap <= max_gap);
-        
+
         // Gap within limit - accepted
         let tx_nonce = 26u64;
         let gap = tx_nonce - current_nonce - 1;
         assert_eq!(gap, 15);
         assert!(gap <= max_gap);
-        
+
         // Gap exceeds limit - rejected by CipherBFT
         let tx_nonce = 28u64;
         let gap = tx_nonce - current_nonce - 1;
