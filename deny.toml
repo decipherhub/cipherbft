@@ -8,7 +8,13 @@ all-features = true
 [advisories]
 version = 2
 db-path = "~/.cargo/advisory-db"
-ignore = []
+ignore = [
+    # paste - no longer maintained (RUSTSEC-2024-0436)
+    # This is a transitive dependency from reth-db/reth-libmdbx
+    # We cannot remove it until reth upstream removes this dependency
+    # See: https://rustsec.org/advisories/RUSTSEC-2024-0436
+    "RUSTSEC-2024-0436",
+]
 
 [licenses]
 version = 2
