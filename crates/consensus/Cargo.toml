@@ -1,0 +1,48 @@
+[package]
+name = "cipherbft-consensus"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[features]
+default = []
+# Enable this to pull in Malachite crates and compile the Context/adapter code.
+malachite = [
+    "informalsystems-malachitebft-app",
+    "informalsystems-malachitebft-app-channel",
+    "informalsystems-malachitebft-core-consensus",
+    "informalsystems-malachitebft-core-driver",
+    "informalsystems-malachitebft-core-types",
+    "informalsystems-malachitebft-engine",
+    "informalsystems-malachitebft-network",
+    "informalsystems-malachitebft-config",
+    "informalsystems-malachitebft-sync",
+    "informalsystems-malachitebft-signing-ed25519",
+    "informalsystems-malachitebft-codec",
+    "informalsystems-malachitebft-metrics",
+]
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+hex = { workspace = true }
+
+cipherbft-types = { path = "../types" }
+cipherbft-crypto = { path = "../crypto" }
+cipherbft-data-chain = { path = "../data-chain" }
+
+# Malachite BFT (all optional; enable via the `malachite` feature)
+informalsystems-malachitebft-app = { workspace = true, optional = true }
+informalsystems-malachitebft-app-channel = { workspace = true, optional = true }
+informalsystems-malachitebft-core-consensus = { workspace = true, optional = true }
+informalsystems-malachitebft-core-driver = { workspace = true, optional = true }
+informalsystems-malachitebft-core-types = { workspace = true, optional = true }
+informalsystems-malachitebft-engine = { workspace = true, optional = true }
+informalsystems-malachitebft-network = { workspace = true, optional = true }
+informalsystems-malachitebft-config = { workspace = true, optional = true }
+informalsystems-malachitebft-sync = { workspace = true, optional = true }
+informalsystems-malachitebft-signing-ed25519 = { workspace = true, optional = true }
+informalsystems-malachitebft-codec = { workspace = true, optional = true }
+informalsystems-malachitebft-metrics = { workspace = true, optional = true }
