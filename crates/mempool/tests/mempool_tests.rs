@@ -131,12 +131,14 @@ async fn test_pending_queued_promotion() {
 
 #[tokio::test]
 async fn test_eviction_under_pressure() {
-    let mut config = PoolConfig::default();
-    config.pending_limit = SubPoolLimit::new(1, usize::MAX);
-    config.basefee_limit = SubPoolLimit::new(0, usize::MAX);
-    config.queued_limit = SubPoolLimit::new(0, usize::MAX);
-    config.blob_limit = SubPoolLimit::new(0, usize::MAX);
-    config.max_account_slots = 1;
+    let config = PoolConfig {
+        pending_limit: SubPoolLimit::new(1, usize::MAX),
+        basefee_limit: SubPoolLimit::new(0, usize::MAX),
+        queued_limit: SubPoolLimit::new(0, usize::MAX),
+        blob_limit: SubPoolLimit::new(0, usize::MAX),
+        max_account_slots: 1,
+        ..Default::default()
+    };
 
     let pool: reth_transaction_pool::test_utils::TestPool =
         TestPoolBuilder::default().with_config(config).into();
