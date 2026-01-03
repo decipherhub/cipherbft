@@ -1,7 +1,7 @@
 # Mempool integration notes
 
 This crate wraps Reth's transaction pool and adds CipherBFT-specific validation.
-Use these notes when wiring the pool in the EL/worker initialization.
+Use these notes when wiring the pool in node/worker initialization.
 
 ## MP-1 / MP-2 behavior
 
@@ -9,34 +9,51 @@ Use these notes when wiring the pool in the EL/worker initialization.
 - MP-2: `add_transaction` performs BFT policy checks (min gas price, nonce gap) and then hands
   validated transactions to Reth for standard validation.
 
+## Validator creation (optional)
+
+You do not need to create a validator directly if you use `CipherBftPool::new(...)`.
+This section is only for cases where you want to build or wrap a validator manually.
+
+`CipherBftValidator::new` builds and wraps a Reth `EthTransactionValidator`.
+It requires:
+- `ChainSpec` (for chain ID and fork rules)
+- `StateProviderFactory` (EL/Storage-backed)
+- `BlobStore` (in-memory or persistent)
+
+Example (shape only; actual types depend on your node setup):
+
+```rust
+use reth_transaction_pool::blobstore::InMemoryBlobStore;
+
+let validator = CipherBftValidator::new(
+    chain_spec,
+    state_provider_factory,
+    InMemoryBlobStore::default(),
+    chain_id,
+);
+```
+
+If you already have a validator instance, use `CipherBftValidator::wrap`.
+
 ## Pool creation (required for MP-3 / MP-4)
 
 MP-3 (priority ordering) and MP-4 (replacement logic) are enforced by the Reth pool.
 To enable them, you must pass a Reth `PoolConfig` and an ordering implementation
 when instantiating the pool.
 
-Example (shape only; actual validator/blob store wiring depends on your node setup):
+Preferred: build the pool through `CipherBftPool::new` (it creates the Reth pool internally).
 
 ```rust
-use reth_transaction_pool::{
-    Pool, CoinbaseTipOrdering, TransactionValidationTaskExecutor,
-};
-
-let pool_config = mempool_config.into(); // or mempool_config.to_reth_config()
-let ordering = CoinbaseTipOrdering::default();
-
-let pool = Pool::new(
-    tx_validator,
-    ordering,
+let mempool = CipherBftPool::new(
+    chain_spec,
+    state_provider_factory,
     blob_store,
-    pool_config,
-);
+    chain_id,
+    mempool_config,
+)?;
 ```
 
-Notes:
-- MP-3 relies on the built-in ordering (`CoinbaseTipOrdering`) and `best_transactions()`.
-- MP-4 relies on `PoolConfig.price_bumps` (set via `MempoolConfig` mapping).
-- MP-5 relies on Reth's pending/queued pools and promotion logic.
+If you already have a Reth pool instance, use `CipherBftPool::wrap(pool, config, state_provider)`.
 
 ## MempoolConfig mapping
 
