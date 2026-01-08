@@ -30,6 +30,14 @@ tracing = { workspace = true }
 # Storage backend (for InMemoryStore)
 parking_lot = "0.12"
 
+# MDBX storage backend (reth-db)
+reth-db = { workspace = true, optional = true }
+reth-db-api = { workspace = true, optional = true }
+reth-codecs = { workspace = true, optional = true }
+
+# BitVec for attestation bitmaps
+bitvec = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
@@ -37,3 +45,4 @@ rand = { workspace = true }
 
 [features]
 default = []
+mdbx = ["reth-db", "reth-db-api", "reth-codecs"]
