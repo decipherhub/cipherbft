@@ -152,15 +152,18 @@ impl Database {
 
     /// Get database statistics
     pub fn stats(&self) -> Result<DatabaseStats> {
-        // For now, return placeholder stats
-        // TODO: Implement actual stat collection from MDBX
+        let stat = self
+            .env
+            .stat()
+            .map_err(|e| StorageError::Database(format!("Failed to get database stats: {e}")))?;
+
         Ok(DatabaseStats {
-            page_size: 4096,
-            tree_depth: 0,
-            branch_pages: 0,
-            leaf_pages: 0,
-            overflow_pages: 0,
-            entries: 0,
+            page_size: stat.page_size(),
+            tree_depth: stat.depth(),
+            branch_pages: stat.branch_pages() as u64,
+            leaf_pages: stat.leaf_pages() as u64,
+            overflow_pages: stat.overflow_pages() as u64,
+            entries: stat.entries() as u64,
         })
     }
 }
