@@ -1,0 +1,16 @@
+[package]
+name = "rpc"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+
+alloy-primitives = "0.8"
+alloy-rpc-types = { version = "0.4", features = ["eth"] }
+
+reth-primitives = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
