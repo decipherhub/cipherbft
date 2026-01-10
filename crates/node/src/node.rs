@@ -4,13 +4,19 @@ use crate::config::NodeConfig;
 use crate::network::TcpPrimaryNetwork;
 use crate::util::validator_id_from_bls;
 use anyhow::Result;
-use cipherbft_crypto::{BlsKeyPair, BlsPublicKey};
+use cipherbft_consensus::{
+    create_context, default_consensus_params, default_engine_config_single_part,
+    spawn_host, spawn_network, spawn_wal, ConsensusHeight, ConsensusSigner,
+    ConsensusSigningProvider, ConsensusValidator, MalachiteEngineBuilder,
+};
+use cipherbft_crypto::{BlsKeyPair, BlsPublicKey, Ed25519KeyPair};
 use cipherbft_data_chain::{
     primary::{Primary, PrimaryConfig, PrimaryEvent},
-    DclMessage,
+    Cut, DclMessage,
 };
 use cipherbft_types::ValidatorId;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -97,6 +103,9 @@ impl Node {
             .with_car_interval(Duration::from_millis(self.config.car_interval_ms))
             .with_max_empty_cars(3);
 
+        // Create channel for CutReady events to Consensus Host
+        let (cut_tx, cut_rx) = mpsc::channel::<Cut>(100);
+
         // Spawn Primary task
         let (mut primary_handle, _worker_rxs) = Primary::spawn(
             primary_config,
@@ -106,7 +115,58 @@ impl Node {
             }),
             self.config.num_workers as u8,
         );
+        let (decided_tx, mut decided_rx) = mpsc::channel::<(ConsensusHeight, Cut)>(100);
 
+        // Get Ed25519 keypair for Consensus
+        let ed25519_keypair = self.config.ed25519_keypair()?;
+        let consensus_signer = ConsensusSigner::new(ed25519_keypair);
+        let signing_provider = ConsensusSigningProvider::new(consensus_signer);
+
+        // Create Consensus context and validators
+        // TODO: Currently we only have BLS public keys in validators map
+        // Need to add Ed25519 public keys to validator set
+        // For now, create a minimal validator set with just ourselves
+        let chain_id = "cipherbft-test";
+        let consensus_validators = vec![
+            ConsensusValidator::new(
+                self.validator_id,
+                ed25519_keypair.public_key.clone(),
+                100, // voting power
+            ),
+        ];
+        let ctx = create_context(chain_id, consensus_validators, None);
+        let our_address = ctx.validator_set().as_slice()[0].address;
+        let params = default_consensus_params(&ctx, our_address);
+        let consensus_config = default_engine_config_single_part();
+
+        // Spawn Consensus actors
+        // TODO: Consensus network listen address (can use primary_listen + offset)
+        let consensus_listen = SocketAddr::new(
+            self.config.primary_listen.ip(),
+            self.config.primary_listen.port() + 10000,
+        );
+        let peer_addrs = HashMap::new(); // TODO: Build from peers with Consensus addresses
+        let network = spawn_network(consensus_listen, peer_addrs).await?;
+
+        let wal_path = self.config.data_dir.join("consensus_wal");
+        let wal = spawn_wal(wal_path).await?;
+
+        let host = spawn_host(self.validator_id, cut_rx, Some(decided_tx)).await?;
+
+        // Build and spawn Consensus engine
+        let _engine_handles = MalachiteEngineBuilder::new(
+            ctx,
+            params,
+            consensus_config,
+            Box::new(signing_provider),
+            network,
+            host,
+            wal,
+        )
+        .spawn()
+        .await?;
+
+        info!("Consensus engine started");
         info!("Node started, entering main loop");
 
         // Main event loop
@@ -129,6 +189,10 @@ impl Node {
                                 cut.height,
                                 cut.validator_count()
                             );
+                            // Send Cut to Consensus Host
+                            if let Err(e) = cut_tx.send(cut.clone()).await {
+                                warn!("Failed to send Cut to Consensus Host: {}", e);
+                            }
                         }
                         PrimaryEvent::CarCreated(car) => {
                             debug!(
@@ -148,6 +212,16 @@ impl Node {
                             );
                         }
                     }
+                }
+
+                // Consensus Decided events
+                Some((height, cut)) = decided_rx.recv() => {
+                    info!(
+                        "Consensus decided at height {} with {} cars",
+                        height,
+                        cut.cars.len()
+                    );
+                    // TODO: Send to Execution Layer when EL is implemented
                 }
             }
         }

@@ -28,6 +28,9 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
 hex = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+bincode = { workspace = true }
+serde = { workspace = true }
 
 cipherbft-types = { path = "../types" }
 cipherbft-crypto = { path = "../crypto" }

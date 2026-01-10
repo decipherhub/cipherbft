@@ -16,6 +16,7 @@ cipherbft-types = { path = "../types" }
 cipherbft-crypto = { path = "../crypto" }
 cipherbft-data-chain = { path = "../data-chain" }
 cipherbft-storage = { path = "../storage" }
+cipherbft-consensus = { path = "../consensus", features = ["malachite"] }
 
 # Async runtime
 tokio = { workspace = true, features = ["full", "signal"] }
