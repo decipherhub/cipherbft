@@ -7,7 +7,18 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+
+alloy-primitives = "0.8"
+alloy-rpc-types = { version = "0.4", features = ["eth"] }
+
+reth-primitives = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
 reth-evm = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
 reth-provider = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
+reth-rpc = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
+reth-rpc-builder = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
+reth-network-api = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
+reth-tasks = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
 reth-storage-api = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
 reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
