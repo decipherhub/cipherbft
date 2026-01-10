@@ -21,6 +21,7 @@ malachite = [
     "informalsystems-malachitebft-signing-ed25519",
     "informalsystems-malachitebft-codec",
     "informalsystems-malachitebft-metrics",
+    "ractor",
 ]
 
 [dependencies]
@@ -31,6 +32,8 @@ hex = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 bincode = { workspace = true }
 serde = { workspace = true }
+bytes = { workspace = true }
+ractor = { workspace = true, optional = true }
 
 cipherbft-types = { path = "../types" }
 cipherbft-crypto = { path = "../crypto" }

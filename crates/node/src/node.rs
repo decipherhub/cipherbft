@@ -119,6 +119,7 @@ impl Node {
 
         // Get Ed25519 keypair for Consensus
         let ed25519_keypair = self.config.ed25519_keypair()?;
+        let ed25519_pubkey = ed25519_keypair.public_key.clone();
         let consensus_signer = ConsensusSigner::new(ed25519_keypair);
         let signing_provider = ConsensusSigningProvider::new(consensus_signer);
 
@@ -130,7 +131,7 @@ impl Node {
         let consensus_validators = vec![
             ConsensusValidator::new(
                 self.validator_id,
-                ed25519_keypair.public_key.clone(),
+                ed25519_pubkey,
                 100, // voting power
             ),
         ];
@@ -151,7 +152,7 @@ impl Node {
         let wal_path = self.config.data_dir.join("consensus_wal");
         let wal = spawn_wal(wal_path).await?;
 
-        let host = spawn_host(self.validator_id, cut_rx, Some(decided_tx)).await?;
+        let host = spawn_host(self.validator_id, ctx.clone(), cut_rx, Some(decided_tx)).await?;
 
         // Build and spawn Consensus engine
         let _engine_handles = MalachiteEngineBuilder::new(

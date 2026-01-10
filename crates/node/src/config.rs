@@ -95,8 +95,8 @@ impl NodeConfig {
         }
         let mut arr = [0u8; 32];
         arr.copy_from_slice(&secret_bytes);
-        let secret_key = cipherbft_crypto::Ed25519SecretKey::from_bytes(&arr)
-            .map_err(|e| anyhow::anyhow!("Invalid Ed25519 secret key: {:?}", e))?;
+        // Ed25519SecretKey::from_bytes returns Self, not Result
+        let secret_key = cipherbft_crypto::Ed25519SecretKey::from_bytes(&arr);
         Ok(Ed25519KeyPair::from_secret_key(secret_key))
     }
 

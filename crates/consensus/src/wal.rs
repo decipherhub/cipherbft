@@ -3,9 +3,10 @@
 //! This module implements the WAL actor that persists consensus messages
 //! to disk for crash recovery and state sync.
 
+use crate::codec::ConsensusCodec;
 use crate::context::CipherBftContext;
 use anyhow::Result;
-use informalsystems_malachitebft_engine::wal::WalRef;
+use informalsystems_malachitebft_engine::wal::{Wal, WalRef};
 use std::path::PathBuf;
 use tracing::info;
 
@@ -16,21 +17,19 @@ use tracing::info;
 ///
 /// # Returns
 /// * `WalRef<CipherBftContext>` - Reference to the spawned WAL actor
-///
-/// Note: This needs actual Malachite Wal::spawn implementation.
-/// Check informalsystems_malachitebft_engine::wal for the correct API.
-pub async fn spawn_wal(_wal_path: PathBuf) -> Result<WalRef<CipherBftContext>> {
-    info!("Spawning consensus WAL actor");
+pub async fn spawn_wal(wal_path: PathBuf) -> Result<WalRef<CipherBftContext>> {
+    info!("Spawning consensus WAL actor at {}", wal_path.display());
 
     // Create WAL directory if it doesn't exist
-    // std::fs::create_dir_all(&wal_path)?;
+    std::fs::create_dir_all(&wal_path)?;
 
-    // TODO: Implement Wal::spawn with actual Malachite API
-    // Example (needs verification):
-    // use informalsystems_malachitebft_engine::wal::Wal;
-    // let codec = ConsensusCodec::default();
-    // let wal_ref = Wal::<CipherBftContext>::spawn(wal_path, codec).await?;
-    
-    todo!("Implement WAL spawn with actual Malachite API - check informalsystems_malachitebft_engine::wal::Wal")
+    // Create codec (same as network codec for consistency)
+    let codec = ConsensusCodec::default();
+
+    // Spawn WAL actor using Malachite's Wal::spawn
+    // WAL will persist messages to disk for recovery
+    let wal_ref = Wal::<CipherBftContext>::spawn(wal_path, codec).await?;
+
+    info!("Consensus WAL actor spawned successfully");
+    Ok(wal_ref)
 }
-
