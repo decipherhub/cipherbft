@@ -47,3 +47,36 @@ impl ConsensusConfig {
         &self.chain_id
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_with_defaults() {
+        let config = ConsensusConfig::new("test-chain");
+        assert_eq!(config.chain_id(), "test-chain");
+        assert_eq!(config.propose_timeout, Duration::from_secs(1));
+        assert_eq!(config.prevote_timeout, Duration::from_secs(1));
+        assert_eq!(config.precommit_timeout, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_builder_pattern() {
+        let config = ConsensusConfig::new("my-chain")
+            .with_propose_timeout(Duration::from_millis(500))
+            .with_prevote_timeout(Duration::from_millis(300))
+            .with_precommit_timeout(Duration::from_millis(200));
+
+        assert_eq!(config.chain_id(), "my-chain");
+        assert_eq!(config.propose_timeout, Duration::from_millis(500));
+        assert_eq!(config.prevote_timeout, Duration::from_millis(300));
+        assert_eq!(config.precommit_timeout, Duration::from_millis(200));
+    }
+
+    #[test]
+    fn test_chain_id_from_string() {
+        let config = ConsensusConfig::new(String::from("dynamic-chain"));
+        assert_eq!(config.chain_id(), "dynamic-chain");
+    }
+}

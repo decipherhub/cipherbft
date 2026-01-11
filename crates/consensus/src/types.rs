@@ -133,3 +133,87 @@ pub use malachite_impls::ConsensusRound;
 #[cfg(not(feature = "malachite"))]
 /// Placeholder round type when Malachite is disabled.
 pub type ConsensusRound = i64;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_consensus_height_next() {
+        let h = ConsensusHeight(5);
+        assert_eq!(h.next(), ConsensusHeight(6));
+    }
+
+    #[test]
+    fn test_consensus_height_from_u64() {
+        let h: ConsensusHeight = 42u64.into();
+        assert_eq!(h.0, 42);
+    }
+
+    #[test]
+    fn test_consensus_height_into_u64() {
+        let h = ConsensusHeight(100);
+        let n: u64 = h.into();
+        assert_eq!(n, 100);
+    }
+
+    #[test]
+    fn test_consensus_height_ordering() {
+        let h1 = ConsensusHeight(1);
+        let h2 = ConsensusHeight(2);
+        assert!(h1 < h2);
+        assert!(h2 > h1);
+        assert_eq!(h1, ConsensusHeight(1));
+    }
+
+    #[test]
+    fn test_consensus_height_display() {
+        let h = ConsensusHeight(123);
+        assert_eq!(format!("{}", h), "123");
+    }
+
+    #[test]
+    fn test_consensus_value_id_display() {
+        let hash = Hash::compute(b"test");
+        let id = ConsensusValueId(hash);
+        // Display should delegate to Hash's Display
+        assert!(!format!("{}", id).is_empty());
+    }
+
+    #[test]
+    fn test_consensus_value_equality_by_hash() {
+        let cut1 = Cut::new(1);
+        let cut2 = Cut::new(1);
+        let cut3 = Cut::new(2);
+
+        let v1 = ConsensusValue(cut1);
+        let v2 = ConsensusValue(cut2);
+        let v3 = ConsensusValue(cut3);
+
+        // Same height empty cuts should have same hash
+        assert_eq!(v1, v2);
+        // Different height should differ
+        assert_ne!(v1, v3);
+    }
+
+    #[test]
+    fn test_consensus_value_ordering() {
+        let cut1 = Cut::new(1);
+        let cut2 = Cut::new(2);
+
+        let v1 = ConsensusValue(cut1);
+        let v2 = ConsensusValue(cut2);
+
+        // Ordering should be deterministic by hash
+        assert!(v1.cmp(&v2) != Ordering::Equal || v1 == v2);
+    }
+
+    #[test]
+    fn test_consensus_value_into_cut() {
+        let cut = Cut::new(42);
+        let height = cut.height;
+        let value = ConsensusValue(cut);
+        let recovered = value.into_cut();
+        assert_eq!(recovered.height, height);
+    }
+}

@@ -94,6 +94,8 @@ impl MalachiteProposalPart<CipherBftContext> for CutProposalPart {
 impl PartialEq for CutProposalPart {
     fn eq(&self, other: &Self) -> bool {
         self.cut.hash() == other.cut.hash()
+            && self.first == other.first
+            && self.last == other.last
     }
 }
 
