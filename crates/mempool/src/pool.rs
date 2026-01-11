@@ -47,7 +47,7 @@ use reth_primitives::{
     PooledTransactionsElement, PooledTransactionsElementEcRecovered, TransactionSigned,
     TransactionSignedEcRecovered, TransactionSignedNoHash,
 };
-use reth_storage_api::{StateProvider, StateProviderBox, StateProviderFactory};
+use reth_storage_api::StateProviderFactory;
 use reth_transaction_pool::{
     blobstore::BlobStore, validate::EthTransactionValidator, CoinbaseTipOrdering,
     EthPooledTransaction, Pool, PoolTransaction, TransactionOrigin, TransactionPool,
@@ -67,14 +67,14 @@ pub struct CipherBftPool<P: TransactionPool> {
     pool: P,
     /// BFT-specific config
     config: MempoolConfig,
-    /// State provider for BFT policy validation (nonce queries)
-    /// Uses Reth's standard StateProvider trait from reth-storage-api
-    state_provider: StateProviderBox,
+    /// State provider factory for BFT policy validation (nonce queries)
+    /// Use latest() per validation to avoid stale state snapshots.
+    state_provider_factory: Arc<dyn StateProviderFactory>,
 }
 
 /// Concrete Reth pool type used by CipherBFT.
 pub type CipherBftRethPool<Client, S> = Pool<
-    CipherBftValidator<EthTransactionValidator<Client, EthPooledTransaction>>,
+    CipherBftValidator<EthTransactionValidator<Arc<Client>, EthPooledTransaction>>,
     CoinbaseTipOrdering<EthPooledTransaction>,
     S,
 >;
@@ -92,13 +92,17 @@ impl<P: TransactionPool> CipherBftPool<P> {
     ///     config.to_reth_config(),
     /// );
     /// // Mempool lives in DCL, uses EL's StateProvider for validation
-    /// CipherBftPool::wrap(reth_pool, config, state_provider)
+    /// CipherBftPool::wrap(reth_pool, config, state_provider_factory)
     /// ```
-    pub fn wrap(pool: P, config: MempoolConfig, state_provider: StateProviderBox) -> Self {
+    pub fn wrap(
+        pool: P,
+        config: MempoolConfig,
+        state_provider_factory: Arc<dyn StateProviderFactory>,
+    ) -> Self {
         Self {
             pool,
             config,
-            state_provider,
+            state_provider_factory,
         }
     }
 
@@ -178,8 +182,10 @@ impl<P: TransactionPool> CipherBftPool<P> {
 
         // BFT Policy 2: Nonce gap enforcement
         // Prevents attackers from bloating the queued pool with distant-future nonces
-        let current_nonce = self
-            .state_provider
+        let state_provider = self.state_provider_factory.latest().map_err(|e| {
+            MempoolError::Internal(format!("Failed to get state provider: {e}"))
+        })?;
+        let current_nonce = state_provider
             .account_nonce(sender)
             .map_err(|e| MempoolError::Internal(format!("Failed to get nonce: {}", e)))?
             .unwrap_or(0); // Default to 0 if account doesn't exist yet
@@ -201,21 +207,18 @@ impl<P: TransactionPool> CipherBftPool<P> {
 
 impl<Client, S> CipherBftPool<CipherBftRethPool<Client, S>>
 where
-    Client: StateProviderFactory,
+    Client: StateProviderFactory + 'static,
     S: BlobStore + Clone,
 {
     /// Create a CipherBFT mempool that builds the underlying Reth pool internally.
     pub fn new(
         chain_spec: Arc<reth_chainspec::ChainSpec>,
-        client: Client,
+        client: Arc<Client>,
         blob_store: S,
-        chain_id: u64,
         config: MempoolConfig,
     ) -> Result<Self, MempoolError> {
-        let state_provider = client.latest().map_err(|err| {
-            MempoolError::Internal(format!("Failed to get state provider: {err}"))
-        })?;
-        let validator = CipherBftValidator::new(chain_spec, client, blob_store.clone(), chain_id);
+        let state_provider_factory: Arc<dyn StateProviderFactory> = client.clone();
+        let validator = CipherBftValidator::new(chain_spec, Arc::clone(&client), blob_store.clone());
         let pool_config: reth_transaction_pool::PoolConfig = config.clone().into();
         let pool = Pool::new(
             validator,
@@ -223,7 +226,7 @@ where
             blob_store,
             pool_config,
         );
-        Ok(Self::wrap(pool, config, state_provider))
+        Ok(Self::wrap(pool, config, state_provider_factory))
     }
 }
 

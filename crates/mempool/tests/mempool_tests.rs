@@ -2,12 +2,12 @@ use alloy_primitives::address;
 use mempool::{CipherBftPool, MempoolConfig};
 use reth_primitives::TransactionSignedEcRecovered;
 use reth_provider::test_utils::NoopProvider;
-use reth_storage_api::StateProviderBox;
 use reth_transaction_pool::test_utils::{MockTransaction, TestPoolBuilder};
 use reth_transaction_pool::{PoolConfig, SubPoolLimit, TransactionOrigin};
+use std::sync::Arc;
 
-fn noop_state_provider() -> StateProviderBox {
-    Box::new(NoopProvider::default())
+fn noop_state_provider() -> Arc<NoopProvider> {
+    Arc::new(NoopProvider::default())
 }
 
 fn recovered_tx(

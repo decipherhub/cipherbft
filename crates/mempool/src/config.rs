@@ -56,22 +56,6 @@ impl From<MempoolConfig> for PoolConfig {
     }
 }
 
-// probably not needed
-// impl MempoolConfig {
-//     /// Convert borrowed configuration to the underlying Reth configuration.
-//     pub fn to_reth_config(&self) -> PoolConfig {
-//         let mut pool_cfg = PoolConfig::default();
-//         pool_cfg.pending_limit.max_txs = self.max_pending;
-//         pool_cfg.queued_limit.max_txs = self.max_pending;
-//         pool_cfg.max_account_slots = self.max_queued_per_account;
-//         pool_cfg.price_bumps.default_price_bump = self.default_price_bump;
-//         pool_cfg.price_bumps.replace_blob_tx_price_bump = self.replace_blob_tx_price_bump;
-
-//         // TODO: map min_gas_price and max_nonce_gap once upstream hooks are wired.
-//         pool_cfg
-//     }
-// }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,7 +81,6 @@ mod tests {
             ..Default::default()
         };
 
-        // let reth_cfg = cfg.to_reth_config();
         let reth_cfg: PoolConfig = cfg.into();
         assert_eq!(reth_cfg.pending_limit.max_txs, 5_000);
         assert_eq!(reth_cfg.queued_limit.max_txs, 5_000);

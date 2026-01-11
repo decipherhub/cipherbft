@@ -24,12 +24,11 @@ use reth_transaction_pool::blobstore::InMemoryBlobStore;
 use std::sync::Arc;
 
 let chain_spec: Arc<ChainSpec> = Arc::new(/* ... */);
-let client: impl StateProviderFactory = /* ... */;
+let client: Arc<impl StateProviderFactory> = Arc::new(/* ... */);
 let blob_store = InMemoryBlobStore::default();
-let chain_id = 1;
 let config = MempoolConfig::default();
 
-let pool = CipherBftPool::new(chain_spec, client, blob_store, chain_id, config)?;
+let pool = CipherBftPool::new(chain_spec, client, blob_store, config)?;
 ```
 
 ### Wrap an existing Reth pool
@@ -40,8 +39,8 @@ Use this when you already constructed a `Pool`.
 use cipherbft_mempool::{CipherBftPool, CipherBftValidator, MempoolConfig};
 use reth_transaction_pool::{Pool, CoinbaseTipOrdering, PoolConfig};
 
-let state_provider = client.latest()?;
-let validator = CipherBftValidator::new(chain_spec, client, blob_store.clone(), chain_id);
+let mempool_config = MempoolConfig::default();
+let validator = CipherBftValidator::new(chain_spec, client, blob_store.clone());
 let pool_config: PoolConfig = mempool_config.clone().into();
 let reth_pool = Pool::new(
     validator,
@@ -50,7 +49,7 @@ let reth_pool = Pool::new(
     pool_config,
 );
 
-let pool = CipherBftPool::wrap(reth_pool, mempool_config, state_provider);
+let pool = CipherBftPool::wrap(reth_pool, mempool_config, client);
 ```
 
 ## Transaction insertion

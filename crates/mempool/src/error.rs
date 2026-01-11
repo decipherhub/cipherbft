@@ -1,7 +1,7 @@
 //! Error types for mempool operations
 //!
-//! MP-1 단계: 데이터 구조 정의만 유지. Reth PoolError를 감싸고 최소한의
-//! BFT 정책 에러만 노출한다.
+//! MP-1: keep the data structure minimal, wrap Reth's PoolError, and expose
+//! only the BFT policy errors we need.
 
 use reth_transaction_pool::error::PoolError;
 use thiserror::Error;

@@ -12,17 +12,16 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct CipherBftValidator<V: TransactionValidator> {
     inner: V,
-    chain_id: u64,
 }
 
 impl<V: TransactionValidator> CipherBftValidator<V> {
     /// Create a new wrapper around the given validator.
-    pub fn wrap(inner: V, chain_id: u64) -> Self {
-        Self { inner, chain_id }
+    pub fn wrap(inner: V) -> Self {
+        Self { inner }
     }
 }
 
-impl<Client, Tx> CipherBftValidator<EthTransactionValidator<Client, Tx>>
+impl<Client, Tx> CipherBftValidator<EthTransactionValidator<Arc<Client>, Tx>>
 where
     Client: StateProviderFactory,
     Tx: EthPoolTransaction,
@@ -30,15 +29,14 @@ where
     /// Build a wrapper with a reth EthTransactionValidator.
     pub fn new<S>(
         chain_spec: Arc<reth_chainspec::ChainSpec>,
-        client: Client,
+        client: Arc<Client>,
         blob_store: S,
-        chain_id: u64,
     ) -> Self
     where
         S: BlobStore,
     {
         let validator = EthTransactionValidatorBuilder::new(chain_spec).build(client, blob_store);
-        Self::wrap(validator, chain_id)
+        Self::wrap(validator)
     }
 }
 // to add custom validation logic, modify the validate_transaction method
@@ -50,7 +48,6 @@ impl<V: TransactionValidator> TransactionValidator for CipherBftValidator<V> {
         origin: TransactionOrigin,
         transaction: Self::Transaction,
     ) -> TransactionValidationOutcome<Self::Transaction> {
-        let _ = self.chain_id;
         self.inner.validate_transaction(origin, transaction).await
     }
 }
@@ -85,14 +82,14 @@ mod tests {
     fn build_test_validator(
         chain_id: u64,
         tx: &EthPooledTransaction,
-    ) -> CipherBftValidator<EthTransactionValidator<MockEthProvider, EthPooledTransaction>> {
+    ) -> CipherBftValidator<EthTransactionValidator<Arc<MockEthProvider>, EthPooledTransaction>> {
         let chain_spec = ChainSpecBuilder::mainnet()
             .chain(Chain::from_id(chain_id))
             .build();
-        let provider = MockEthProvider::default();
+        let provider = Arc::new(MockEthProvider::default());
         provider.add_account(tx.sender(), ExtendedAccount::new(tx.nonce(), U256::MAX));
         let blob_store = InMemoryBlobStore::default();
-        CipherBftValidator::new(Arc::new(chain_spec), provider, blob_store, chain_id)
+        CipherBftValidator::new(Arc::new(chain_spec), provider, blob_store)
     }
 
     #[tokio::test]
