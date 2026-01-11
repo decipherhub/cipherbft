@@ -11,12 +11,10 @@
 
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_sol_types::sol;
+use parking_lot::RwLock;
 // MIGRATION(revm33): Precompile types moved to revm::precompile module
 use revm::precompile::{PrecompileError, PrecompileOutput, PrecompileResult};
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use std::{collections::HashMap, sync::Arc};
 
 /// Minimum validator stake (1 ETH = 1e18 wei).
 pub const MIN_VALIDATOR_STAKE: u128 = 1_000_000_000_000_000_000;
@@ -320,10 +318,7 @@ impl StakingPrecompile {
         }
 
         // Check if already registered
-        let mut state = self
-            .state
-            .write()
-            .map_err(|_| PrecompileError::Fatal("Failed to acquire state lock".to_string()))?;
+        let mut state = self.state.write();
 
         if state.is_validator(&caller) {
             return Err(PrecompileError::Fatal(
@@ -362,10 +357,7 @@ impl StakingPrecompile {
             return Err(PrecompileError::Fatal("Out of gas".to_string()));
         }
 
-        let mut state = self
-            .state
-            .write()
-            .map_err(|_| PrecompileError::Fatal("Failed to acquire state lock".to_string()))?;
+        let mut state = self.state.write();
 
         if !state.is_validator(&caller) {
             return Err(PrecompileError::Fatal(
@@ -393,10 +385,7 @@ impl StakingPrecompile {
     /// Selector: 0xe7b5c8a9
     /// Gas: 2,100 + 100 per validator
     fn get_validator_set(&self, gas_limit: u64) -> PrecompileResult {
-        let state = self
-            .state
-            .read()
-            .map_err(|_| PrecompileError::Fatal("Failed to acquire state lock".to_string()))?;
+        let state = self.state.read();
 
         let validator_count = state.validators.len();
         let gas_cost = gas::GET_VALIDATOR_SET_BASE
@@ -445,10 +434,7 @@ impl StakingPrecompile {
         // Address is right-aligned in 32 bytes (bytes 12..32)
         let address = Address::from_slice(&data[12..32]);
 
-        let state = self
-            .state
-            .read()
-            .map_err(|_| PrecompileError::Fatal("Failed to acquire state lock".to_string()))?;
+        let state = self.state.read();
 
         let stake = state.get_stake(&address);
 
@@ -492,10 +478,7 @@ impl StakingPrecompile {
         // Decode amount (bytes 32..64)
         let amount = U256::from_be_slice(&data[32..64]);
 
-        let mut state = self
-            .state
-            .write()
-            .map_err(|_| PrecompileError::Fatal("Failed to acquire state lock".to_string()))?;
+        let mut state = self.state.write();
 
         state
             .slash_validator(&validator, amount)
@@ -642,7 +625,7 @@ mod tests {
         assert_eq!(output.gas_used, gas::REGISTER_VALIDATOR);
 
         // Check state
-        let state = precompile.state.read().unwrap();
+        let state = precompile.state.read();
         assert!(state.is_validator(&caller));
         assert_eq!(state.get_stake(&caller), value);
     }
@@ -684,7 +667,7 @@ mod tests {
         assert_eq!(output.gas_used, gas::DEREGISTER_VALIDATOR);
 
         // Check state - validator should be marked for exit
-        let state = precompile.state.read().unwrap();
+        let state = precompile.state.read();
         let validator = state.validators.get(&caller).unwrap();
         assert!(validator.pending_exit.is_some());
     }

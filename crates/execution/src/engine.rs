@@ -24,6 +24,9 @@ use parking_lot::RwLock;
 use revm::primitives::hardfork::SpecId;
 use std::sync::Arc;
 
+/// Number of block hashes to cache for BLOCKHASH opcode (256 per EIP-210).
+const BLOCK_HASH_CACHE_SIZE: usize = 256;
+
 /// ExecutionLayer trait defines the interface for block execution.
 ///
 /// This trait provides the core methods needed by the consensus layer to:
@@ -150,7 +153,7 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
             evm_config,
             staking_precompile,
             block_hashes: RwLock::new(lru::LruCache::new(
-                std::num::NonZeroUsize::new(256).unwrap(),
+                std::num::NonZeroUsize::new(BLOCK_HASH_CACHE_SIZE).unwrap(),
             )),
             current_block: 0,
         }
@@ -268,8 +271,12 @@ impl<P: Provider + Clone> ExecutionLayer for ExecutionEngine<P> {
         // Compute receipts root
         let receipt_rlp: Vec<Bytes> = receipts
             .iter()
-            .map(|r| Bytes::from(bincode::serialize(r).unwrap()))
-            .collect();
+            .map(|r| {
+                bincode::serialize(r)
+                    .map(Bytes::from)
+                    .map_err(|e| ExecutionError::Internal(format!("Receipt serialization failed: {}", e)))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let receipts_root = compute_receipts_root(&receipt_rlp)?;
 
         // Compute transactions root

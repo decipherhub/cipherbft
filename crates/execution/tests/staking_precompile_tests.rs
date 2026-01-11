@@ -73,7 +73,7 @@ fn test_register_validator_success() {
 
     // Verify validator was added to state
     let state = precompile.state();
-    let state_lock = state.read().unwrap();
+    let state_lock = state.read();
     assert!(
         state_lock.is_validator(&validator_addr),
         "Validator should be registered"
@@ -112,7 +112,7 @@ fn test_register_validator_high_stake() {
     );
 
     let state = precompile.state();
-    let state_lock = state.read().unwrap();
+    let state_lock = state.read();
     assert_eq!(state_lock.get_stake(&validator_addr), stake_amount);
 }
 
@@ -144,7 +144,7 @@ fn test_register_validator_insufficient_stake() {
 
     // Verify validator was NOT added
     let state = precompile.state();
-    let state_lock = state.read().unwrap();
+    let state_lock = state.read();
     assert!(
         !state_lock.is_validator(&validator_addr),
         "Validator should not be registered"
@@ -199,7 +199,7 @@ fn test_deregister_validator() {
     // Verify registered
     {
         let state = precompile.state();
-        let state_lock = state.read().unwrap();
+        let state_lock = state.read();
         assert!(state_lock.is_validator(&validator_addr));
     }
 
@@ -217,7 +217,7 @@ fn test_deregister_validator() {
 
     // Verify pending exit is set
     let state = precompile.state();
-    let state_lock = state.read().unwrap();
+    let state_lock = state.read();
     let validator = state_lock.validators.get(&validator_addr).unwrap();
     assert!(
         validator.pending_exit.is_some(),
@@ -371,7 +371,7 @@ fn test_slash_validator() {
 
     // Verify stake was reduced
     let state = precompile.state();
-    let state_lock = state.read().unwrap();
+    let state_lock = state.read();
     let expected_stake = initial_stake - slash_amount;
     assert_eq!(
         state_lock.get_stake(&validator_addr),
@@ -519,7 +519,7 @@ fn test_atomic_operations() {
 
     // Verify both are registered with correct total stake
     let state = precompile.state();
-    let state_lock = state.read().unwrap();
+    let state_lock = state.read();
     assert!(state_lock.is_validator(&val1) && state_lock.is_validator(&val2));
     assert_eq!(
         state_lock.total_stake,
