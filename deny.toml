@@ -15,6 +15,9 @@ ignore = [
     # proc-macro-error unmaintained - transitive dependency via reth tooling
     # Used as proc-macro only, not a runtime security concern
     "RUSTSEC-2024-0370",
+    # bincode unmaintained - transitive dependency in core crates
+    # No maintained upgrade available; revisit if replacement is planned.
+    "RUSTSEC-2025-0141",
 ]
 
 [licenses]
