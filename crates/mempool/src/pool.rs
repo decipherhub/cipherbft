@@ -182,9 +182,10 @@ impl<P: TransactionPool> CipherBftPool<P> {
 
         // BFT Policy 2: Nonce gap enforcement
         // Prevents attackers from bloating the queued pool with distant-future nonces
-        let state_provider = self.state_provider_factory.latest().map_err(|e| {
-            MempoolError::Internal(format!("Failed to get state provider: {e}"))
-        })?;
+        let state_provider = self
+            .state_provider_factory
+            .latest()
+            .map_err(|e| MempoolError::Internal(format!("Failed to get state provider: {e}")))?;
         let current_nonce = state_provider
             .account_nonce(sender)
             .map_err(|e| MempoolError::Internal(format!("Failed to get nonce: {}", e)))?
@@ -218,7 +219,8 @@ where
         config: MempoolConfig,
     ) -> Result<Self, MempoolError> {
         let state_provider_factory: Arc<dyn StateProviderFactory> = client.clone();
-        let validator = CipherBftValidator::new(chain_spec, Arc::clone(&client), blob_store.clone());
+        let validator =
+            CipherBftValidator::new(chain_spec, Arc::clone(&client), blob_store.clone());
         let pool_config: reth_transaction_pool::PoolConfig = config.clone().into();
         let pool = Pool::new(
             validator,

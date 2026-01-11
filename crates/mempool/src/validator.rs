@@ -82,7 +82,8 @@ mod tests {
     fn build_test_validator(
         chain_id: u64,
         tx: &EthPooledTransaction,
-    ) -> CipherBftValidator<EthTransactionValidator<Arc<MockEthProvider>, EthPooledTransaction>> {
+    ) -> CipherBftValidator<EthTransactionValidator<Arc<MockEthProvider>, EthPooledTransaction>>
+    {
         let chain_spec = ChainSpecBuilder::mainnet()
             .chain(Chain::from_id(chain_id))
             .build();
