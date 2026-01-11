@@ -272,9 +272,9 @@ impl<P: Provider + Clone> ExecutionLayer for ExecutionEngine<P> {
         let receipt_rlp: Vec<Bytes> = receipts
             .iter()
             .map(|r| {
-                bincode::serialize(r)
-                    .map(Bytes::from)
-                    .map_err(|e| ExecutionError::Internal(format!("Receipt serialization failed: {}", e)))
+                bincode::serialize(r).map(Bytes::from).map_err(|e| {
+                    ExecutionError::Internal(format!("Receipt serialization failed: {}", e))
+                })
             })
             .collect::<Result<Vec<_>>>()?;
         let receipts_root = compute_receipts_root(&receipt_rlp)?;
