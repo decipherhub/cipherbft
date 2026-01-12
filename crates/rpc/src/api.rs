@@ -3,7 +3,9 @@ use alloy_rpc_types::{BlockId, Filter, TransactionRequest};
 use jsonrpsee::core::server::RpcModule;
 use jsonrpsee::types::ErrorObjectOwned;
 
-use crate::providers::{BlockProvider, EvmExecutor, LogsProvider, ProviderError, StateProvider, TxPoolProvider};
+use crate::providers::{
+    BlockProvider, EvmExecutor, LogsProvider, ProviderError, StateProvider, TxPoolProvider,
+};
 
 fn provider_error(err: ProviderError) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(-32000, err.to_string(), None::<()>)
@@ -13,8 +15,8 @@ fn not_implemented(message: &'static str) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(-32001, message, None::<()>)
 }
 
-/// Shared context for all RPC namespaces.
-pub struct RpcContext<B, S, P, E, L> {
+/// EthApi wraps CipherBFT providers for jsonrpsee handlers.
+pub struct EthApi<B, S, P, E, L> {
     pub block: B,
     pub state: S,
     pub pool: P,
@@ -27,7 +29,7 @@ pub struct RpcContext<B, S, P, E, L> {
     pub peer_count: U64,
 }
 
-impl<B, S, P, E, L> RpcContext<B, S, P, E, L> {
+impl<B, S, P, E, L> EthApi<B, S, P, E, L> {
     pub fn new(
         block: B,
         state: S,
@@ -53,10 +55,24 @@ impl<B, S, P, E, L> RpcContext<B, S, P, E, L> {
             peer_count,
         }
     }
+
+    /// Build a jsonrpsee module with eth/net/web3/txpool namespaces.
+    pub fn into_rpc_module(self) -> RpcModule<Self>
+    where
+        B: BlockProvider + Send + Sync + 'static,
+        S: StateProvider + Send + Sync + 'static,
+        P: TxPoolProvider + Send + Sync + 'static,
+        E: EvmExecutor + Send + Sync + 'static,
+        L: LogsProvider + Send + Sync + 'static,
+    {
+        build_rpc_module(self)
+    }
 }
 
 /// Build a jsonrpsee module with eth/net/web3/txpool namespaces.
-pub fn build_rpc_module<B, S, P, E, L>(ctx: RpcContext<B, S, P, E, L>) -> RpcModule<RpcContext<B, S, P, E, L>>
+pub fn build_rpc_module<B, S, P, E, L>(
+    ctx: EthApi<B, S, P, E, L>,
+) -> RpcModule<EthApi<B, S, P, E, L>>
 where
     B: BlockProvider + Send + Sync + 'static,
     S: StateProvider + Send + Sync + 'static,

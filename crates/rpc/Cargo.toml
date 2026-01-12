@@ -13,6 +13,8 @@ thiserror = { workspace = true }
 alloy-primitives = "0.8"
 alloy-rpc-types = { version = "0.4", features = ["eth"] }
 alloy-eips = "0.4"
+jsonrpsee = { version = "0.24", features = ["server"] }
+serde_json = { workspace = true }
 
 reth-primitives = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
 reth-evm = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
