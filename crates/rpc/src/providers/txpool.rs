@@ -2,8 +2,10 @@ use async_trait::async_trait;
 use alloy_eips::eip2718::Decodable2718;
 use alloy_primitives::{Bytes, B256, U256};
 use mempool::CipherBftPool;
+use mempool::pool::PoolStats;
 use reth_primitives::{
     PooledTransactionsElement, PooledTransactionsElementEcRecovered, TransactionSignedEcRecovered,
+    TransactionSigned,
 };
 use reth_transaction_pool::{PoolTransaction, TransactionOrigin, TransactionPool};
 use std::sync::Arc;
@@ -15,6 +17,9 @@ use super::{ProviderError, ProviderResult};
 pub trait TxPoolProvider: Send + Sync {
     async fn send_raw_transaction(&self, tx: Bytes) -> ProviderResult<B256>;
     async fn gas_price(&self) -> ProviderResult<U256>;
+    async fn pending_transactions(&self) -> ProviderResult<Vec<TransactionSigned>>;
+    async fn queued_transactions(&self) -> ProviderResult<Vec<TransactionSigned>>;
+    async fn txpool_status(&self) -> ProviderResult<PoolStats>;
 }
 
 /// TxPool provider backed by the CipherBFT mempool wrapper.
@@ -58,5 +63,17 @@ where
             max_fee = max_fee.max(tx.max_fee_per_gas());
         }
         Ok(U256::from(max_fee))
+    }
+
+    async fn pending_transactions(&self) -> ProviderResult<Vec<TransactionSigned>> {
+        Ok(self.pool.adapter().pending_transactions())
+    }
+
+    async fn queued_transactions(&self) -> ProviderResult<Vec<TransactionSigned>> {
+        Ok(self.pool.adapter().queued_transactions())
+    }
+
+    async fn txpool_status(&self) -> ProviderResult<PoolStats> {
+        Ok(self.pool.adapter().stats())
     }
 }

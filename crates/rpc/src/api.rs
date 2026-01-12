@@ -1,24 +1,25 @@
 use alloy_primitives::{keccak256, Address, B256, Bytes, TxKind, U64};
 use alloy_rpc_types::{
     AnyReceiptEnvelope, Block, BlockId, BlockNumberOrTag, BlockTransactionsKind, Filter, Log,
-    ReceiptWithBloom, TransactionInfo, TransactionReceipt, TransactionRequest,
+    FilteredParams, ReceiptWithBloom, TransactionInfo, TransactionReceipt, TransactionRequest,
 };
+use alloy_rpc_types::txpool::{TxpoolContent, TxpoolInspect, TxpoolInspectSummary, TxpoolStatus};
+use alloy_rpc_types::pubsub::SubscriptionKind;
 use alloy_serde::WithOtherFields;
-use jsonrpsee::core::server::RpcModule;
+use jsonrpsee::core::{server::RpcModule, StringError};
+use jsonrpsee::SubscriptionMessage;
 use jsonrpsee::types::ErrorObjectOwned;
-use reth_primitives::TransactionMeta;
+use reth_primitives::{SealedHeader, TransactionMeta, TransactionSigned};
 use reth_rpc_types_compat::{block as compat_block, transaction as compat_tx};
+use std::collections::BTreeMap;
 
+use crate::pubsub::RpcEventChannels;
 use crate::providers::{
     BlockProvider, EvmExecutor, LogsProvider, ProviderError, StateProvider, TxPoolProvider,
 };
 
 fn provider_error(err: ProviderError) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(-32000, err.to_string(), None::<()>)
-}
-
-fn not_implemented(message: &'static str) -> ErrorObjectOwned {
-    ErrorObjectOwned::owned(-32001, message, None::<()>)
 }
 
 type RpcTransaction = WithOtherFields<alloy_rpc_types::Transaction>;
@@ -32,6 +33,7 @@ pub struct EthApi<B, S, P, E, L> {
     pub pool: P,
     pub evm: E,
     pub logs: L,
+    pub events: Option<RpcEventChannels>,
     pub chain_id: u64,
     pub network_id: u64,
     pub client_version: String,
@@ -58,6 +60,7 @@ impl<B, S, P, E, L> EthApi<B, S, P, E, L> {
             pool,
             evm,
             logs,
+            events: None,
             chain_id,
             network_id,
             client_version,
@@ -76,6 +79,11 @@ impl<B, S, P, E, L> EthApi<B, S, P, E, L> {
         L: LogsProvider + Send + Sync + 'static,
     {
         build_rpc_module(self)
+    }
+
+    pub fn with_events(mut self, events: RpcEventChannels) -> Self {
+        self.events = Some(events);
+        self
     }
 }
 
@@ -390,7 +398,7 @@ where
 
             let (contract_address, to) = match tx.transaction.kind() {
                 TxKind::Create => (Some(from.create(tx.transaction.nonce())), None),
-                TxKind::Call(addr) => (None, Some(Address(*addr))),
+                TxKind::Call(addr) => (None, Some(addr)),
             };
 
             let tx_receipt = TransactionReceipt {
@@ -415,6 +423,111 @@ where
                 other: Default::default(),
             }))
         })
+        .unwrap();
+
+    module
+        .register_subscription(
+            "eth_subscribe",
+            "eth_subscription",
+            "eth_unsubscribe",
+            |params, pending, ctx, _| async move {
+                let events = ctx
+                    .events
+                    .clone()
+                    .ok_or_else(|| StringError::from("subscriptions not wired"))?;
+                let params: Vec<serde_json::Value> = params
+                    .parse()
+                    .map_err(|err| StringError::from(err.to_string()))?;
+                let kind = params
+                    .get(0)
+                    .ok_or_else(|| StringError::from("missing subscription kind"))
+                    .and_then(|value| {
+                        serde_json::from_value::<SubscriptionKind>(value.clone()).map_err(|_| {
+                            StringError::from("invalid subscription kind")
+                        })
+                    })?;
+
+                let filter = params
+                    .get(1)
+                    .and_then(|value| serde_json::from_value::<Filter>(value.clone()).ok());
+
+                let sink = pending
+                    .accept()
+                    .await
+                    .map_err(|err| StringError::from(err.to_string()))?;
+
+                match kind {
+                    SubscriptionKind::NewHeads => {
+                        let mut rx = events.new_heads.subscribe();
+                        tokio::spawn(async move {
+                            while let Ok(header) = rx.recv().await {
+                                let header = format_rpc_header(header);
+                                let msg = match SubscriptionMessage::from_json(&header) {
+                                    Ok(msg) => msg,
+                                    Err(_) => continue,
+                                };
+                                if sink.send(msg).await.is_err() {
+                                    break;
+                                }
+                            }
+                        });
+                    }
+                    SubscriptionKind::Logs => {
+                        let filter = filter.unwrap_or_default();
+                        let mut rx = events.logs.subscribe();
+                        tokio::spawn(async move {
+                            while let Ok(log) = rx.recv().await {
+                                if !log_matches(&filter, &log) {
+                                    continue;
+                                }
+                                let msg = match SubscriptionMessage::from_json(&log) {
+                                    Ok(msg) => msg,
+                                    Err(_) => continue,
+                                };
+                                if sink.send(msg).await.is_err() {
+                                    break;
+                                }
+                            }
+                        });
+                    }
+                    SubscriptionKind::NewPendingTransactions => {
+                        if matches!(params.get(1), Some(serde_json::Value::Bool(true))) {
+                            return Err(StringError::from(
+                                "full tx subscriptions not supported",
+                            ));
+                        }
+                        let mut rx = events.pending_txs.subscribe();
+                        tokio::spawn(async move {
+                            while let Ok(hash) = rx.recv().await {
+                                let msg = match SubscriptionMessage::from_json(&hash) {
+                                    Ok(msg) => msg,
+                                    Err(_) => continue,
+                                };
+                                if sink.send(msg).await.is_err() {
+                                    break;
+                                }
+                            }
+                        });
+                    }
+                    SubscriptionKind::Syncing => {
+                        let mut rx = events.syncing.subscribe();
+                        tokio::spawn(async move {
+                            while let Ok(status) = rx.recv().await {
+                                let msg = match SubscriptionMessage::from_json(&status) {
+                                    Ok(msg) => msg,
+                                    Err(_) => continue,
+                                };
+                                if sink.send(msg).await.is_err() {
+                                    break;
+                                }
+                            }
+                        });
+                    }
+                }
+
+                Ok::<_, StringError>(())
+            },
+        )
         .unwrap();
 
     // net namespace
@@ -442,15 +555,47 @@ where
         })
         .unwrap();
 
-    // txpool namespace (placeholder)
+    // txpool namespace
     module
-        .register_method("txpool_status", |_, _, _| Err::<serde_json::Value, _>(not_implemented("txpool not wired")))
+        .register_async_method("txpool_status", |_, ctx, _| async move {
+            let stats = ctx.pool.txpool_status().await.map_err(provider_error)?;
+            Ok::<_, ErrorObjectOwned>(TxpoolStatus {
+                pending: stats.pending as u64,
+                queued: stats.queued as u64,
+            })
+        })
         .unwrap();
     module
-        .register_method("txpool_content", |_, _, _| Err::<serde_json::Value, _>(not_implemented("txpool not wired")))
+        .register_async_method("txpool_content", |_, ctx, _| async move {
+            let pending = ctx
+                .pool
+                .pending_transactions()
+                .await
+                .map_err(provider_error)?;
+            let queued = ctx
+                .pool
+                .queued_transactions()
+                .await
+                .map_err(provider_error)?;
+
+            Ok::<_, ErrorObjectOwned>(txpool_content(pending, queued))
+        })
         .unwrap();
     module
-        .register_method("txpool_inspect", |_, _, _| Err::<serde_json::Value, _>(not_implemented("txpool not wired")))
+        .register_async_method("txpool_inspect", |_, ctx, _| async move {
+            let pending = ctx
+                .pool
+                .pending_transactions()
+                .await
+                .map_err(provider_error)?;
+            let queued = ctx
+                .pool
+                .queued_transactions()
+                .await
+                .map_err(provider_error)?;
+
+            Ok::<_, ErrorObjectOwned>(txpool_inspect(pending, queued))
+        })
         .unwrap();
 
     module
@@ -464,4 +609,120 @@ fn transaction_info(meta: TransactionMeta) -> TransactionInfo {
         block_number: Some(meta.block_number),
         base_fee: meta.base_fee.map(u128::from),
     }
+}
+
+fn format_rpc_header(header: SealedHeader) -> WithOtherFields<alloy_rpc_types::Header> {
+    WithOtherFields {
+        inner: compat_block::from_primitive_with_hash(header),
+        other: Default::default(),
+    }
+}
+
+fn log_matches(filter: &Filter, log: &Log) -> bool {
+    if let Some(hash) = filter.get_block_hash() {
+        if log.block_hash != Some(hash) {
+            return false;
+        }
+    }
+
+    if let Some(block_number) = log.block_number {
+        if let Some(from_block) = filter.get_from_block() {
+            if block_number < from_block {
+                return false;
+            }
+        }
+        if let Some(to_block) = filter.get_to_block() {
+            if block_number > to_block {
+                return false;
+            }
+        }
+    } else if filter.get_from_block().is_some() || filter.get_to_block().is_some() {
+        return false;
+    }
+
+    let params = FilteredParams::new(Some(filter.clone()));
+    if !params.filter_address(&log.inner.address) {
+        return false;
+    }
+
+    if !params.filter_topics(log.inner.topics()) {
+        return false;
+    }
+
+    true
+}
+
+fn txpool_content(
+    pending: Vec<TransactionSigned>,
+    queued: Vec<TransactionSigned>,
+) -> TxpoolContent<RpcTransaction> {
+    let mut content = TxpoolContent {
+        pending: BTreeMap::new(),
+        queued: BTreeMap::new(),
+    };
+
+    for tx in pending {
+        insert_txpool_transaction(&mut content.pending, tx);
+    }
+    for tx in queued {
+        insert_txpool_transaction(&mut content.queued, tx);
+    }
+
+    content
+}
+
+fn txpool_inspect(pending: Vec<TransactionSigned>, queued: Vec<TransactionSigned>) -> TxpoolInspect {
+    let mut inspect = TxpoolInspect {
+        pending: BTreeMap::new(),
+        queued: BTreeMap::new(),
+    };
+
+    for tx in pending {
+        insert_txpool_inspect(&mut inspect.pending, tx);
+    }
+    for tx in queued {
+        insert_txpool_inspect(&mut inspect.queued, tx);
+    }
+
+    inspect
+}
+
+fn insert_txpool_transaction(
+    map: &mut BTreeMap<Address, BTreeMap<String, RpcTransaction>>,
+    tx: TransactionSigned,
+) {
+    let recovered = match tx.try_ecrecovered() {
+        Some(recovered) => recovered,
+        None => return,
+    };
+    let sender = recovered.signer();
+    let nonce_key = tx.transaction.nonce().to_string();
+    let rpc_tx = compat_tx::from_recovered::<()>(recovered);
+
+    map.entry(sender).or_default().insert(nonce_key, rpc_tx);
+}
+
+fn insert_txpool_inspect(
+    map: &mut BTreeMap<Address, BTreeMap<String, TxpoolInspectSummary>>,
+    tx: TransactionSigned,
+) {
+    let recovered = match tx.try_ecrecovered() {
+        Some(recovered) => recovered,
+        None => return,
+    };
+    let sender = recovered.signer();
+    let nonce_key = tx.transaction.nonce().to_string();
+    let to = match tx.transaction.kind() {
+        TxKind::Create => None,
+        TxKind::Call(addr) => Some(addr),
+    };
+
+    let summary = TxpoolInspectSummary {
+        to,
+        value: tx.transaction.value(),
+        gas: u128::from(tx.transaction.gas_limit()),
+        gas_price: tx.transaction.max_fee_per_gas(),
+    };
+
+    map.entry(sender).or_default().insert(nonce_key, summary);
 }
