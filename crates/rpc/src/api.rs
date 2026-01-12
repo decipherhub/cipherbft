@@ -1,7 +1,13 @@
 use alloy_primitives::{keccak256, Address, B256, Bytes, U64};
-use alloy_rpc_types::{BlockId, Filter, TransactionRequest};
+use alloy_rpc_types::{
+    Block, BlockId, BlockNumberOrTag, BlockTransactionsKind, Filter, TransactionInfo,
+    TransactionRequest,
+};
+use alloy_serde::WithOtherFields;
 use jsonrpsee::core::server::RpcModule;
 use jsonrpsee::types::ErrorObjectOwned;
+use reth_primitives::TransactionMeta;
+use reth_rpc_types_compat::{block as compat_block, transaction as compat_tx};
 
 use crate::providers::{
     BlockProvider, EvmExecutor, LogsProvider, ProviderError, StateProvider, TxPoolProvider,
@@ -14,6 +20,9 @@ fn provider_error(err: ProviderError) -> ErrorObjectOwned {
 fn not_implemented(message: &'static str) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(-32001, message, None::<()>)
 }
+
+type RpcTransaction = WithOtherFields<alloy_rpc_types::Transaction>;
+type RpcBlock = Block<RpcTransaction>;
 
 /// EthApi wraps CipherBFT providers for jsonrpsee handlers.
 pub struct EthApi<B, S, P, E, L> {
@@ -177,26 +186,123 @@ where
         })
         .unwrap();
 
-    // Placeholder handlers for block/tx/receipt RPCs that require RPC type conversions.
+    // Block/tx handlers (minimal RPC-2 support).
     module
-        .register_async_method("eth_getBlockByHash", |_, _, _| async move {
-            Err::<serde_json::Value, ErrorObjectOwned>(not_implemented(
-                "block/tx conversion not wired",
-            ))
+        .register_async_method("eth_getBlockByHash", |params, ctx, _| async move {
+            let (hash, full): (B256, bool) = params.parse()?;
+            let block = ctx
+                .block
+                .block_with_senders_by_hash(hash)
+                .await
+                .map_err(provider_error)?;
+            let total_difficulty = ctx
+                .block
+                .total_difficulty_by_hash(hash)
+                .await
+                .map_err(provider_error)?
+                .unwrap_or_default();
+
+            let response = block.map(|block| {
+                let kind = if full {
+                    BlockTransactionsKind::Full
+                } else {
+                    BlockTransactionsKind::Hashes
+                };
+                compat_block::from_block::<()>(block, total_difficulty, kind, Some(hash))
+                    .map_err(|err| provider_error(ProviderError::Storage(err.to_string())))
+            });
+
+            match response {
+                Some(Ok(block)) => Ok::<Option<RpcBlock>, ErrorObjectOwned>(Some(block)),
+                Some(Err(err)) => Err(err),
+                None => Ok::<Option<RpcBlock>, ErrorObjectOwned>(None),
+            }
         })
         .unwrap();
     module
-        .register_async_method("eth_getBlockByNumber", |_, _, _| async move {
-            Err::<serde_json::Value, ErrorObjectOwned>(not_implemented(
-                "block/tx conversion not wired",
-            ))
+        .register_async_method("eth_getBlockByNumber", |params, ctx, _| async move {
+            let (block_id, full): (BlockId, bool) = params.parse()?;
+
+            let (block, total_difficulty, block_hash) = match block_id {
+                BlockId::Hash(hash) => {
+                    let block = ctx
+                        .block
+                        .block_with_senders_by_hash(hash.block_hash)
+                        .await
+                        .map_err(provider_error)?;
+                    let td = ctx
+                        .block
+                        .total_difficulty_by_hash(hash.block_hash)
+                        .await
+                        .map_err(provider_error)?;
+                    (block, td, Some(hash.block_hash))
+                }
+                BlockId::Number(tag) => {
+                    let number = match tag {
+                        BlockNumberOrTag::Latest
+                        | BlockNumberOrTag::Pending
+                        | BlockNumberOrTag::Safe
+                        | BlockNumberOrTag::Finalized => ctx
+                            .block
+                            .block_number()
+                            .await
+                            .map_err(provider_error)?,
+                        BlockNumberOrTag::Earliest => 0,
+                        BlockNumberOrTag::Number(num) => num,
+                    };
+                    let block = ctx
+                        .block
+                        .block_with_senders_by_number(number)
+                        .await
+                        .map_err(provider_error)?;
+                    let td = ctx
+                        .block
+                        .total_difficulty_by_number(number)
+                        .await
+                        .map_err(provider_error)?;
+                    (block, td, None)
+                }
+            };
+
+            let total_difficulty = total_difficulty.unwrap_or_default();
+            let response = block.map(|block| {
+                let kind = if full {
+                    BlockTransactionsKind::Full
+                } else {
+                    BlockTransactionsKind::Hashes
+                };
+                compat_block::from_block::<()>(block, total_difficulty, kind, block_hash)
+                    .map_err(|err| provider_error(ProviderError::Storage(err.to_string())))
+            });
+
+            match response {
+                Some(Ok(block)) => Ok::<Option<RpcBlock>, ErrorObjectOwned>(Some(block)),
+                Some(Err(err)) => Err(err),
+                None => Ok::<Option<RpcBlock>, ErrorObjectOwned>(None),
+            }
         })
         .unwrap();
     module
-        .register_async_method("eth_getTransactionByHash", |_, _, _| async move {
-            Err::<serde_json::Value, ErrorObjectOwned>(not_implemented(
-                "block/tx conversion not wired",
-            ))
+        .register_async_method("eth_getTransactionByHash", |params, ctx, _| async move {
+            let hash: B256 = params.one()?;
+            let result = ctx
+                .block
+                .transaction_by_hash_with_meta(hash)
+                .await
+                .map_err(provider_error)?;
+
+            let Some((tx, meta)) = result else {
+                return Ok::<Option<RpcTransaction>, ErrorObjectOwned>(None);
+            };
+
+            let tx = tx.try_ecrecovered().ok_or_else(|| {
+                provider_error(ProviderError::Storage("invalid transaction signature".to_string()))
+            })?;
+
+            let tx_info = transaction_info(meta);
+            let rpc_tx = compat_tx::from_recovered_with_block_context::<()>(tx, tx_info);
+
+            Ok::<Option<RpcTransaction>, ErrorObjectOwned>(Some(rpc_tx))
         })
         .unwrap();
     module
@@ -244,4 +350,14 @@ where
         .unwrap();
 
     module
+}
+
+fn transaction_info(meta: TransactionMeta) -> TransactionInfo {
+    TransactionInfo {
+        hash: Some(meta.tx_hash),
+        index: Some(meta.index),
+        block_hash: Some(meta.block_hash),
+        block_number: Some(meta.block_number),
+        base_fee: meta.base_fee.map(u128::from),
+    }
 }

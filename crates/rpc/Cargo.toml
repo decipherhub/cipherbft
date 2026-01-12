@@ -13,6 +13,7 @@ thiserror = { workspace = true }
 alloy-primitives = "0.8"
 alloy-rpc-types = { version = "0.4", features = ["eth"] }
 alloy-eips = "0.4"
+alloy-serde = "0.4"
 jsonrpsee = { version = "0.24", features = ["server"] }
 serde_json = { workspace = true }
 
@@ -21,6 +22,7 @@ reth-evm = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
 reth-provider = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
 reth-rpc = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
 reth-rpc-builder = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
+reth-rpc-types-compat = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
 reth-network-api = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
 reth-tasks = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
 reth-storage-api = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
