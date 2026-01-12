@@ -1,7 +1,7 @@
-use alloy_primitives::{keccak256, Address, B256, Bytes, U64};
+use alloy_primitives::{keccak256, Address, B256, Bytes, TxKind, U64};
 use alloy_rpc_types::{
-    Block, BlockId, BlockNumberOrTag, BlockTransactionsKind, Filter, TransactionInfo,
-    TransactionRequest,
+    AnyReceiptEnvelope, Block, BlockId, BlockNumberOrTag, BlockTransactionsKind, Filter, Log,
+    ReceiptWithBloom, TransactionInfo, TransactionReceipt, TransactionRequest,
 };
 use alloy_serde::WithOtherFields;
 use jsonrpsee::core::server::RpcModule;
@@ -23,6 +23,7 @@ fn not_implemented(message: &'static str) -> ErrorObjectOwned {
 
 type RpcTransaction = WithOtherFields<alloy_rpc_types::Transaction>;
 type RpcBlock = Block<RpcTransaction>;
+type RpcReceipt = WithOtherFields<TransactionReceipt<AnyReceiptEnvelope<Log>>>;
 
 /// EthApi wraps CipherBFT providers for jsonrpsee handlers.
 pub struct EthApi<B, S, P, E, L> {
@@ -306,10 +307,113 @@ where
         })
         .unwrap();
     module
-        .register_async_method("eth_getTransactionReceipt", |_, _, _| async move {
-            Err::<serde_json::Value, ErrorObjectOwned>(not_implemented(
-                "receipt conversion not wired",
-            ))
+        .register_async_method("eth_getTransactionReceipt", |params, ctx, _| async move {
+            let hash: B256 = params.one()?;
+            let result = ctx
+                .block
+                .transaction_by_hash_with_meta(hash)
+                .await
+                .map_err(provider_error)?;
+
+            let Some((tx, meta)) = result else {
+                return Ok::<Option<RpcReceipt>, ErrorObjectOwned>(None);
+            };
+
+            let receipt = ctx
+                .block
+                .receipt_by_hash(hash)
+                .await
+                .map_err(provider_error)?;
+            let Some(receipt) = receipt else {
+                return Ok::<Option<RpcReceipt>, ErrorObjectOwned>(None);
+            };
+
+            let all_receipts = ctx
+                .block
+                .receipts_by_block_hash(meta.block_hash)
+                .await
+                .map_err(provider_error)?;
+            let Some(all_receipts) = all_receipts else {
+                return Ok::<Option<RpcReceipt>, ErrorObjectOwned>(None);
+            };
+
+            let from = tx.recover_signer_unchecked().ok_or_else(|| {
+                provider_error(ProviderError::Storage(
+                    "invalid transaction signature".to_string(),
+                ))
+            })?;
+
+            let gas_used = if meta.index == 0 {
+                receipt.cumulative_gas_used
+            } else {
+                let prev_idx = (meta.index - 1) as usize;
+                all_receipts
+                    .get(prev_idx)
+                    .map(|prev| receipt.cumulative_gas_used - prev.cumulative_gas_used)
+                    .unwrap_or_default()
+            };
+
+            let mut prior_logs = 0usize;
+            for prev in all_receipts.iter().take(meta.index as usize) {
+                prior_logs += prev.logs.len();
+            }
+
+            let logs: Vec<Log> = receipt
+                .logs
+                .iter()
+                .enumerate()
+                .map(|(tx_log_idx, log)| Log {
+                    inner: log.clone(),
+                    block_hash: Some(meta.block_hash),
+                    block_number: Some(meta.block_number),
+                    block_timestamp: Some(meta.timestamp),
+                    transaction_hash: Some(meta.tx_hash),
+                    transaction_index: Some(meta.index),
+                    log_index: Some((prior_logs + tx_log_idx) as u64),
+                    removed: false,
+                })
+                .collect();
+
+            let rpc_receipt = alloy_rpc_types::Receipt {
+                status: receipt.success.into(),
+                cumulative_gas_used: receipt.cumulative_gas_used as u128,
+                logs,
+            };
+            let logs_bloom = receipt.bloom_slow();
+            let envelope = AnyReceiptEnvelope {
+                inner: ReceiptWithBloom {
+                    receipt: rpc_receipt,
+                    logs_bloom,
+                },
+                r#type: tx.transaction.tx_type().into(),
+            };
+
+            let (contract_address, to) = match tx.transaction.kind() {
+                TxKind::Create => (Some(from.create(tx.transaction.nonce())), None),
+                TxKind::Call(addr) => (None, Some(Address(*addr))),
+            };
+
+            let tx_receipt = TransactionReceipt {
+                inner: envelope,
+                transaction_hash: meta.tx_hash,
+                transaction_index: Some(meta.index),
+                block_hash: Some(meta.block_hash),
+                block_number: Some(meta.block_number),
+                gas_used: gas_used as u128,
+                effective_gas_price: tx.transaction.effective_gas_price(meta.base_fee),
+                blob_gas_used: tx.transaction.blob_gas_used().map(u128::from),
+                blob_gas_price: None,
+                from,
+                to,
+                contract_address,
+                state_root: None,
+                authorization_list: tx.authorization_list().map(|list| list.to_vec()),
+            };
+
+            Ok::<Option<RpcReceipt>, ErrorObjectOwned>(Some(WithOtherFields {
+                inner: tx_receipt,
+                other: Default::default(),
+            }))
         })
         .unwrap();
 

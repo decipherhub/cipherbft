@@ -1,7 +1,8 @@
 use async_trait::async_trait;
+use alloy_eips::BlockHashOrNumber;
 use alloy_primitives::{B256, U256};
 use reth_primitives::{Block, BlockWithSenders, Receipt, TransactionMeta, TransactionSigned};
-use reth_storage_api::{BlockReader, TransactionVariant};
+use reth_storage_api::{BlockReader, ReceiptProvider, TransactionVariant};
 use std::sync::Arc;
 
 use super::{ProviderError, ProviderResult};
@@ -28,6 +29,8 @@ pub trait BlockProvider: Send + Sync {
         hash: B256,
     ) -> ProviderResult<Option<(TransactionSigned, TransactionMeta)>>;
     async fn receipt_by_hash(&self, hash: B256) -> ProviderResult<Option<Receipt>>;
+    async fn receipts_by_block_hash(&self, hash: B256) -> ProviderResult<Option<Vec<Receipt>>>;
+    async fn receipts_by_block_number(&self, number: u64) -> ProviderResult<Option<Vec<Receipt>>>;
 }
 
 /// Block provider backed by a Reth storage provider.
@@ -45,7 +48,7 @@ impl<B> RethBlockProvider<B> {
 #[async_trait]
 impl<B> BlockProvider for RethBlockProvider<B>
 where
-    B: BlockReader + Send + Sync,
+    B: BlockReader + ReceiptProvider + Send + Sync,
 {
     async fn block_number(&self) -> ProviderResult<u64> {
         self.backend
@@ -114,6 +117,18 @@ where
     async fn receipt_by_hash(&self, hash: B256) -> ProviderResult<Option<Receipt>> {
         self.backend
             .receipt_by_hash(hash)
+            .map_err(|err| ProviderError::Storage(err.to_string()))
+    }
+
+    async fn receipts_by_block_hash(&self, hash: B256) -> ProviderResult<Option<Vec<Receipt>>> {
+        self.backend
+            .receipts_by_block(BlockHashOrNumber::Hash(hash))
+            .map_err(|err| ProviderError::Storage(err.to_string()))
+    }
+
+    async fn receipts_by_block_number(&self, number: u64) -> ProviderResult<Option<Vec<Receipt>>> {
+        self.backend
+            .receipts_by_block(BlockHashOrNumber::Number(number))
             .map_err(|err| ProviderError::Storage(err.to_string()))
     }
 }
