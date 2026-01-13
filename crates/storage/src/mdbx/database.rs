@@ -4,11 +4,16 @@
 //! handling initialization, configuration, and table creation.
 
 use crate::error::{Result, StorageError};
-use reth_db::{mdbx::DatabaseArguments, ClientVersion, DatabaseEnv as RethDatabaseEnv};
+use reth_db::{
+    mdbx::{init_db_for, DatabaseArguments},
+    ClientVersion, DatabaseEnv as RethDatabaseEnv,
+};
 use reth_db_api::database::Database as DatabaseTrait;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, info};
+
+use super::tables::Tables;
 
 /// Database configuration
 #[derive(Debug, Clone)]
@@ -76,6 +81,9 @@ pub struct Database {
 
 impl Database {
     /// Open a database at the specified path
+    ///
+    /// This creates the database if it doesn't exist and initializes all CipherBFT
+    /// custom tables (Consensus, EVM, Staking) using the TableSet implementation.
     pub fn open(config: DatabaseConfig) -> Result<Self> {
         info!(path = %config.path.display(), "Opening CipherBFT database");
 
@@ -90,11 +98,13 @@ impl Database {
                 reth_db::mdbx::MaxReadTransactionDuration::Set(std::time::Duration::from_secs(60)),
             ));
 
-        // Open the environment
-        let env = reth_db::init_db(&config.path, args)
+        // Open the environment and create CipherBFT custom tables
+        // Uses init_db_for<Tables> to create all our custom tables (Consensus, EVM, Staking)
+        // instead of reth's default tables
+        let env = init_db_for::<_, Tables>(&config.path, args)
             .map_err(|e| StorageError::Database(format!("Failed to open database: {e}")))?;
 
-        debug!("Database opened successfully");
+        debug!("Database opened successfully with CipherBFT tables");
 
         Ok(Self {
             env: Arc::new(env),

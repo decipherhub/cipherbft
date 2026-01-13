@@ -41,10 +41,7 @@ impl MdbxEvmStore {
 
 impl EvmStore for MdbxEvmStore {
     fn get_account(&self, address: &[u8; 20]) -> EvmStoreResult<Option<EvmAccount>> {
-        let tx = self
-            .db
-            .tx()
-            .map_err(|e| db_err(e.to_string()))?;
+        let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
 
         let key = AddressKey(*address);
         let result = tx
@@ -66,10 +63,7 @@ impl EvmStore for MdbxEvmStore {
     }
 
     fn set_account(&self, address: &[u8; 20], account: EvmAccount) -> EvmStoreResult<()> {
-        let tx = self
-            .db
-            .tx_mut()
-            .map_err(|e| db_err(e.to_string()))?;
+        let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         let key = AddressKey(*address);
         let stored = StoredAccount {
@@ -82,38 +76,28 @@ impl EvmStore for MdbxEvmStore {
         tx.put::<EvmAccounts>(key, stored.into())
             .map_err(|e| db_err(e.to_string()))?;
 
-        tx.commit()
-            .map_err(|e| db_err(e.to_string()))?;
+        tx.commit().map_err(|e| db_err(e.to_string()))?;
 
         Ok(())
     }
 
     fn delete_account(&self, address: &[u8; 20]) -> EvmStoreResult<()> {
-        let tx = self
-            .db
-            .tx_mut()
-            .map_err(|e| db_err(e.to_string()))?;
+        let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         let key = AddressKey(*address);
         tx.delete::<EvmAccounts>(key, None)
             .map_err(|e| db_err(e.to_string()))?;
 
-        tx.commit()
-            .map_err(|e| db_err(e.to_string()))?;
+        tx.commit().map_err(|e| db_err(e.to_string()))?;
 
         Ok(())
     }
 
     fn get_code(&self, code_hash: &[u8; 32]) -> EvmStoreResult<Option<EvmBytecode>> {
-        let tx = self
-            .db
-            .tx()
-            .map_err(|e| db_err(e.to_string()))?;
+        let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
 
         let key = HashKey(*code_hash);
-        let result = tx
-            .get::<EvmCode>(key)
-            .map_err(|e| db_err(e.to_string()))?;
+        let result = tx.get::<EvmCode>(key).map_err(|e| db_err(e.to_string()))?;
 
         match result {
             Some(stored) => Ok(Some(EvmBytecode::new(stored.0.code))),
@@ -122,28 +106,23 @@ impl EvmStore for MdbxEvmStore {
     }
 
     fn set_code(&self, code_hash: &[u8; 32], bytecode: EvmBytecode) -> EvmStoreResult<()> {
-        let tx = self
-            .db
-            .tx_mut()
-            .map_err(|e| db_err(e.to_string()))?;
+        let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         let key = HashKey(*code_hash);
-        let stored = StoredBytecode { code: bytecode.code };
+        let stored = StoredBytecode {
+            code: bytecode.code,
+        };
 
         tx.put::<EvmCode>(key, stored.into())
             .map_err(|e| db_err(e.to_string()))?;
 
-        tx.commit()
-            .map_err(|e| db_err(e.to_string()))?;
+        tx.commit().map_err(|e| db_err(e.to_string()))?;
 
         Ok(())
     }
 
     fn get_storage(&self, address: &[u8; 20], slot: &[u8; 32]) -> EvmStoreResult<[u8; 32]> {
-        let tx = self
-            .db
-            .tx()
-            .map_err(|e| db_err(e.to_string()))?;
+        let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
 
         let key = StorageSlotKey {
             address: *address,
@@ -165,10 +144,7 @@ impl EvmStore for MdbxEvmStore {
         slot: &[u8; 32],
         value: [u8; 32],
     ) -> EvmStoreResult<()> {
-        let tx = self
-            .db
-            .tx_mut()
-            .map_err(|e| db_err(e.to_string()))?;
+        let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         let key = StorageSlotKey {
             address: *address,
@@ -185,17 +161,13 @@ impl EvmStore for MdbxEvmStore {
                 .map_err(|e| db_err(e.to_string()))?;
         }
 
-        tx.commit()
-            .map_err(|e| db_err(e.to_string()))?;
+        tx.commit().map_err(|e| db_err(e.to_string()))?;
 
         Ok(())
     }
 
     fn get_block_hash(&self, number: u64) -> EvmStoreResult<Option<[u8; 32]>> {
-        let tx = self
-            .db
-            .tx()
-            .map_err(|e| db_err(e.to_string()))?;
+        let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
 
         let key = BlockNumberKey(number);
         let result = tx
@@ -209,10 +181,7 @@ impl EvmStore for MdbxEvmStore {
     }
 
     fn set_block_hash(&self, number: u64, hash: [u8; 32]) -> EvmStoreResult<()> {
-        let tx = self
-            .db
-            .tx_mut()
-            .map_err(|e| db_err(e.to_string()))?;
+        let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         let key = BlockNumberKey(number);
         let value = HashKey(hash);
@@ -220,8 +189,7 @@ impl EvmStore for MdbxEvmStore {
         tx.put::<EvmBlockHashes>(key, value)
             .map_err(|e| db_err(e.to_string()))?;
 
-        tx.commit()
-            .map_err(|e| db_err(e.to_string()))?;
+        tx.commit().map_err(|e| db_err(e.to_string()))?;
 
         Ok(())
     }
@@ -239,7 +207,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires EVM tables to be created - pending table initialization"]
     fn test_account_operations() {
         let (db, _temp_dir) = create_test_db();
         let store = MdbxEvmStore::new(db);
@@ -247,7 +214,10 @@ mod tests {
         let address = [1u8; 20];
         let account = EvmAccount {
             nonce: 42,
-            balance: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100],
+            balance: [
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 100,
+            ],
             code_hash: [2u8; 32],
             storage_root: [3u8; 32],
         };
@@ -265,7 +235,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires EVM tables to be created - pending table initialization"]
     fn test_code_operations() {
         let (db, _temp_dir) = create_test_db();
         let store = MdbxEvmStore::new(db);
@@ -284,7 +253,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires EVM tables to be created - pending table initialization"]
     fn test_storage_operations() {
         let (db, _temp_dir) = create_test_db();
         let store = MdbxEvmStore::new(db);
@@ -305,7 +273,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires EVM tables to be created - pending table initialization"]
     fn test_block_hash_operations() {
         let (db, _temp_dir) = create_test_db();
         let store = MdbxEvmStore::new(db);

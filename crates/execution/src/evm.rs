@@ -206,7 +206,7 @@ impl CipherBftEvmConfig {
         // NOTE: transact() would call finalize() and clear the journal, preventing nonce increments
         let result = evm
             .transact_one(tx_env)
-            .map_err(|e| ExecutionError::evm(format!("Transaction execution failed: {:?}", e)))?;
+            .map_err(|e| ExecutionError::evm(format!("Transaction execution failed: {e:?}")))?;
 
         // Use the existing helper to process the result
         self.process_execution_result(result, tx_hash, sender, to)
@@ -244,7 +244,7 @@ impl CipherBftEvmConfig {
         // Decode transaction using alloy-consensus
         let tx_envelope = alloy_consensus::TxEnvelope::decode_2718(&mut tx_bytes.as_ref())
             .map_err(|e| {
-                ExecutionError::invalid_transaction(format!("Failed to decode transaction: {}", e))
+                ExecutionError::invalid_transaction(format!("Failed to decode transaction: {e}"))
             })?;
 
         // Compute transaction hash
@@ -261,8 +261,7 @@ impl CipherBftEvmConfig {
                     .recover_address_from_prehash(&sig_hash)
                     .map_err(|e: SignatureError| {
                         ExecutionError::invalid_transaction(format!(
-                            "Failed to recover sender: {}",
-                            e
+                            "Failed to recover sender: {e}"
                         ))
                     })?
             }
@@ -273,8 +272,7 @@ impl CipherBftEvmConfig {
                     .recover_address_from_prehash(&sig_hash)
                     .map_err(|e: SignatureError| {
                         ExecutionError::invalid_transaction(format!(
-                            "Failed to recover sender: {}",
-                            e
+                            "Failed to recover sender: {e}"
                         ))
                     })?
             }
@@ -285,8 +283,7 @@ impl CipherBftEvmConfig {
                     .recover_address_from_prehash(&sig_hash)
                     .map_err(|e: SignatureError| {
                         ExecutionError::invalid_transaction(format!(
-                            "Failed to recover sender: {}",
-                            e
+                            "Failed to recover sender: {e}"
                         ))
                     })?
             }
@@ -297,8 +294,7 @@ impl CipherBftEvmConfig {
                     .recover_address_from_prehash(&sig_hash)
                     .map_err(|e: SignatureError| {
                         ExecutionError::invalid_transaction(format!(
-                            "Failed to recover sender: {}",
-                            e
+                            "Failed to recover sender: {e}"
                         ))
                     })?
             }
@@ -588,7 +584,7 @@ impl CipherBftEvmConfig {
                     output: Bytes::new(),
                     logs: vec![],
                     contract_address: None,
-                    revert_reason: Some(format!("Halt: {:?}", reason)),
+                    revert_reason: Some(format!("Halt: {reason:?}")),
                 });
             }
         };

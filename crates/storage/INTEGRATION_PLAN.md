@@ -223,10 +223,12 @@ impl<S: EvmStore> Provider for MdbxProvider<S> {
 
 ### Phase 6: Integration Testing ✅ COMPLETED
 
-- [x] Unit tests for MdbxEvmStore (pending table initialization - ignored)
-- [x] Unit tests for MdbxProvider
-- [ ] Integration tests: ExecutionEngine<MdbxProvider> (TODO: requires table creation)
-- [ ] End-to-end test: block execution with persistence (TODO)
+- [x] Unit tests for MdbxEvmStore
+- [x] Unit tests for MdbxStakingStore
+- [x] Unit tests for MdbxProvider (6 tests in execution layer)
+- [x] TableSet trait implementation for custom table creation
+- [x] All 47+ unit tests passing (storage + execution mdbx tests)
+- [ ] End-to-end test: block execution with persistence (future work)
 
 ---
 

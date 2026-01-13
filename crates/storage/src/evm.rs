@@ -29,9 +29,7 @@ impl EvmAccount {
 
     /// Check if this is an empty account (zero nonce, zero balance, no code).
     pub fn is_empty(&self) -> bool {
-        self.nonce == 0
-            && self.balance == [0u8; 32]
-            && self.code_hash == [0u8; 32]
+        self.nonce == 0 && self.balance == [0u8; 32] && self.code_hash == [0u8; 32]
     }
 }
 
@@ -157,8 +155,10 @@ mod tests {
         let account = EvmAccount::default();
         assert!(account.is_empty());
 
-        let mut account = EvmAccount::default();
-        account.nonce = 1;
+        let account = EvmAccount {
+            nonce: 1,
+            ..Default::default()
+        };
         assert!(!account.is_empty());
     }
 

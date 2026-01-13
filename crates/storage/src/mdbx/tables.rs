@@ -20,7 +20,7 @@
 //! - `Votes`: Collected votes by (height, round)
 //! - `Proposals`: Block proposals by (height, round)
 
-use reth_db_api::table::{Compress, Decode, Decompress, Encode};
+use reth_db_api::table::{Compress, Decode, Decompress, Encode, Table, TableInfo};
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
@@ -430,8 +430,6 @@ pub struct StoredProposal {
 // Table Definitions using reth-db Table trait
 // ============================================================
 
-use reth_db_api::table::Table;
-
 /// Batches table: Hash -> StoredBatch
 /// Stores transaction batches from Workers
 #[derive(Debug, Clone, Copy, Default)]
@@ -569,7 +567,9 @@ impl Table for Proposals {
 // =============================================================================
 
 /// Key for EVM accounts table: 20-byte address
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, Serialize, Deserialize,
+)]
 pub struct AddressKey(pub [u8; 20]);
 
 impl AddressKey {
@@ -610,7 +610,9 @@ impl Decode for AddressKey {
 
 /// Key for EVM storage table: (address, storage slot)
 /// Storage slot is U256 (32 bytes)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, Serialize, Deserialize,
+)]
 pub struct StorageSlotKey {
     /// Account address (20 bytes)
     pub address: [u8; 20],
@@ -666,7 +668,9 @@ impl Decode for StorageSlotKey {
 }
 
 /// Key for block hashes table: block number (u64)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, Serialize, Deserialize,
+)]
 pub struct BlockNumberKey(pub u64);
 
 impl BlockNumberKey {
@@ -685,7 +689,9 @@ impl BlockNumberKey {
         if data.len() != 8 {
             return Err(reth_db_api::DatabaseError::Decode);
         }
-        let arr: [u8; 8] = data.try_into().map_err(|_| reth_db_api::DatabaseError::Decode)?;
+        let arr: [u8; 8] = data
+            .try_into()
+            .map_err(|_| reth_db_api::DatabaseError::Decode)?;
         Ok(Self(u64::from_be_bytes(arr)))
     }
 }
@@ -853,7 +859,108 @@ impl Decompress for HashKey {
     }
 }
 
-/// All CipherBFT tables
+// =============================================================================
+// TableInfo and TableSet implementation for CipherBFT custom tables
+// =============================================================================
+
+/// Enum representing all CipherBFT tables for TableSet implementation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CipherBftTable {
+    // Consensus tables
+    Batches,
+    Cars,
+    CarsByHash,
+    Attestations,
+    PendingCuts,
+    FinalizedCuts,
+    ConsensusWal,
+    ConsensusState,
+    ValidatorSets,
+    Votes,
+    Proposals,
+    // EVM tables
+    EvmAccounts,
+    EvmCode,
+    EvmStorage,
+    EvmBlockHashes,
+    // Staking tables
+    StakingValidators,
+    StakingMetadata,
+}
+
+impl CipherBftTable {
+    /// All CipherBFT tables
+    pub const ALL: &'static [Self] = &[
+        // Consensus tables
+        Self::Batches,
+        Self::Cars,
+        Self::CarsByHash,
+        Self::Attestations,
+        Self::PendingCuts,
+        Self::FinalizedCuts,
+        Self::ConsensusWal,
+        Self::ConsensusState,
+        Self::ValidatorSets,
+        Self::Votes,
+        Self::Proposals,
+        // EVM tables
+        Self::EvmAccounts,
+        Self::EvmCode,
+        Self::EvmStorage,
+        Self::EvmBlockHashes,
+        // Staking tables
+        Self::StakingValidators,
+        Self::StakingMetadata,
+    ];
+}
+
+impl TableInfo for CipherBftTable {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Batches => Batches::NAME,
+            Self::Cars => Cars::NAME,
+            Self::CarsByHash => CarsByHash::NAME,
+            Self::Attestations => Attestations::NAME,
+            Self::PendingCuts => PendingCuts::NAME,
+            Self::FinalizedCuts => FinalizedCuts::NAME,
+            Self::ConsensusWal => ConsensusWal::NAME,
+            Self::ConsensusState => ConsensusState::NAME,
+            Self::ValidatorSets => ValidatorSets::NAME,
+            Self::Votes => Votes::NAME,
+            Self::Proposals => Proposals::NAME,
+            Self::EvmAccounts => EvmAccounts::NAME,
+            Self::EvmCode => EvmCode::NAME,
+            Self::EvmStorage => EvmStorage::NAME,
+            Self::EvmBlockHashes => EvmBlockHashes::NAME,
+            Self::StakingValidators => StakingValidators::NAME,
+            Self::StakingMetadata => StakingMetadata::NAME,
+        }
+    }
+
+    fn is_dupsort(&self) -> bool {
+        match self {
+            Self::Batches => Batches::DUPSORT,
+            Self::Cars => Cars::DUPSORT,
+            Self::CarsByHash => CarsByHash::DUPSORT,
+            Self::Attestations => Attestations::DUPSORT,
+            Self::PendingCuts => PendingCuts::DUPSORT,
+            Self::FinalizedCuts => FinalizedCuts::DUPSORT,
+            Self::ConsensusWal => ConsensusWal::DUPSORT,
+            Self::ConsensusState => ConsensusState::DUPSORT,
+            Self::ValidatorSets => ValidatorSets::DUPSORT,
+            Self::Votes => Votes::DUPSORT,
+            Self::Proposals => Proposals::DUPSORT,
+            Self::EvmAccounts => EvmAccounts::DUPSORT,
+            Self::EvmCode => EvmCode::DUPSORT,
+            Self::EvmStorage => EvmStorage::DUPSORT,
+            Self::EvmBlockHashes => EvmBlockHashes::DUPSORT,
+            Self::StakingValidators => StakingValidators::DUPSORT,
+            Self::StakingMetadata => StakingMetadata::DUPSORT,
+        }
+    }
+}
+
+/// All CipherBFT tables - implements TableSet for database initialization
 pub struct Tables;
 
 impl Tables {
@@ -880,6 +987,17 @@ impl Tables {
         StakingValidators::NAME,
         StakingMetadata::NAME,
     ];
+}
+
+/// TableSet implementation allows reth-db to create our custom tables
+impl reth_db::TableSet for Tables {
+    fn tables() -> Box<dyn Iterator<Item = Box<dyn TableInfo>>> {
+        Box::new(
+            CipherBftTable::ALL
+                .iter()
+                .map(|table| Box::new(*table) as Box<dyn TableInfo>),
+        )
+    }
 }
 
 #[cfg(test)]

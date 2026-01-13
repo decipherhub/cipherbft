@@ -41,10 +41,7 @@ impl MdbxStakingStore {
 
 impl StakingStore for MdbxStakingStore {
     fn get_validator(&self, address: &[u8; 20]) -> StakingStoreResult<Option<StoredValidator>> {
-        let tx = self
-            .db
-            .tx()
-            .map_err(|e| db_err(e.to_string()))?;
+        let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
 
         let key = AddressKey(*address);
         let result = tx
@@ -75,10 +72,7 @@ impl StakingStore for MdbxStakingStore {
         address: &[u8; 20],
         validator: StoredValidator,
     ) -> StakingStoreResult<()> {
-        let tx = self
-            .db
-            .tx_mut()
-            .map_err(|e| db_err(e.to_string()))?;
+        let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         let key = AddressKey(*address);
         let stored = StoredValidatorInfo {
@@ -93,33 +87,25 @@ impl StakingStore for MdbxStakingStore {
         tx.put::<StakingValidators>(key, stored.into())
             .map_err(|e| db_err(e.to_string()))?;
 
-        tx.commit()
-            .map_err(|e| db_err(e.to_string()))?;
+        tx.commit().map_err(|e| db_err(e.to_string()))?;
 
         Ok(())
     }
 
     fn delete_validator(&self, address: &[u8; 20]) -> StakingStoreResult<()> {
-        let tx = self
-            .db
-            .tx_mut()
-            .map_err(|e| db_err(e.to_string()))?;
+        let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         let key = AddressKey(*address);
         tx.delete::<StakingValidators>(key, None)
             .map_err(|e| db_err(e.to_string()))?;
 
-        tx.commit()
-            .map_err(|e| db_err(e.to_string()))?;
+        tx.commit().map_err(|e| db_err(e.to_string()))?;
 
         Ok(())
     }
 
     fn get_all_validators(&self) -> StakingStoreResult<Vec<StoredValidator>> {
-        let tx = self
-            .db
-            .tx()
-            .map_err(|e| db_err(e.to_string()))?;
+        let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
 
         let mut cursor = tx
             .cursor_read::<StakingValidators>()
@@ -128,9 +114,7 @@ impl StakingStore for MdbxStakingStore {
         let mut validators = Vec::new();
 
         // Iterate through all validators using cursor
-        let mut entry = cursor
-            .first()
-            .map_err(|e| db_err(e.to_string()))?;
+        let mut entry = cursor.first().map_err(|e| db_err(e.to_string()))?;
 
         while let Some((_, stored)) = entry {
             let validator = StoredValidator {
@@ -146,19 +130,14 @@ impl StakingStore for MdbxStakingStore {
             };
             validators.push(validator);
 
-            entry = cursor
-                .next()
-                .map_err(|e| db_err(e.to_string()))?;
+            entry = cursor.next().map_err(|e| db_err(e.to_string()))?;
         }
 
         Ok(validators)
     }
 
     fn get_total_stake(&self) -> StakingStoreResult<[u8; 32]> {
-        let tx = self
-            .db
-            .tx()
-            .map_err(|e| db_err(e.to_string()))?;
+        let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
 
         let result = tx
             .get::<StakingMetadata>(UnitKey)
@@ -171,10 +150,7 @@ impl StakingStore for MdbxStakingStore {
     }
 
     fn set_total_stake(&self, stake: [u8; 32]) -> StakingStoreResult<()> {
-        let tx = self
-            .db
-            .tx_mut()
-            .map_err(|e| db_err(e.to_string()))?;
+        let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         // Get existing metadata or create new
         let existing = tx
@@ -190,17 +166,13 @@ impl StakingStore for MdbxStakingStore {
         tx.put::<StakingMetadata>(UnitKey, stored.into())
             .map_err(|e| db_err(e.to_string()))?;
 
-        tx.commit()
-            .map_err(|e| db_err(e.to_string()))?;
+        tx.commit().map_err(|e| db_err(e.to_string()))?;
 
         Ok(())
     }
 
     fn get_epoch(&self) -> StakingStoreResult<u64> {
-        let tx = self
-            .db
-            .tx()
-            .map_err(|e| db_err(e.to_string()))?;
+        let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
 
         let result = tx
             .get::<StakingMetadata>(UnitKey)
@@ -213,10 +185,7 @@ impl StakingStore for MdbxStakingStore {
     }
 
     fn set_epoch(&self, epoch: u64) -> StakingStoreResult<()> {
-        let tx = self
-            .db
-            .tx_mut()
-            .map_err(|e| db_err(e.to_string()))?;
+        let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         // Get existing metadata or create new
         let existing = tx
@@ -229,8 +198,7 @@ impl StakingStore for MdbxStakingStore {
         tx.put::<StakingMetadata>(UnitKey, stored.into())
             .map_err(|e| db_err(e.to_string()))?;
 
-        tx.commit()
-            .map_err(|e| db_err(e.to_string()))?;
+        tx.commit().map_err(|e| db_err(e.to_string()))?;
 
         Ok(())
     }
@@ -248,7 +216,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires Staking tables to be created - pending table initialization"]
     fn test_validator_operations() {
         let (db, _temp_dir) = create_test_db();
         let store = MdbxStakingStore::new(db);
@@ -257,7 +224,10 @@ mod tests {
         let validator = StoredValidator {
             address,
             bls_pubkey: vec![2u8; 48],
-            stake: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100],
+            stake: [
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 100,
+            ],
             registered_at: 12345,
             pending_exit: None,
         };
@@ -277,7 +247,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires Staking tables to be created - pending table initialization"]
     fn test_get_all_validators() {
         let (db, _temp_dir) = create_test_db();
         let store = MdbxStakingStore::new(db);
@@ -300,7 +269,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires Staking tables to be created - pending table initialization"]
     fn test_staking_metadata() {
         let (db, _temp_dir) = create_test_db();
         let store = MdbxStakingStore::new(db);
@@ -312,7 +280,10 @@ mod tests {
 
         // Test total stake
         assert_eq!(store.get_total_stake().unwrap(), [0u8; 32]);
-        let stake = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255];
+        let stake = [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 255,
+        ];
         store.set_total_stake(stake).unwrap();
         assert_eq!(store.get_total_stake().unwrap(), stake);
 

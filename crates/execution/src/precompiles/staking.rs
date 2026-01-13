@@ -312,8 +312,7 @@ impl StakingPrecompile {
         // Check minimum stake
         if value < U256::from(MIN_VALIDATOR_STAKE) {
             return Err(PrecompileError::Fatal(format!(
-                "Insufficient stake: minimum {} wei required",
-                MIN_VALIDATOR_STAKE
+                "Insufficient stake: minimum {MIN_VALIDATOR_STAKE} wei required"
             )));
         }
 

@@ -31,31 +31,47 @@ pub use evm::MdbxEvmStore;
 pub use provider::{MdbxDclStore, MdbxDclStoreTx};
 pub use staking::MdbxStakingStore;
 pub use tables::{
+    // EVM table types
+    AddressKey,
     // Consensus table types
     Attestations,
     Batches,
+    BlockNumberKey,
     // Key types
     CarTableKey,
     Cars,
     CarsByHash,
     ConsensusState,
     ConsensusWal,
+    EvmAccounts,
+    EvmBlockHashes,
+    EvmCode,
+    EvmStorage,
     FinalizedCuts,
     HashKey,
     HeightKey,
     HeightRoundKey,
     PendingCuts,
     Proposals,
+    // Staking table types
+    StakingMetadata,
+    StakingValidators,
+    StorageSlotKey,
+    StoredAccount,
     // Consensus value types
     StoredAggregatedAttestation,
     StoredBatch,
     StoredBatchDigest,
+    StoredBytecode,
     StoredCar,
     StoredCarEntry,
     StoredConsensusState,
     StoredCut,
     StoredProposal,
+    StoredStakingMetadata,
+    StoredStorageValue,
     StoredValidator,
+    StoredValidatorInfo,
     StoredValidatorSet,
     StoredVote,
     StoredVotes,
@@ -64,21 +80,5 @@ pub use tables::{
     UnitKey,
     ValidatorSets,
     Votes,
-    // EVM table types
-    AddressKey,
-    BlockNumberKey,
-    EvmAccounts,
-    EvmBlockHashes,
-    EvmCode,
-    EvmStorage,
-    StorageSlotKey,
-    StoredAccount,
-    StoredBytecode,
-    StoredStorageValue,
-    // Staking table types
-    StakingMetadata,
-    StakingValidators,
-    StoredStakingMetadata,
-    StoredValidatorInfo,
 };
 pub use wal::MdbxWal;

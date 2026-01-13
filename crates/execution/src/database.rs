@@ -698,6 +698,159 @@ pub mod mdbx_provider {
                 .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use cipherbft_storage::mdbx::{Database, DatabaseConfig};
+        use revm::Database as RevmDatabase;
+        use std::sync::Arc;
+
+        fn create_test_mdbx_provider() -> (MdbxProvider, tempfile::TempDir) {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let config = DatabaseConfig::new(temp_dir.path());
+            let db = Database::open(config).unwrap();
+            let store = MdbxEvmStore::new(Arc::clone(db.env()));
+            (MdbxProvider::new(store), temp_dir)
+        }
+
+        #[test]
+        fn test_mdbx_provider_account_operations() {
+            let (provider, _temp_dir) = create_test_mdbx_provider();
+
+            let addr = Address::from([1u8; 20]);
+
+            // Initially no account
+            assert!(provider.get_account(addr).unwrap().is_none());
+
+            // Set account
+            let account = Account {
+                nonce: 42,
+                balance: U256::from(1000),
+                code_hash: B256::from([2u8; 32]),
+                storage_root: B256::ZERO,
+            };
+            provider.set_account(addr, account.clone()).unwrap();
+
+            // Get account
+            let retrieved = provider.get_account(addr).unwrap().unwrap();
+            assert_eq!(retrieved.nonce, 42);
+            assert_eq!(retrieved.balance, U256::from(1000));
+            assert_eq!(retrieved.code_hash, B256::from([2u8; 32]));
+        }
+
+        #[test]
+        fn test_mdbx_provider_storage_operations() {
+            let (provider, _temp_dir) = create_test_mdbx_provider();
+
+            let addr = Address::from([1u8; 20]);
+            let slot = U256::from(100);
+            let value = U256::from(12345);
+
+            // Initially zero
+            assert_eq!(provider.get_storage(addr, slot).unwrap(), U256::ZERO);
+
+            // Set storage
+            provider.set_storage(addr, slot, value).unwrap();
+
+            // Get storage
+            assert_eq!(provider.get_storage(addr, slot).unwrap(), value);
+        }
+
+        #[test]
+        fn test_mdbx_provider_code_operations() {
+            let (provider, _temp_dir) = create_test_mdbx_provider();
+
+            let code_hash = B256::from([42u8; 32]);
+            let bytecode = Bytecode::new_raw(alloy_primitives::Bytes::from(vec![
+                0x60, 0x00, 0x60, 0x00, 0xf3,
+            ]));
+
+            // Initially no code
+            assert!(provider.get_code(code_hash).unwrap().is_none());
+
+            // Set code
+            provider.set_code(code_hash, bytecode.clone()).unwrap();
+
+            // Get code
+            let retrieved = provider.get_code(code_hash).unwrap().unwrap();
+            assert_eq!(retrieved.bytecode(), bytecode.bytecode());
+        }
+
+        #[test]
+        fn test_mdbx_provider_block_hash_operations() {
+            let (provider, _temp_dir) = create_test_mdbx_provider();
+
+            let block_num = 12345u64;
+            let hash = B256::from([99u8; 32]);
+
+            // Initially no hash
+            assert!(provider.get_block_hash(block_num).unwrap().is_none());
+
+            // Set block hash
+            provider.set_block_hash(block_num, hash).unwrap();
+
+            // Get block hash
+            assert_eq!(provider.get_block_hash(block_num).unwrap().unwrap(), hash);
+        }
+
+        #[test]
+        fn test_mdbx_provider_with_database() {
+            let (provider, _temp_dir) = create_test_mdbx_provider();
+
+            let addr = Address::from([5u8; 20]);
+            let account = Account {
+                nonce: 10,
+                balance: U256::from(5000),
+                code_hash: B256::ZERO,
+                storage_root: B256::ZERO,
+            };
+            provider.set_account(addr, account).unwrap();
+
+            // Use with CipherBftDatabase
+            let mut db = CipherBftDatabase::new(provider);
+
+            // Query via revm Database trait
+            let info = db.basic(addr).unwrap().unwrap();
+            assert_eq!(info.nonce, 10);
+            assert_eq!(info.balance, U256::from(5000));
+        }
+
+        #[test]
+        fn test_mdbx_provider_persistence() {
+            // Test that data persists across provider instances
+            let temp_dir = tempfile::tempdir().unwrap();
+            let db_path = temp_dir.path();
+
+            let addr = Address::from([7u8; 20]);
+            let account = Account {
+                nonce: 100,
+                balance: U256::from(999999),
+                code_hash: B256::ZERO,
+                storage_root: B256::ZERO,
+            };
+
+            // First: Create provider and write data
+            {
+                let config = cipherbft_storage::mdbx::DatabaseConfig::new(db_path);
+                let db = Database::open(config).unwrap();
+                let store = MdbxEvmStore::new(Arc::clone(db.env()));
+                let provider = MdbxProvider::new(store);
+                provider.set_account(addr, account.clone()).unwrap();
+            }
+
+            // Second: Create new provider and verify data persists
+            {
+                let config = cipherbft_storage::mdbx::DatabaseConfig::new(db_path);
+                let db = Database::open(config).unwrap();
+                let store = MdbxEvmStore::new(Arc::clone(db.env()));
+                let provider = MdbxProvider::new(store);
+                let retrieved = provider.get_account(addr).unwrap().unwrap();
+                assert_eq!(retrieved.nonce, 100);
+                assert_eq!(retrieved.balance, U256::from(999999));
+            }
+        }
+    }
 }
 
 #[cfg(feature = "mdbx")]
