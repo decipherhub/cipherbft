@@ -592,3 +592,113 @@ mod tests {
         assert!(db.cache_accounts.write().contains(&addr));
     }
 }
+
+// =============================================================================
+// MDBX Provider (requires `mdbx` feature)
+// =============================================================================
+
+/// MDBX-backed provider for persistent storage.
+///
+/// This provider uses the storage layer's `MdbxEvmStore` for persistent
+/// EVM state storage. It requires the `mdbx` feature to be enabled.
+#[cfg(feature = "mdbx")]
+pub mod mdbx_provider {
+    use super::*;
+    use cipherbft_storage::{EvmAccount, EvmBytecode, EvmStore, MdbxEvmStore};
+
+    /// MDBX-backed provider for persistent EVM state storage.
+    ///
+    /// This provider wraps `MdbxEvmStore` from the storage layer and implements
+    /// the `Provider` trait to integrate with the execution layer.
+    pub struct MdbxProvider {
+        store: MdbxEvmStore,
+    }
+
+    impl MdbxProvider {
+        /// Create a new MDBX provider with the given store.
+        pub fn new(store: MdbxEvmStore) -> Self {
+            Self { store }
+        }
+    }
+
+    impl Provider for MdbxProvider {
+        fn get_account(&self, address: Address) -> Result<Option<Account>> {
+            let addr_bytes: [u8; 20] = address.into();
+            self.store
+                .get_account(&addr_bytes)
+                .map(|opt| {
+                    opt.map(|evm_acc| Account {
+                        nonce: evm_acc.nonce,
+                        balance: U256::from_be_bytes(evm_acc.balance),
+                        code_hash: B256::from(evm_acc.code_hash),
+                        storage_root: B256::from(evm_acc.storage_root),
+                    })
+                })
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
+        }
+
+        fn get_code(&self, code_hash: B256) -> Result<Option<Bytecode>> {
+            let hash_bytes: [u8; 32] = code_hash.into();
+            self.store
+                .get_code(&hash_bytes)
+                .map(|opt| opt.map(|bc| Bytecode::new_raw(bc.code.into())))
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
+        }
+
+        fn get_storage(&self, address: Address, slot: U256) -> Result<U256> {
+            let addr_bytes: [u8; 20] = address.into();
+            let slot_bytes: [u8; 32] = slot.to_be_bytes();
+            self.store
+                .get_storage(&addr_bytes, &slot_bytes)
+                .map(|value| U256::from_be_bytes(value))
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
+        }
+
+        fn get_block_hash(&self, number: u64) -> Result<Option<B256>> {
+            self.store
+                .get_block_hash(number)
+                .map(|opt| opt.map(B256::from))
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
+        }
+
+        fn set_account(&self, address: Address, account: Account) -> Result<()> {
+            let addr_bytes: [u8; 20] = address.into();
+            let evm_acc = EvmAccount {
+                nonce: account.nonce,
+                balance: account.balance.to_be_bytes(),
+                code_hash: account.code_hash.into(),
+                storage_root: account.storage_root.into(),
+            };
+            self.store
+                .set_account(&addr_bytes, evm_acc)
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
+        }
+
+        fn set_code(&self, code_hash: B256, bytecode: Bytecode) -> Result<()> {
+            let hash_bytes: [u8; 32] = code_hash.into();
+            let evm_bc = EvmBytecode::new(bytecode.bytecode().to_vec());
+            self.store
+                .set_code(&hash_bytes, evm_bc)
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
+        }
+
+        fn set_storage(&self, address: Address, slot: U256, value: U256) -> Result<()> {
+            let addr_bytes: [u8; 20] = address.into();
+            let slot_bytes: [u8; 32] = slot.to_be_bytes();
+            let value_bytes: [u8; 32] = value.to_be_bytes();
+            self.store
+                .set_storage(&addr_bytes, &slot_bytes, value_bytes)
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
+        }
+
+        fn set_block_hash(&self, number: u64, hash: B256) -> Result<()> {
+            let hash_bytes: [u8; 32] = hash.into();
+            self.store
+                .set_block_hash(number, hash_bytes)
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
+        }
+    }
+}
+
+#[cfg(feature = "mdbx")]
+pub use mdbx_provider::MdbxProvider;

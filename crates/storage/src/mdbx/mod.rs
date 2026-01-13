@@ -6,8 +6,10 @@
 //!
 //! The MDBX backend consists of:
 //! - [`Database`]: Main database wrapper around reth-db
-//! - [`Tables`]: Custom table definitions for DCL and consensus data
+//! - [`Tables`]: Custom table definitions for DCL, EVM, and staking data
 //! - [`MdbxDclStore`]: Implementation of [`DclStore`] trait
+//! - [`MdbxEvmStore`]: Implementation of [`EvmStore`] trait
+//! - [`MdbxStakingStore`]: Implementation of [`StakingStore`] trait
 //! - [`MdbxWal`]: Persistent WAL implementation
 //!
 //! # Feature Flag
@@ -18,14 +20,18 @@
 //! ```
 
 mod database;
+mod evm;
 mod provider;
+mod staking;
 mod tables;
 mod wal;
 
 pub use database::{Database, DatabaseConfig, DatabaseEnv};
+pub use evm::MdbxEvmStore;
 pub use provider::{MdbxDclStore, MdbxDclStoreTx};
+pub use staking::MdbxStakingStore;
 pub use tables::{
-    // Table types
+    // Consensus table types
     Attestations,
     Batches,
     // Key types
@@ -40,7 +46,7 @@ pub use tables::{
     HeightRoundKey,
     PendingCuts,
     Proposals,
-    // Value types
+    // Consensus value types
     StoredAggregatedAttestation,
     StoredBatch,
     StoredBatchDigest,
@@ -58,5 +64,21 @@ pub use tables::{
     UnitKey,
     ValidatorSets,
     Votes,
+    // EVM table types
+    AddressKey,
+    BlockNumberKey,
+    EvmAccounts,
+    EvmBlockHashes,
+    EvmCode,
+    EvmStorage,
+    StorageSlotKey,
+    StoredAccount,
+    StoredBytecode,
+    StoredStorageValue,
+    // Staking table types
+    StakingMetadata,
+    StakingValidators,
+    StoredStakingMetadata,
+    StoredValidatorInfo,
 };
 pub use wal::MdbxWal;

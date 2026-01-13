@@ -52,8 +52,10 @@
 
 pub mod dcl;
 pub mod error;
+pub mod evm;
 pub mod memory;
 pub mod pruning;
+pub mod staking;
 pub mod tables;
 pub mod wal;
 
@@ -63,10 +65,12 @@ pub mod mdbx;
 
 pub use dcl::DclStore;
 pub use error::StorageError;
+pub use evm::{EvmAccount, EvmBytecode, EvmStore, EvmStoreResult};
 pub use memory::InMemoryStore;
 pub use pruning::{PruningConfig, PruningHandle, PruningTask};
+pub use staking::{StakingStore, StakingStoreResult, StoredValidator};
 pub use wal::{Wal, WalEntry};
 
 // Re-export MDBX types when feature is enabled
 #[cfg(feature = "mdbx")]
-pub use mdbx::{Database, DatabaseConfig, MdbxDclStore, MdbxWal};
+pub use mdbx::{Database, DatabaseConfig, MdbxDclStore, MdbxEvmStore, MdbxStakingStore, MdbxWal};

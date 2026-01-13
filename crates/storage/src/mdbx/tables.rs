@@ -86,7 +86,7 @@ impl Compress for CarTableKey {
         self.encode().to_vec()
     }
 
-    fn compress_to_buf<B: bytes::BufMut + AsMut<[u8]>>(self, buf: &mut B) {
+    fn compress_to_buf<B: bytes::BufMut + AsMut<[u8]>>(&self, buf: &mut B) {
         buf.put_slice(&self.encode());
     }
 }
@@ -243,7 +243,7 @@ impl<T: Serialize + for<'de> Deserialize<'de> + Debug + Send + Sync> Compress fo
         bincode::serialize(&self.0).expect("bincode serialization failed")
     }
 
-    fn compress_to_buf<B: bytes::BufMut + AsMut<[u8]>>(self, buf: &mut B) {
+    fn compress_to_buf<B: bytes::BufMut + AsMut<[u8]>>(&self, buf: &mut B) {
         let serialized = bincode::serialize(&self.0).expect("bincode serialization failed");
         buf.put_slice(&serialized);
     }
@@ -439,6 +439,7 @@ pub struct Batches;
 
 impl Table for Batches {
     const NAME: &'static str = "Batches";
+    const DUPSORT: bool = false;
     type Key = HashKey;
     type Value = BincodeValue<StoredBatch>;
 }
@@ -450,6 +451,7 @@ pub struct Cars;
 
 impl Table for Cars {
     const NAME: &'static str = "Cars";
+    const DUPSORT: bool = false;
     type Key = CarTableKey;
     type Value = BincodeValue<StoredCar>;
 }
@@ -461,6 +463,7 @@ pub struct CarsByHash;
 
 impl Table for CarsByHash {
     const NAME: &'static str = "CarsByHash";
+    const DUPSORT: bool = false;
     type Key = HashKey;
     type Value = CarTableKey;
 }
@@ -472,6 +475,7 @@ pub struct Attestations;
 
 impl Table for Attestations {
     const NAME: &'static str = "Attestations";
+    const DUPSORT: bool = false;
     type Key = HashKey;
     type Value = BincodeValue<StoredAggregatedAttestation>;
 }
@@ -483,6 +487,7 @@ pub struct PendingCuts;
 
 impl Table for PendingCuts {
     const NAME: &'static str = "PendingCuts";
+    const DUPSORT: bool = false;
     type Key = HeightKey;
     type Value = BincodeValue<StoredCut>;
 }
@@ -494,6 +499,7 @@ pub struct FinalizedCuts;
 
 impl Table for FinalizedCuts {
     const NAME: &'static str = "FinalizedCuts";
+    const DUPSORT: bool = false;
     type Key = HeightKey;
     type Value = BincodeValue<StoredCut>;
 }
@@ -505,6 +511,7 @@ pub struct ConsensusWal;
 
 impl Table for ConsensusWal {
     const NAME: &'static str = "ConsensusWal";
+    const DUPSORT: bool = false;
     type Key = HeightKey;
     type Value = BincodeValue<StoredWalEntry>;
 }
@@ -516,6 +523,7 @@ pub struct ConsensusState;
 
 impl Table for ConsensusState {
     const NAME: &'static str = "ConsensusState";
+    const DUPSORT: bool = false;
     type Key = UnitKey;
     type Value = BincodeValue<StoredConsensusState>;
 }
@@ -527,6 +535,7 @@ pub struct ValidatorSets;
 
 impl Table for ValidatorSets {
     const NAME: &'static str = "ValidatorSets";
+    const DUPSORT: bool = false;
     type Key = HeightKey;
     type Value = BincodeValue<StoredValidatorSet>;
 }
@@ -538,6 +547,7 @@ pub struct Votes;
 
 impl Table for Votes {
     const NAME: &'static str = "Votes";
+    const DUPSORT: bool = false;
     type Key = HeightRoundKey;
     type Value = BincodeValue<StoredVotes>;
 }
@@ -549,8 +559,298 @@ pub struct Proposals;
 
 impl Table for Proposals {
     const NAME: &'static str = "Proposals";
+    const DUPSORT: bool = false;
     type Key = HeightRoundKey;
     type Value = BincodeValue<StoredProposal>;
+}
+
+// =============================================================================
+// EVM Tables (for Execution Layer integration)
+// =============================================================================
+
+/// Key for EVM accounts table: 20-byte address
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct AddressKey(pub [u8; 20]);
+
+impl AddressKey {
+    /// Create a new AddressKey from a byte slice
+    pub fn new(address: &[u8; 20]) -> Self {
+        Self(*address)
+    }
+
+    /// Encode to bytes (for MDBX key)
+    pub fn encode(&self) -> [u8; 20] {
+        self.0
+    }
+
+    /// Decode from bytes
+    pub fn decode(data: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
+        if data.len() != 20 {
+            return Err(reth_db_api::DatabaseError::Decode);
+        }
+        let mut arr = [0u8; 20];
+        arr.copy_from_slice(data);
+        Ok(Self(arr))
+    }
+}
+
+impl Encode for AddressKey {
+    type Encoded = [u8; 20];
+
+    fn encode(self) -> Self::Encoded {
+        self.0
+    }
+}
+
+impl Decode for AddressKey {
+    fn decode(value: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
+        Self::decode(value)
+    }
+}
+
+/// Key for EVM storage table: (address, storage slot)
+/// Storage slot is U256 (32 bytes)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct StorageSlotKey {
+    /// Account address (20 bytes)
+    pub address: [u8; 20],
+    /// Storage slot (32 bytes, big-endian U256)
+    pub slot: [u8; 32],
+}
+
+impl StorageSlotKey {
+    /// Create a new StorageSlotKey
+    pub fn new(address: &[u8; 20], slot: &[u8; 32]) -> Self {
+        Self {
+            address: *address,
+            slot: *slot,
+        }
+    }
+
+    /// Total encoded size: 20 + 32 = 52 bytes
+    pub const ENCODED_SIZE: usize = 52;
+
+    /// Encode to bytes
+    pub fn encode(&self) -> [u8; Self::ENCODED_SIZE] {
+        let mut buf = [0u8; Self::ENCODED_SIZE];
+        buf[..20].copy_from_slice(&self.address);
+        buf[20..].copy_from_slice(&self.slot);
+        buf
+    }
+
+    /// Decode from bytes
+    pub fn decode(data: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
+        if data.len() != Self::ENCODED_SIZE {
+            return Err(reth_db_api::DatabaseError::Decode);
+        }
+        let mut address = [0u8; 20];
+        let mut slot = [0u8; 32];
+        address.copy_from_slice(&data[..20]);
+        slot.copy_from_slice(&data[20..]);
+        Ok(Self { address, slot })
+    }
+}
+
+impl Encode for StorageSlotKey {
+    type Encoded = [u8; StorageSlotKey::ENCODED_SIZE];
+
+    fn encode(self) -> Self::Encoded {
+        StorageSlotKey::encode(&self)
+    }
+}
+
+impl Decode for StorageSlotKey {
+    fn decode(value: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
+        StorageSlotKey::decode(value)
+    }
+}
+
+/// Key for block hashes table: block number (u64)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct BlockNumberKey(pub u64);
+
+impl BlockNumberKey {
+    /// Create a new BlockNumberKey
+    pub fn new(number: u64) -> Self {
+        Self(number)
+    }
+
+    /// Encode to bytes (big-endian for ordering)
+    pub fn encode(&self) -> [u8; 8] {
+        self.0.to_be_bytes()
+    }
+
+    /// Decode from bytes
+    pub fn decode(data: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
+        if data.len() != 8 {
+            return Err(reth_db_api::DatabaseError::Decode);
+        }
+        let arr: [u8; 8] = data.try_into().map_err(|_| reth_db_api::DatabaseError::Decode)?;
+        Ok(Self(u64::from_be_bytes(arr)))
+    }
+}
+
+impl Encode for BlockNumberKey {
+    type Encoded = [u8; 8];
+
+    fn encode(self) -> Self::Encoded {
+        self.0.to_be_bytes()
+    }
+}
+
+impl Decode for BlockNumberKey {
+    fn decode(value: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
+        BlockNumberKey::decode(value)
+    }
+}
+
+/// Stored EVM account data
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StoredAccount {
+    /// Account nonce
+    pub nonce: u64,
+    /// Account balance (stored as big-endian bytes)
+    pub balance: [u8; 32],
+    /// Code hash (keccak256 of bytecode)
+    pub code_hash: [u8; 32],
+    /// Storage root (for state trie, currently unused)
+    pub storage_root: [u8; 32],
+}
+
+/// Stored bytecode
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StoredBytecode {
+    /// Raw bytecode bytes
+    pub code: Vec<u8>,
+}
+
+/// Stored storage value (32 bytes U256)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StoredStorageValue {
+    /// Storage value (big-endian U256)
+    pub value: [u8; 32],
+}
+
+/// EvmAccounts table: Address -> Account
+/// Stores EVM account state (nonce, balance, code_hash, storage_root)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EvmAccounts;
+
+impl Table for EvmAccounts {
+    const NAME: &'static str = "EvmAccounts";
+    const DUPSORT: bool = false;
+    type Key = AddressKey;
+    type Value = BincodeValue<StoredAccount>;
+}
+
+/// EvmCode table: CodeHash -> Bytecode
+/// Stores contract bytecode indexed by keccak256 hash
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EvmCode;
+
+impl Table for EvmCode {
+    const NAME: &'static str = "EvmCode";
+    const DUPSORT: bool = false;
+    type Key = HashKey;
+    type Value = BincodeValue<StoredBytecode>;
+}
+
+/// EvmStorage table: (Address, Slot) -> Value
+/// Stores EVM storage slots
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EvmStorage;
+
+impl Table for EvmStorage {
+    const NAME: &'static str = "EvmStorage";
+    const DUPSORT: bool = false;
+    type Key = StorageSlotKey;
+    type Value = BincodeValue<StoredStorageValue>;
+}
+
+/// EvmBlockHashes table: BlockNumber -> Hash
+/// Stores block hashes for BLOCKHASH opcode
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EvmBlockHashes;
+
+impl Table for EvmBlockHashes {
+    const NAME: &'static str = "EvmBlockHashes";
+    const DUPSORT: bool = false;
+    type Key = BlockNumberKey;
+    type Value = HashKey;
+}
+
+// =============================================================================
+// Staking Tables (for Staking Precompile persistence)
+// =============================================================================
+
+/// Stored validator information for staking precompile
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StoredValidatorInfo {
+    /// Ethereum address (20 bytes)
+    pub address: [u8; 20],
+    /// BLS12-381 public key (48 bytes, stored as Vec for serde compatibility)
+    pub bls_pubkey: Vec<u8>,
+    /// Staked amount (big-endian U256)
+    pub stake: [u8; 32],
+    /// Registration block height
+    pub registered_at: u64,
+    /// Pending deregistration epoch (0 = no pending exit)
+    pub pending_exit: u64,
+    /// Whether there's a pending exit
+    pub has_pending_exit: bool,
+}
+
+/// Stored staking metadata (total_stake, epoch)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StoredStakingMetadata {
+    /// Total staked amount (big-endian U256)
+    pub total_stake: [u8; 32],
+    /// Current epoch number
+    pub epoch: u64,
+}
+
+/// StakingValidators table: Address -> ValidatorInfo
+/// Stores registered validator information
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StakingValidators;
+
+impl Table for StakingValidators {
+    const NAME: &'static str = "StakingValidators";
+    const DUPSORT: bool = false;
+    type Key = AddressKey;
+    type Value = BincodeValue<StoredValidatorInfo>;
+}
+
+/// StakingMetadata table: () -> StakingMetadata
+/// Stores global staking state (total_stake, epoch)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StakingMetadata;
+
+impl Table for StakingMetadata {
+    const NAME: &'static str = "StakingMetadata";
+    const DUPSORT: bool = false;
+    type Key = UnitKey;
+    type Value = BincodeValue<StoredStakingMetadata>;
+}
+
+// Compress/Decompress implementations for EVM keys used as values
+
+impl Compress for HashKey {
+    type Compressed = Vec<u8>;
+
+    fn compress(self) -> Self::Compressed {
+        self.0.to_vec()
+    }
+
+    fn compress_to_buf<B: bytes::BufMut + AsMut<[u8]>>(&self, buf: &mut B) {
+        buf.put_slice(&self.0);
+    }
+}
+
+impl Decompress for HashKey {
+    fn decompress(value: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
+        Self::decode(value)
+    }
 }
 
 /// All CipherBFT tables
@@ -559,6 +859,7 @@ pub struct Tables;
 impl Tables {
     /// All table names (for iteration/creation)
     pub const ALL: &'static [&'static str] = &[
+        // Consensus tables
         Batches::NAME,
         Cars::NAME,
         CarsByHash::NAME,
@@ -570,6 +871,14 @@ impl Tables {
         ValidatorSets::NAME,
         Votes::NAME,
         Proposals::NAME,
+        // EVM tables
+        EvmAccounts::NAME,
+        EvmCode::NAME,
+        EvmStorage::NAME,
+        EvmBlockHashes::NAME,
+        // Staking tables
+        StakingValidators::NAME,
+        StakingMetadata::NAME,
     ];
 }
 

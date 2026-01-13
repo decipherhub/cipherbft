@@ -34,6 +34,7 @@ parking_lot = "0.12"
 reth-db = { workspace = true, optional = true }
 reth-db-api = { workspace = true, optional = true }
 reth-codecs = { workspace = true, optional = true }
+reth-libmdbx = { workspace = true, optional = true }
 
 # BitVec for attestation bitmaps
 bitvec = { workspace = true }
@@ -45,4 +46,4 @@ rand = { workspace = true }
 
 [features]
 default = []
-mdbx = ["reth-db", "reth-db-api", "reth-codecs"]
+mdbx = ["reth-db", "reth-db-api", "reth-codecs", "reth-libmdbx"]

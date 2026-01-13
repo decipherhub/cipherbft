@@ -9,6 +9,7 @@ license.workspace = true
 # Internal dependencies
 cipherbft-types = { path = "../types" }
 cipherbft-crypto = { path = "../crypto" }
+cipherbft-storage = { path = "../storage", optional = true }
 
 # EVM execution (revm 33.x uses modular crates)
 revm = { version = "33.1.0", default-features = false, features = ["std", "secp256k1"] }
@@ -70,6 +71,10 @@ tempfile = "3"
 alloy-signer = "1"
 alloy-signer-local = "1"
 
+
+[features]
+default = []
+mdbx = ["cipherbft-storage/mdbx", "cipherbft-storage"]
 
 [lints.rust]
 unsafe_code = "deny"
