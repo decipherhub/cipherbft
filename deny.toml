@@ -9,15 +9,11 @@ all-features = true
 version = 2
 db-path = "~/.cargo/advisory-db"
 ignore = [
-    # paste - no longer maintained (RUSTSEC-2024-0436)
-    # This is a transitive dependency from reth-db/reth-libmdbx
-    # We cannot remove it until reth upstream removes this dependency
-    # See: https://rustsec.org/advisories/RUSTSEC-2024-0436
+    # paste crate unmaintained - transitive dependency from alloy-primitives 1.x
+    # Used as proc-macro only, not a runtime security concern
     "RUSTSEC-2024-0436",
-    # bincode - unmaintained (RUSTSEC-2025-0141)
-    # Transitive dependency from reth-nippy-jar, also used in our crates
-    # bincode 1.3.3 is considered "complete" by maintainers
-    # See: https://rustsec.org/advisories/RUSTSEC-2025-0141
+    # bincode unmaintained - team considers 1.3.3 complete and stable
+    # Used for internal receipt serialization, not a security concern
     "RUSTSEC-2025-0141",
 ]
 
