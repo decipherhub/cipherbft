@@ -76,9 +76,10 @@ mod tests {
             .max_priority_fee_per_gas(1_000_000_000)
             .into_eip1559();
         // New API: SignedTransaction::try_into_recovered() replaces into_ecrecovered()
-        let recovered = signed_tx.try_into_recovered().expect("recover signed transaction");
-        EthPooledTransaction::try_from_consensus(recovered)
-            .expect("convert to pooled transaction")
+        let recovered = signed_tx
+            .try_into_recovered()
+            .expect("recover signed transaction");
+        EthPooledTransaction::try_from_consensus(recovered).expect("convert to pooled transaction")
     }
 
     fn build_test_validator(

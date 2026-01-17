@@ -131,8 +131,10 @@ impl<P: TransactionPool> CipherBftPool<P> {
     ) -> Result<RecoveredTx, MempoolError> {
         // Recover signer using reth v1.9.3+ API
         // SignedTransaction::try_recover() returns Result<Address, RecoveryError>
-        let signer = tx.try_recover().map_err(|_| MempoolError::InvalidSignature)?;
-        
+        let signer = tx
+            .try_recover()
+            .map_err(|_| MempoolError::InvalidSignature)?;
+
         // Create the Recovered wrapper with the transaction and its signer
         let tx_recovered = Recovered::new_unchecked(tx, signer);
 
@@ -222,7 +224,9 @@ where
 
 impl<Client, S> CipherBftPool<CipherBftRethPool<Client, S>>
 where
-    Client: StateProviderFactory + reth_chainspec::ChainSpecProvider<ChainSpec: EthereumHardforks> + 'static,
+    Client: StateProviderFactory
+        + reth_chainspec::ChainSpecProvider<ChainSpec: EthereumHardforks>
+        + 'static,
     S: BlobStore + Clone,
 {
     /// Create a CipherBFT mempool that builds the underlying Reth pool internally.
