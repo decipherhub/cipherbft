@@ -6,7 +6,7 @@
 //! is tested in the unit tests in pool.rs.
 
 use alloy_primitives::address;
-use mempool::{CipherBftPool, MempoolConfig};
+use cipherbft_mempool::{CipherBftPool, MempoolConfig};
 use reth_provider::test_utils::NoopProvider;
 use reth_transaction_pool::test_utils::{MockTransaction, TestPool, TestPoolBuilder};
 use reth_transaction_pool::{
