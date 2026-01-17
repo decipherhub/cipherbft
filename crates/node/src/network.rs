@@ -237,7 +237,9 @@ impl TcpPrimaryNetwork {
         // Get writer Arc with minimal lock duration - just clone the Arc
         let writer = {
             let peers = self.peers.read().await;
-            peers.get(&validator_id).map(|conn| Arc::clone(&conn.writer))
+            peers
+                .get(&validator_id)
+                .map(|conn| Arc::clone(&conn.writer))
         }; // Read lock released here
 
         // If peer not found, try to connect
@@ -370,7 +372,9 @@ impl TcpWorkerNetwork {
         // Get writer Arc with minimal lock duration
         let writer = {
             let peers = self.peers.read().await;
-            peers.get(&validator_id).map(|conn| Arc::clone(&conn.writer))
+            peers
+                .get(&validator_id)
+                .map(|conn| Arc::clone(&conn.writer))
         }; // Read lock released here
 
         // If peer not found, try to connect
