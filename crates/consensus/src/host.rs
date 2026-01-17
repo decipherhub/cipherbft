@@ -609,7 +609,7 @@ impl ractor::Actor for HostActor {
                             // Extract metadata from the proposal part itself
                             let height = proposal_part.height();
                             let round = proposal_part.round();
-                            let proposer = proposal_part.proposer().clone();
+                            let proposer = *proposal_part.proposer();
                             let cut = proposal_part.cut.clone();
                             let value = ConsensusValue(cut);
                             let proposed = ProposedValue {
@@ -633,7 +633,7 @@ impl ractor::Actor for HostActor {
                                 height: proposal_part.height(),
                                 round: proposal_part.round(),
                                 valid_round: Round::Nil,
-                                proposer: proposal_part.proposer().clone(),
+                                proposer: *proposal_part.proposer(),
                                 value: ConsensusValue(proposal_part.cut.clone()),
                                 validity: Validity::Invalid,
                             };
