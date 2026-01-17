@@ -118,6 +118,11 @@ impl NodeConfig {
     }
 }
 
+/// Generate a new BLS keypair for key management
+pub fn generate_keypair() -> BlsKeyPair {
+    BlsKeyPair::generate(&mut rand::thread_rng())
+}
+
 /// Generate configs for N validators for local testing
 pub fn generate_local_configs(n: usize) -> Vec<NodeConfig> {
     let mut configs: Vec<NodeConfig> = (0..n).map(|i| NodeConfig::for_local_test(i, n)).collect();
