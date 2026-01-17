@@ -3,7 +3,7 @@
 //! MVP binary for testing DCL with multiple validators.
 
 use anyhow::Result;
-use cipherbft_node::{generate_local_configs, Node, NodeConfig};
+use cipherd::{generate_local_configs, Node, NodeConfig};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::{info, Level};
