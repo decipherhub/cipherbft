@@ -10,14 +10,14 @@ use bytes::Bytes;
 use cipherbft_data_chain::Cut;
 use informalsystems_malachitebft_app_channel::AppMsg;
 use informalsystems_malachitebft_core_types::{Round, Validity};
-use informalsystems_malachitebft_engine::host::{HostMsg, HostRef, Next, ProposedValue};
+use informalsystems_malachitebft_engine::host::{HostRef, Next, ProposedValue};
 use informalsystems_malachitebft_sync::RawDecidedValue;
 use ractor::Actor;
-use ractor::ActorRef as RactorActorRef;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, info, warn};
+use std::time::Duration;
+use tokio::sync::{mpsc, Notify, RwLock};
+use tracing::{debug, error, info, warn};
 
 /// Host actor that bridges between Malachite consensus and DCL.
 pub struct CipherBftHost {
@@ -42,6 +42,8 @@ pub struct CipherBftHost {
     >,
     /// Channel to send Decided events (for logging/monitoring)
     decided_tx: Option<mpsc::Sender<(ConsensusHeight, Cut)>>,
+    /// Notifier for when new cuts are stored (used to wake up GetValue waiters)
+    cut_notify: Arc<Notify>,
 }
 
 impl CipherBftHost {
@@ -59,6 +61,7 @@ impl CipherBftHost {
             decided_cuts: Arc::new(RwLock::new(HashMap::new())),
             decided_certificates: Arc::new(RwLock::new(HashMap::new())),
             decided_tx,
+            cut_notify: Arc::new(Notify::new()),
         }
     }
 
@@ -79,10 +82,14 @@ impl CipherBftHost {
         let mut pending = self.pending_cuts.write().await;
         if pending.len() > 10 {
             let heights: Vec<_> = pending.keys().cloned().collect();
-            let min_height = heights.iter().min().copied().unwrap_or(height);
-            let cutoff = min_height.0.saturating_sub(10);
-            pending.retain(|h, _| h.0 > cutoff);
+            let max_height = heights.iter().max().copied().unwrap_or(height);
+            // Keep heights within 10 of the maximum (i.e., recent heights)
+            let cutoff = max_height.0.saturating_sub(10);
+            pending.retain(|h, _| h.0 >= cutoff);
         }
+
+        // Notify any waiters that a new cut is available
+        self.cut_notify.notify_waiters();
     }
 
     /// Get a pending cut for the given height.
@@ -109,6 +116,72 @@ impl CipherBftHost {
             Some(ConsensusValue(cut))
         } else {
             None
+        }
+    }
+
+    /// Get a pending cut for the given height, waiting up to the specified timeout.
+    ///
+    /// This method:
+    /// 1. First tries to get a cut immediately
+    /// 2. If not available, waits for cuts to arrive (with polling and notification)
+    /// 3. If timeout expires without a cut, returns an empty Cut (valid for empty blocks)
+    ///
+    /// This ensures the reply channel is ALWAYS fulfilled, preventing consensus stalls.
+    pub async fn get_value_with_timeout(
+        &self,
+        height: ConsensusHeight,
+        timeout: Duration,
+    ) -> ConsensusValue {
+        use informalsystems_malachitebft_core_types::Value;
+
+        // Use a slightly shorter timeout to ensure we respond within Malachite's deadline
+        let effective_timeout = timeout.saturating_sub(Duration::from_millis(100));
+        let poll_interval = Duration::from_millis(50);
+        let deadline = tokio::time::Instant::now() + effective_timeout;
+
+        loop {
+            // Try to get the cut immediately
+            if let Some(value) = self.get_value(height).await {
+                debug!(
+                    "Host: Found Cut for height {} (value_id: {:?})",
+                    height,
+                    value.id()
+                );
+                return value;
+            }
+
+            // Check if we've exceeded the timeout
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                // Timeout expired - propose an empty Cut
+                warn!(
+                    "Host: Timeout waiting for Cut at height {} - proposing empty Cut",
+                    height
+                );
+                let empty_cut = Cut::new(height.0);
+                let value = ConsensusValue(empty_cut.clone());
+
+                // Store the empty cut by value_id for later retrieval
+                let value_id = value.id();
+                let mut by_value_id = self.cuts_by_value_id.write().await;
+                by_value_id.insert(value_id, empty_cut);
+
+                return value;
+            }
+
+            // Wait for either a notification or a poll interval
+            let remaining = deadline - now;
+            let wait_duration = remaining.min(poll_interval);
+
+            tokio::select! {
+                _ = self.cut_notify.notified() => {
+                    // A cut was stored, try to get it on next iteration
+                    debug!("Host: Notified of new Cut, checking for height {}", height);
+                }
+                _ = tokio::time::sleep(wait_duration) => {
+                    // Poll interval elapsed, check again
+                }
+            }
         }
     }
 
@@ -171,31 +244,24 @@ impl CipherBftHost {
                 height,
                 reply,
                 round,
-                ..
+                timeout,
             } => {
                 debug!(
-                    "Host: GetValue request for height {} round {}",
-                    height, round
+                    "Host: GetValue request for height {} round {} (timeout: {:?})",
+                    height, round, timeout
                 );
 
-                let value = self.get_value(height).await;
+                // Use the timeout-aware method that waits for cuts to arrive
+                // and proposes an empty Cut if timeout expires (preventing consensus stalls)
+                let value = self.get_value_with_timeout(height, timeout).await;
 
-                // Reply with the value (or None if not available)
-                if let Some(value) = value {
-                    debug!("Host: Found Cut for height {}", height);
-                    use informalsystems_malachitebft_app::types::LocallyProposedValue;
-                    // LocallyProposedValue::new expects 3 arguments: height, round, value
-                    let proposed = LocallyProposedValue::new(height, round, value);
-                    // reply.send() does not return a Future, so no .await
-                    let _ = reply.send(proposed);
-                } else {
-                    warn!("Host: No Cut available for height {}", height);
-                    // TODO: Check how to send None for GetValue
-                    warn!("Host: Cannot send None to GetValue reply (type mismatch)");
-                }
+                // Always reply - get_value_with_timeout guarantees a value
+                use informalsystems_malachitebft_app::types::LocallyProposedValue;
+                let proposed = LocallyProposedValue::new(height, round, value);
+                let _ = reply.send(proposed);
 
                 // Continue with current height and validator set
-                let current_height = height; // Use the requested height
+                let current_height = height;
                 let validator_set = self.ctx.validator_set().clone();
                 Next::Start(current_height, validator_set)
             }
@@ -432,20 +498,21 @@ impl ractor::Actor for HostActor {
             HostMsg::GetValue {
                 height,
                 round,
+                timeout,
                 reply_to,
-                ..
             } => {
-                debug!("Host: GetValue height {} round {}", height, round);
-                let value = host.get_value(height).await;
-                if let Some(value) = value {
-                    use informalsystems_malachitebft_engine::host::LocallyProposedValue;
-                    let proposed = LocallyProposedValue::new(height, round, value);
-                    let _ = reply_to.send(proposed);
-                } else {
-                    warn!("Host: No Cut available for height {}", height);
-                    // Note: Malachite expects a LocallyProposedValue, but we don't have one.
-                    // This will cause the consensus to stall, but it's better than panicking.
-                }
+                debug!(
+                    "Host: GetValue height {} round {} (timeout: {:?})",
+                    height, round, timeout
+                );
+                // Use the timeout-aware method that waits for cuts to arrive
+                // and proposes an empty Cut if timeout expires (preventing consensus stalls)
+                let value = host.get_value_with_timeout(height, timeout).await;
+
+                // Always reply - get_value_with_timeout guarantees a value
+                use informalsystems_malachitebft_engine::host::LocallyProposedValue;
+                let proposed = LocallyProposedValue::new(height, round, value);
+                let _ = reply_to.send(proposed);
             }
             HostMsg::ExtendVote {
                 height,
@@ -595,31 +662,37 @@ impl ractor::Actor for HostActor {
                         let _ = reply_to.send(proposed);
                     }
                     Err(e) => {
-                        warn!("Host: Failed to decode synced value: {}", e);
-                        // Note: reply_to expects ProposedValue, not Option<ProposedValue>
-                        // This is a limitation - we need to return a valid ProposedValue or handle this differently
-                        // For now, we'll construct a dummy ProposedValue to avoid panicking
-                        // TODO: Find a better way to handle decode failures
-                        warn!("Host: Cannot return None for ProcessSyncedValue - returning dummy value");
-                        // Construct a dummy ProposedValue with invalid data
-                        // Note: This is a fallback - ideally we should handle decode failures differently
-                        // For now, we'll create an empty Cut as a dummy
-                        use std::collections::HashMap;
-                        let dummy_cut = Cut {
-                            height: height.0, // Cut expects u64, not Height
+                        // Log decode failure with full context for debugging.
+                        // This indicates either network corruption, serialization mismatch,
+                        // or a malicious peer sending invalid data.
+                        error!(
+                            %height,
+                            %round,
+                            ?proposer,
+                            bytes_len = value_bytes.len(),
+                            error = %e,
+                            "Host: Failed to decode synced value - returning Invalid ProposedValue"
+                        );
+
+                        // Malachite's ProcessSyncedValue contract requires returning a ProposedValue.
+                        // By marking it as Invalid, Malachite will:
+                        // 1. Notify sync via SyncMsg::InvalidValue (peer will be marked as problematic)
+                        // 2. The value_id mismatch with the certificate triggers proper error handling
+                        // 3. The state machine filters out invalid values - no consensus corruption
+                        let sentinel_cut = Cut {
+                            height: height.0,
                             cars: HashMap::new(),
                             attestations: HashMap::new(),
                         };
-                        let dummy_value = ConsensusValue(dummy_cut);
-                        let dummy_proposed = ProposedValue {
+                        let proposed = ProposedValue {
                             height,
                             round,
-                            valid_round: Round::from(0u32),
+                            valid_round: Round::Nil,
                             proposer,
-                            value: dummy_value,
+                            value: ConsensusValue(sentinel_cut),
                             validity: Validity::Invalid,
                         };
-                        let _ = reply_to.send(dummy_proposed);
+                        let _ = reply_to.send(proposed);
                     }
                 }
             }
@@ -662,11 +735,8 @@ pub async fn spawn_host(
 
     // Spawn the actor - following Malachite's Connector::spawn pattern
     // Actor::spawn returns (ActorRef<Self::Msg>, JoinHandle)
-    // Since Self::Msg is HostMsg<CipherBftContext>, actor_ref is ActorRef<HostMsg<CipherBftContext>>
-    // HostRef<CipherBftContext> is a type alias for ActorRef<HostMsg<CipherBftContext>>
-    // We need to ensure the ActorRef type matches - HostRef is defined in informalsystems_malachitebft_engine::host
-    // and uses ractor::ActorRef, so we should use the same import path.
-    let (actor_ref, _join_handle): (RactorActorRef<HostMsg<CipherBftContext>>, _) = Actor::spawn(
+    // HostRef<Ctx> is a type alias for ractor::ActorRef<HostMsg<Ctx>>
+    let (actor_ref, _join_handle): (HostRef<CipherBftContext>, _) = Actor::spawn(
         Some("CipherBftHost".to_string()),
         HostActor {
             _phantom: std::marker::PhantomData,
@@ -677,17 +747,9 @@ pub async fn spawn_host(
     .map_err(|e| anyhow::anyhow!("Failed to spawn HostActor: {:?}", e))?;
 
     info!("Host actor spawned successfully");
+
     // HostRef is a type alias for ractor::ActorRef<HostMsg<Ctx>>.
-    // However, due to potential ractor version differences or type path issues,
-    // we need to ensure the ActorRef type matches exactly.
-    // Since HostRef is defined in informalsystems_malachitebft_engine::host and uses ractor::ActorRef,
-    // and Actor::spawn returns ractor::ActorRef, they should be compatible.
-    // If there's still a type mismatch, it's likely a ractor version mismatch.
-    // For now, we'll use unsafe transmute as a last resort (should be safe since they're the same type).
-    use std::mem;
-    Ok(unsafe {
-        mem::transmute::<RactorActorRef<HostMsg<CipherBftContext>>, HostRef<CipherBftContext>>(
-            actor_ref,
-        )
-    })
+    // With matching ractor versions (0.14.x for both our crate and malachite),
+    // actor_ref is directly compatible with HostRef<CipherBftContext>.
+    Ok(actor_ref)
 }
