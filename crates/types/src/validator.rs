@@ -5,9 +5,11 @@
 //!
 //! Derivation: `keccak256(ed25519_pubkey)[12..]` (last 20 bytes)
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::fmt;
+use std::io::{Read, Write};
 
 /// Size of ValidatorId in bytes (Ethereum address format)
 pub const VALIDATOR_ID_SIZE: usize = 20;
@@ -18,6 +20,20 @@ pub const VALIDATOR_ID_SIZE: usize = 20;
 /// This matches Malachite's address derivation for CL compatibility.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize)]
 pub struct ValidatorId(#[serde(with = "hex_bytes")] pub [u8; VALIDATOR_ID_SIZE]);
+
+impl BorshSerialize for ValidatorId {
+    fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        writer.write_all(&self.0)
+    }
+}
+
+impl BorshDeserialize for ValidatorId {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let mut bytes = [0u8; VALIDATOR_ID_SIZE];
+        reader.read_exact(&mut bytes)?;
+        Ok(Self(bytes))
+    }
+}
 
 impl ValidatorId {
     /// Zero validator ID (invalid, used as placeholder)

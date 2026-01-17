@@ -77,16 +77,23 @@ hex = "0.4"
 toml = "0.8"
 chrono = "0.4"
 
+# Actor framework (used by Malachite)
+ractor = "0.9"
+
+# Borsh serialization (used by Malachite codec)
+borsh = { version = "1", features = ["derive", "de_strict_order"] }
+
 # Malachite BFT (gated behind the consensus crate's `malachite` feature)
+# NOTE: borsh feature enabled for serialization support
 informalsystems-malachitebft-app = { version = "0.5", default-features = false }
 informalsystems-malachitebft-app-channel = { version = "0.5", default-features = false }
-informalsystems-malachitebft-core-consensus = { version = "0.5", default-features = false }
+informalsystems-malachitebft-core-consensus = { version = "0.5", default-features = false, features = ["borsh"] }
 informalsystems-malachitebft-core-driver = { version = "0.5", default-features = false }
-informalsystems-malachitebft-core-types = { version = "0.5", default-features = false }
-informalsystems-malachitebft-engine = { version = "0.5", default-features = false }
+informalsystems-malachitebft-core-types = { version = "0.5", default-features = false, features = ["borsh"] }
+informalsystems-malachitebft-engine = { version = "0.5", default-features = false, features = ["borsh"] }
 informalsystems-malachitebft-network = { version = "0.5", default-features = false }
 informalsystems-malachitebft-config = { version = "0.5", default-features = false }
-informalsystems-malachitebft-sync = { version = "0.5", default-features = false }
+informalsystems-malachitebft-sync = { version = "0.5", default-features = false, features = ["borsh"] }
 informalsystems-malachitebft-signing-ed25519 = { version = "0.5", default-features = false }
 informalsystems-malachitebft-codec = { version = "0.5", default-features = false }
 informalsystems-malachitebft-metrics = { version = "0.5", default-features = false }

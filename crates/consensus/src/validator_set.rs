@@ -1,5 +1,7 @@
 use std::fmt::{Debug, Display};
+use std::io::{Read, Write};
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use cipherbft_crypto::Ed25519PublicKey;
 use cipherbft_types::ValidatorId;
 
@@ -14,6 +16,18 @@ use crate::signing::ConsensusPublicKey;
 /// Consensus address wrapper (Ed25519-derived validator ID).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ConsensusAddress(pub ValidatorId);
+
+impl BorshSerialize for ConsensusAddress {
+    fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.0.serialize(writer)
+    }
+}
+
+impl BorshDeserialize for ConsensusAddress {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        Ok(Self(ValidatorId::deserialize_reader(reader)?))
+    }
+}
 
 impl Debug for ConsensusAddress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -38,6 +52,24 @@ pub struct ConsensusValidator {
     pub voting_power: u64,
 }
 
+impl BorshSerialize for ConsensusValidator {
+    fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.address.serialize(writer)?;
+        self.public_key.serialize(writer)?;
+        self.voting_power.serialize(writer)
+    }
+}
+
+impl BorshDeserialize for ConsensusValidator {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        Ok(Self {
+            address: ConsensusAddress::deserialize_reader(reader)?,
+            public_key: ConsensusPublicKey::deserialize_reader(reader)?,
+            voting_power: u64::deserialize_reader(reader)?,
+        })
+    }
+}
+
 impl ConsensusValidator {
     pub fn new(address: ValidatorId, public_key: Ed25519PublicKey, voting_power: u64) -> Self {
         Self {
@@ -52,6 +84,27 @@ impl ConsensusValidator {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConsensusValidatorSet {
     validators: Vec<ConsensusValidator>,
+}
+
+impl BorshSerialize for ConsensusValidatorSet {
+    fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        (self.validators.len() as u32).serialize(writer)?;
+        for v in &self.validators {
+            v.serialize(writer)?;
+        }
+        Ok(())
+    }
+}
+
+impl BorshDeserialize for ConsensusValidatorSet {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let len = u32::deserialize_reader(reader)? as usize;
+        let mut validators = Vec::with_capacity(len);
+        for _ in 0..len {
+            validators.push(ConsensusValidator::deserialize_reader(reader)?);
+        }
+        Ok(Self { validators })
+    }
 }
 
 impl ConsensusValidatorSet {

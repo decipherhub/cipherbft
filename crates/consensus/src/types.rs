@@ -1,12 +1,26 @@
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display};
+use std::io::{Read, Write};
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use cipherbft_data_chain::Cut;
 use cipherbft_types::Hash;
 
 /// Consensus height wrapper to keep Malachite types explicit.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub struct ConsensusHeight(pub u64);
+
+impl BorshSerialize for ConsensusHeight {
+    fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.0.serialize(writer)
+    }
+}
+
+impl BorshDeserialize for ConsensusHeight {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        Ok(Self(u64::deserialize_reader(reader)?))
+    }
+}
 
 impl ConsensusHeight {
     /// Advance to the next height.
@@ -34,8 +48,20 @@ impl Display for ConsensusHeight {
 }
 
 /// Consensus value ID (hash of a `Cut`).
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub struct ConsensusValueId(pub Hash);
+
+impl BorshSerialize for ConsensusValueId {
+    fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        self.0.serialize(writer)
+    }
+}
+
+impl BorshDeserialize for ConsensusValueId {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        Ok(Self(Hash::deserialize_reader(reader)?))
+    }
+}
 
 impl Display for ConsensusValueId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -44,8 +70,30 @@ impl Display for ConsensusValueId {
 }
 
 /// Consensus value wrapper (DCL `Cut`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ConsensusValue(pub Cut);
+
+impl BorshSerialize for ConsensusValue {
+    fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        // Use bincode for the complex Cut type (contains HashMap)
+        let bytes = bincode::serialize(&self.0)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        // Write length-prefixed bytes
+        (bytes.len() as u32).serialize(writer)?;
+        writer.write_all(&bytes)
+    }
+}
+
+impl BorshDeserialize for ConsensusValue {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let len = u32::deserialize_reader(reader)? as usize;
+        let mut bytes = vec![0u8; len];
+        reader.read_exact(&mut bytes)?;
+        let cut: Cut = bincode::deserialize(&bytes)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        Ok(Self(cut))
+    }
+}
 
 impl ConsensusValue {
     /// Access the inner cut.

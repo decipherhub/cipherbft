@@ -1,5 +1,7 @@
 use std::fmt::{Debug, Display};
+use std::io::{Read, Write};
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use cipherbft_crypto::{
     Ed25519KeyPair, Ed25519PublicKey as CryptoPublicKey, Ed25519SecretKey as CryptoSecretKey,
     Ed25519Signature as CryptoSignature,
@@ -9,6 +11,22 @@ use informalsystems_malachitebft_core_types::SigningScheme;
 /// Wrapper around Ed25519 public key for Malachite.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ConsensusPublicKey(pub CryptoPublicKey);
+
+impl BorshSerialize for ConsensusPublicKey {
+    fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        writer.write_all(&self.0.to_bytes())
+    }
+}
+
+impl BorshDeserialize for ConsensusPublicKey {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let mut bytes = [0u8; 32];
+        reader.read_exact(&mut bytes)?;
+        let pk = CryptoPublicKey::from_bytes(&bytes)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        Ok(Self(pk))
+    }
+}
 
 impl Debug for ConsensusPublicKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -29,6 +47,20 @@ impl Debug for ConsensusPrivateKey {
 /// Wrapper around Ed25519 signature for Malachite.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ConsensusSignature(pub [u8; 64]);
+
+impl BorshSerialize for ConsensusSignature {
+    fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        writer.write_all(&self.0)
+    }
+}
+
+impl BorshDeserialize for ConsensusSignature {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let mut bytes = [0u8; 64];
+        reader.read_exact(&mut bytes)?;
+        Ok(Self(bytes))
+    }
+}
 
 impl Debug for ConsensusSignature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

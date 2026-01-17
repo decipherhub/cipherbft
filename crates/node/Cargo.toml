@@ -17,6 +17,7 @@ cipherbft-crypto = { path = "../crypto" }
 cipherbft-data-chain = { path = "../data-chain" }
 cipherbft-storage = { path = "../storage" }
 cipherbft-execution = { path = "../execution" }
+cipherbft-consensus = { path = "../consensus", features = ["malachite"] }
 
 # Async runtime
 tokio = { workspace = true, features = ["full", "signal"] }
@@ -43,6 +44,10 @@ anyhow = "1.0"
 # Crypto
 rand = { workspace = true }
 hex = { workspace = true }
+
+# Malachite BFT (for consensus actor refs)
+informalsystems-malachitebft-metrics = { workspace = true }
+informalsystems-malachitebft-network = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

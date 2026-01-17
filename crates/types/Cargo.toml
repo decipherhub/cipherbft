@@ -12,6 +12,7 @@ hex = { workspace = true }
 sha2 = { workspace = true }
 sha3 = { workspace = true }
 thiserror = { workspace = true }
+borsh = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
