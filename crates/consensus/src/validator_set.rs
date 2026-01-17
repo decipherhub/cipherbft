@@ -4,7 +4,10 @@ use cipherbft_crypto::Ed25519PublicKey;
 use cipherbft_types::ValidatorId;
 
 #[cfg(feature = "malachite")]
-use informalsystems_malachitebft_core_types::{Address as MalachiteAddress, Validator as MalachiteValidator, ValidatorSet as MalachiteValidatorSet, VotingPower};
+use informalsystems_malachitebft_core_types::{
+    Address as MalachiteAddress, Validator as MalachiteValidator,
+    ValidatorSet as MalachiteValidatorSet, VotingPower,
+};
 
 use crate::signing::ConsensusPublicKey;
 
@@ -106,10 +109,7 @@ impl MalachiteValidatorSet<crate::context::CipherBftContext> for ConsensusValida
         self.validators.iter().find(|v| &v.address == address)
     }
 
-    fn get_by_index(
-        &self,
-        index: usize,
-    ) -> Option<&crate::context::CipherBftContextValidator> {
+    fn get_by_index(&self, index: usize) -> Option<&crate::context::CipherBftContextValidator> {
         self.validators.get(index)
     }
 }
@@ -120,7 +120,9 @@ impl MalachiteValidator<crate::context::CipherBftContext> for ConsensusValidator
         &self.address
     }
 
-    fn public_key(&self) -> &informalsystems_malachitebft_core_types::PublicKey<crate::context::CipherBftContext> {
+    fn public_key(
+        &self,
+    ) -> &informalsystems_malachitebft_core_types::PublicKey<crate::context::CipherBftContext> {
         &self.public_key
     }
 

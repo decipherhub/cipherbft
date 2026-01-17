@@ -13,6 +13,8 @@ pub use error::ConsensusError;
 #[cfg(feature = "malachite")]
 pub mod context;
 #[cfg(feature = "malachite")]
+pub mod engine;
+#[cfg(feature = "malachite")]
 pub mod proposal;
 #[cfg(feature = "malachite")]
 pub mod signing;
@@ -20,14 +22,17 @@ pub mod signing;
 pub mod validator_set;
 #[cfg(feature = "malachite")]
 pub mod vote;
-#[cfg(feature = "malachite")]
-pub mod engine;
 
 pub use config::ConsensusConfig;
 pub use types::{ConsensusHeight, ConsensusRound, ConsensusValue};
 
 #[cfg(feature = "malachite")]
 pub use context::CipherBftContext;
+#[cfg(feature = "malachite")]
+pub use engine::{
+    create_context, create_engine_config, default_consensus_params,
+    default_engine_config_single_part, EngineHandles, MalachiteEngineBuilder,
+};
 #[cfg(feature = "malachite")]
 pub use proposal::{CutProposal, CutProposalPart};
 #[cfg(feature = "malachite")]
@@ -36,8 +41,3 @@ pub use signing::{ConsensusSigner, ConsensusSigningProvider};
 pub use validator_set::ConsensusValidatorSet;
 #[cfg(feature = "malachite")]
 pub use vote::ConsensusVote;
-#[cfg(feature = "malachite")]
-pub use engine::{
-    create_context, create_engine_config, default_consensus_params,
-    default_engine_config_single_part, EngineHandles, MalachiteEngineBuilder,
-};

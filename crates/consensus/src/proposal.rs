@@ -1,5 +1,7 @@
 use cipherbft_data_chain::Cut;
-use informalsystems_malachitebft_core_types::{Proposal as MalachiteProposal, ProposalPart as MalachiteProposalPart, Round};
+use informalsystems_malachitebft_core_types::{
+    Proposal as MalachiteProposal, ProposalPart as MalachiteProposalPart, Round,
+};
 
 use crate::context::CipherBftContext;
 use crate::types::{ConsensusHeight, ConsensusValue};
@@ -46,11 +48,15 @@ impl MalachiteProposal<CipherBftContext> for CutProposal {
         self.round
     }
 
-    fn value(&self) -> &<CipherBftContext as informalsystems_malachitebft_core_types::Context>::Value {
+    fn value(
+        &self,
+    ) -> &<CipherBftContext as informalsystems_malachitebft_core_types::Context>::Value {
         &self.value
     }
 
-    fn take_value(self) -> <CipherBftContext as informalsystems_malachitebft_core_types::Context>::Value {
+    fn take_value(
+        self,
+    ) -> <CipherBftContext as informalsystems_malachitebft_core_types::Context>::Value {
         self.value
     }
 
@@ -93,9 +99,7 @@ impl MalachiteProposalPart<CipherBftContext> for CutProposalPart {
 
 impl PartialEq for CutProposalPart {
     fn eq(&self, other: &Self) -> bool {
-        self.cut.hash() == other.cut.hash()
-            && self.first == other.first
-            && self.last == other.last
+        self.cut.hash() == other.cut.hash() && self.first == other.first && self.last == other.last
     }
 }
 
