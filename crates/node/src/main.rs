@@ -299,7 +299,7 @@ fn init_tracing(log_level: &str, log_format: &str, no_color: bool) {
 // =============================================================================
 
 fn cmd_init(
-    home: &PathBuf,
+    home: &std::path::Path,
     moniker: Option<String>,
     chain_id: &str,
     overwrite: bool,
@@ -404,12 +404,17 @@ async fn cmd_testnet_start(num_validators: usize, duration: u64) -> Result<()> {
     // Generate configurations
     let configs = generate_local_configs(num_validators);
 
-    // Collect validator info for cross-registration
+    // Collect validator info for cross-registration (both BLS and Ed25519 keys)
     let validator_info: Vec<_> = configs
         .iter()
         .map(|c| {
-            let keypair = c.keypair().unwrap();
-            (c.validator_id, keypair.public_key.clone())
+            let bls_keypair = c.keypair().unwrap();
+            let ed25519_keypair = c.ed25519_keypair().unwrap();
+            (
+                c.validator_id,
+                bls_keypair.public_key.clone(),
+                ed25519_keypair.public_key.clone(),
+            )
         })
         .collect();
 
@@ -421,8 +426,9 @@ async fn cmd_testnet_start(num_validators: usize, duration: u64) -> Result<()> {
         let mut node = Node::new(config)?;
 
         // Register ALL validators (including ourselves - needed for threshold calculation)
-        for (vid, pubkey) in &validator_info {
-            node.add_validator(*vid, pubkey.clone());
+        // BLS keys are used for DCL threshold signatures, Ed25519 keys for consensus signing
+        for (vid, bls_pubkey, ed25519_pubkey) in &validator_info {
+            node.add_validator(*vid, bls_pubkey.clone(), ed25519_pubkey.clone());
         }
 
         let handle = tokio::spawn(async move {
@@ -456,7 +462,7 @@ async fn cmd_testnet_start(num_validators: usize, duration: u64) -> Result<()> {
     Ok(())
 }
 
-fn cmd_keys(home: &PathBuf, command: KeysCommands) -> Result<()> {
+fn cmd_keys(home: &std::path::Path, command: KeysCommands) -> Result<()> {
     let keys_dir = home.join("keys");
 
     match command {
@@ -472,8 +478,8 @@ fn cmd_keys(home: &PathBuf, command: KeysCommands) -> Result<()> {
             let key_data = serde_json::json!({
                 "name": name,
                 "type": "bls12-381",
-                "public_key": hex::encode(&pubkey_bytes),
-                "secret_key": hex::encode(&secret_bytes),
+                "public_key": hex::encode(pubkey_bytes),
+                "secret_key": hex::encode(secret_bytes),
             });
 
             std::fs::write(&key_path, serde_json::to_string_pretty(&key_data)?)?;
@@ -482,7 +488,7 @@ fn cmd_keys(home: &PathBuf, command: KeysCommands) -> Result<()> {
             println!();
             println!("  Name:       {}", name);
             println!("  Type:       bls12-381");
-            println!("  Public Key: {}", hex::encode(&pubkey_bytes));
+            println!("  Public Key: {}", hex::encode(pubkey_bytes));
             println!();
             println!("**Important**: Keep your secret key safe and never share it.");
         }
@@ -498,7 +504,7 @@ fn cmd_keys(home: &PathBuf, command: KeysCommands) -> Result<()> {
             for entry in std::fs::read_dir(&keys_dir)? {
                 let entry = entry?;
                 let path = entry.path();
-                if path.extension().map_or(false, |ext| ext == "json") {
+                if path.extension().is_some_and(|ext| ext == "json") {
                     if let Some(name) = path.file_stem() {
                         println!("  - {}", name.to_string_lossy());
                     }
@@ -570,7 +576,7 @@ fn cmd_keys(home: &PathBuf, command: KeysCommands) -> Result<()> {
     Ok(())
 }
 
-fn cmd_config(home: &PathBuf, command: ConfigCommands) -> Result<()> {
+fn cmd_config(home: &std::path::Path, command: ConfigCommands) -> Result<()> {
     let config_path = home.join("config/node.json");
 
     match command {
@@ -672,7 +678,7 @@ fn cmd_version(output: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_validate(home: &PathBuf, genesis_path: Option<PathBuf>) -> Result<()> {
+fn cmd_validate(home: &std::path::Path, genesis_path: Option<PathBuf>) -> Result<()> {
     let path = genesis_path.unwrap_or_else(|| home.join("config/genesis.json"));
 
     if !path.exists() {
