@@ -1,5 +1,5 @@
 [package]
-name = "cipherbft-node"
+name = "cipherd"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -7,7 +7,7 @@ license.workspace = true
 description = "CipherBFT Node - MVP for DCL testing"
 
 [[bin]]
-name = "cipherbft-node"
+name = "cipherd"
 path = "src/main.rs"
 
 [dependencies]

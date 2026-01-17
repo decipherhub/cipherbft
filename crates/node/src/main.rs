@@ -10,7 +10,7 @@ use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 #[derive(Parser)]
-#[command(name = "cipherbft-node")]
+#[command(name = "cipherd")]
 #[command(about = "CipherBFT Node - MVP for DCL testing")]
 struct Cli {
     #[command(subcommand)]
@@ -120,12 +120,12 @@ fn gen_config(validators: usize, output: PathBuf) -> Result<()> {
 
     println!("\nTo run a node:");
     println!(
-        "  cipherbft-node run --config {}/node-0.json",
+        "  cipherd run --config {}/node-0.json",
         output.display()
     );
 
     println!("\nTo run all validators locally:");
-    println!("  cipherbft-node local-test --validators {}", validators);
+    println!("  cipherd local-test --validators {}", validators);
 
     Ok(())
 }

@@ -61,7 +61,7 @@ impl NodeConfig {
             worker_listens: vec![format!("127.0.0.1:{}", base_port + 1).parse().unwrap()],
             peers: Vec::new(), // Will be populated after all nodes are created
             num_workers: 1,
-            data_dir: PathBuf::from(format!("/tmp/cipherbft-node-{}", index)),
+            data_dir: PathBuf::from(format!("/tmp/cipherd-{}", index)),
             car_interval_ms: 100,
             max_batch_txs: 100,
             max_batch_bytes: 1024 * 1024, // 1MB
