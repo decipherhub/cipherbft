@@ -16,13 +16,13 @@
 //! 7. `WalRef<CipherBftContext>` - still needed: instantiate WAL actor with codec/path.
 
 use anyhow::Result;
+use informalsystems_malachitebft_app::types::core::SigningProvider;
 use informalsystems_malachitebft_config::{
     ConsensusConfig as EngineConsensusConfig, TimeoutConfig, ValuePayload as EngineValuePayload,
 };
 use informalsystems_malachitebft_core_consensus::Params as ConsensusParams;
 use informalsystems_malachitebft_core_driver::ThresholdParams;
 use informalsystems_malachitebft_core_types::ValuePayload;
-use informalsystems_malachitebft_app::types::core::SigningProvider;
 use informalsystems_malachitebft_engine::consensus::{Consensus, ConsensusRef};
 use informalsystems_malachitebft_engine::host::HostRef;
 use informalsystems_malachitebft_engine::network::NetworkRef;
@@ -38,13 +38,6 @@ use crate::context::CipherBftContext;
 use crate::error::ConsensusError;
 use crate::types::ConsensusHeight;
 use crate::validator_set::{ConsensusAddress, ConsensusValidator, ConsensusValidatorSet};
-
-/// Helper functions for creating CipherBftContext and Malachite-ready configs.
-///
-/// Use these to assemble the pieces needed by `MalachiteEngineBuilder`:
-/// - `create_context`: build a Context from chain_id/validators/height.
-/// - `default_consensus_params`: wrap Context pieces into Malachite `Params`.
-/// - `default_engine_config_single_part`: engine config tuned for proposal-only (single-part) values.
 
 /// Create a `CipherBftContext` from configuration and validators.
 ///
@@ -106,9 +99,10 @@ pub fn default_consensus_params(
 
 /// Engine config tuned for single-part proposals (no proposal-part streaming).
 pub fn default_engine_config_single_part() -> EngineConsensusConfig {
-    let mut cfg = EngineConsensusConfig::default();
-    cfg.value_payload = EngineValuePayload::ProposalOnly;
-    cfg
+    EngineConsensusConfig {
+        value_payload: EngineValuePayload::ProposalOnly,
+        ..Default::default()
+    }
 }
 
 /// Create engine config with timeouts from `ConsensusConfig`.
@@ -116,9 +110,9 @@ pub fn default_engine_config_single_part() -> EngineConsensusConfig {
 /// This wires the CipherBFT consensus timeouts into the Malachite engine config.
 pub fn create_engine_config(config: &ConsensusConfig) -> EngineConsensusConfig {
     let timeout_config = TimeoutConfig {
-        propose_timeout: config.propose_timeout,
-        prevote_timeout: config.prevote_timeout,
-        precommit_timeout: config.precommit_timeout,
+        timeout_propose: config.propose_timeout,
+        timeout_prevote: config.prevote_timeout,
+        timeout_precommit: config.precommit_timeout,
         ..Default::default()
     };
 
