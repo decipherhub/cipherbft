@@ -78,7 +78,9 @@ toml = "0.8"
 chrono = "0.4"
 
 # Actor framework (used by Malachite)
-ractor = "0.9"
+# NOTE: Must match the version used by informalsystems-malachitebft-engine (0.14.x)
+# Using different versions causes type incompatibility with HostRef/ActorRef
+ractor = "0.14"
 
 # Borsh serialization (used by Malachite codec)
 borsh = { version = "1", features = ["derive", "de_strict_order"] }
