@@ -6,6 +6,9 @@ mod hash;
 mod height;
 mod validator;
 
+pub mod genesis;
+
+pub use genesis::{Genesis, GenesisError, GenesisValidator};
 pub use hash::Hash;
 pub use height::Height;
 pub use validator::{ValidatorId, VALIDATOR_ID_SIZE};

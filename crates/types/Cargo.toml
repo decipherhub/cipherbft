@@ -8,12 +8,13 @@ description = "Core type definitions for CipherBFT"
 
 [dependencies]
 serde = { workspace = true }
+serde_json = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
 sha3 = { workspace = true }
 thiserror = { workspace = true }
 borsh = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 
 [dev-dependencies]
 proptest = { workspace = true }
-serde_json = { workspace = true }
