@@ -12,8 +12,11 @@ ignore = [
     # paste crate unmaintained - transitive dependency from alloy-primitives 1.x
     # Used as proc-macro only, not a runtime security concern
     "RUSTSEC-2024-0436",
-    # bincode unmaintained - team considers 1.3.3 complete and stable
-    # Used for internal receipt serialization, not a security concern
+    # proc-macro-error unmaintained - transitive dependency via reth tooling
+    # Used as proc-macro only, not a runtime security concern
+    "RUSTSEC-2024-0370",
+    # bincode unmaintained - transitive dependency in core crates
+    # No maintained upgrade available; revisit if replacement is planned.
     "RUSTSEC-2025-0141",
 ]
 
