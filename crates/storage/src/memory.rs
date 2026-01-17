@@ -82,7 +82,7 @@ impl DclStore for InMemoryStore {
         let mut batches = self.batches.write();
 
         if batches.contains_key(&hash) {
-            return Err(StorageError::DuplicateEntry(format!("batch {}", hash)));
+            return Err(StorageError::DuplicateEntry(format!("batch {hash}")));
         }
 
         batches.insert(hash, batch);

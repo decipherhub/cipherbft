@@ -165,7 +165,7 @@ where
             value,
             block_number,
         )
-        .map_err(|e| format!("Staking precompile error: {:?}", e))?;
+        .map_err(|e| format!("Staking precompile error: {e:?}"))?;
 
     // Convert PrecompileResult to InterpreterResult
     // MIGRATION(revm33): Return type changed from PrecompileResult to InterpreterResult

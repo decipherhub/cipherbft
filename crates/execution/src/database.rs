@@ -592,3 +592,266 @@ mod tests {
         assert!(db.cache_accounts.write().contains(&addr));
     }
 }
+
+// =============================================================================
+// MDBX Provider (requires `mdbx` feature)
+// =============================================================================
+
+/// MDBX-backed provider for persistent storage.
+///
+/// This provider uses the storage layer's `MdbxEvmStore` for persistent
+/// EVM state storage. It requires the `mdbx` feature to be enabled.
+#[cfg(feature = "mdbx")]
+pub mod mdbx_provider {
+    use super::*;
+    use cipherbft_storage::{EvmAccount, EvmBytecode, EvmStore, MdbxEvmStore};
+
+    /// MDBX-backed provider for persistent EVM state storage.
+    ///
+    /// This provider wraps `MdbxEvmStore` from the storage layer and implements
+    /// the `Provider` trait to integrate with the execution layer.
+    pub struct MdbxProvider {
+        store: MdbxEvmStore,
+    }
+
+    impl MdbxProvider {
+        /// Create a new MDBX provider with the given store.
+        pub fn new(store: MdbxEvmStore) -> Self {
+            Self { store }
+        }
+    }
+
+    impl Provider for MdbxProvider {
+        fn get_account(&self, address: Address) -> Result<Option<Account>> {
+            let addr_bytes: [u8; 20] = address.into();
+            self.store
+                .get_account(&addr_bytes)
+                .map(|opt| {
+                    opt.map(|evm_acc| Account {
+                        nonce: evm_acc.nonce,
+                        balance: U256::from_be_bytes(evm_acc.balance),
+                        code_hash: B256::from(evm_acc.code_hash),
+                        storage_root: B256::from(evm_acc.storage_root),
+                    })
+                })
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
+        }
+
+        fn get_code(&self, code_hash: B256) -> Result<Option<Bytecode>> {
+            let hash_bytes: [u8; 32] = code_hash.into();
+            self.store
+                .get_code(&hash_bytes)
+                .map(|opt| opt.map(|bc| Bytecode::new_raw(bc.code.into())))
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
+        }
+
+        fn get_storage(&self, address: Address, slot: U256) -> Result<U256> {
+            let addr_bytes: [u8; 20] = address.into();
+            let slot_bytes: [u8; 32] = slot.to_be_bytes();
+            self.store
+                .get_storage(&addr_bytes, &slot_bytes)
+                .map(|value| U256::from_be_bytes(value))
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
+        }
+
+        fn get_block_hash(&self, number: u64) -> Result<Option<B256>> {
+            self.store
+                .get_block_hash(number)
+                .map(|opt| opt.map(B256::from))
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
+        }
+
+        fn set_account(&self, address: Address, account: Account) -> Result<()> {
+            let addr_bytes: [u8; 20] = address.into();
+            let evm_acc = EvmAccount {
+                nonce: account.nonce,
+                balance: account.balance.to_be_bytes(),
+                code_hash: account.code_hash.into(),
+                storage_root: account.storage_root.into(),
+            };
+            self.store
+                .set_account(&addr_bytes, evm_acc)
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
+        }
+
+        fn set_code(&self, code_hash: B256, bytecode: Bytecode) -> Result<()> {
+            let hash_bytes: [u8; 32] = code_hash.into();
+            let evm_bc = EvmBytecode::new(bytecode.bytecode().to_vec());
+            self.store
+                .set_code(&hash_bytes, evm_bc)
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
+        }
+
+        fn set_storage(&self, address: Address, slot: U256, value: U256) -> Result<()> {
+            let addr_bytes: [u8; 20] = address.into();
+            let slot_bytes: [u8; 32] = slot.to_be_bytes();
+            let value_bytes: [u8; 32] = value.to_be_bytes();
+            self.store
+                .set_storage(&addr_bytes, &slot_bytes, value_bytes)
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
+        }
+
+        fn set_block_hash(&self, number: u64, hash: B256) -> Result<()> {
+            let hash_bytes: [u8; 32] = hash.into();
+            self.store
+                .set_block_hash(number, hash_bytes)
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use cipherbft_storage::mdbx::{Database, DatabaseConfig};
+        use revm::Database as RevmDatabase;
+        use std::sync::Arc;
+
+        fn create_test_mdbx_provider() -> (MdbxProvider, tempfile::TempDir) {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let config = DatabaseConfig::new(temp_dir.path());
+            let db = Database::open(config).unwrap();
+            let store = MdbxEvmStore::new(Arc::clone(db.env()));
+            (MdbxProvider::new(store), temp_dir)
+        }
+
+        #[test]
+        fn test_mdbx_provider_account_operations() {
+            let (provider, _temp_dir) = create_test_mdbx_provider();
+
+            let addr = Address::from([1u8; 20]);
+
+            // Initially no account
+            assert!(provider.get_account(addr).unwrap().is_none());
+
+            // Set account
+            let account = Account {
+                nonce: 42,
+                balance: U256::from(1000),
+                code_hash: B256::from([2u8; 32]),
+                storage_root: B256::ZERO,
+            };
+            provider.set_account(addr, account.clone()).unwrap();
+
+            // Get account
+            let retrieved = provider.get_account(addr).unwrap().unwrap();
+            assert_eq!(retrieved.nonce, 42);
+            assert_eq!(retrieved.balance, U256::from(1000));
+            assert_eq!(retrieved.code_hash, B256::from([2u8; 32]));
+        }
+
+        #[test]
+        fn test_mdbx_provider_storage_operations() {
+            let (provider, _temp_dir) = create_test_mdbx_provider();
+
+            let addr = Address::from([1u8; 20]);
+            let slot = U256::from(100);
+            let value = U256::from(12345);
+
+            // Initially zero
+            assert_eq!(provider.get_storage(addr, slot).unwrap(), U256::ZERO);
+
+            // Set storage
+            provider.set_storage(addr, slot, value).unwrap();
+
+            // Get storage
+            assert_eq!(provider.get_storage(addr, slot).unwrap(), value);
+        }
+
+        #[test]
+        fn test_mdbx_provider_code_operations() {
+            let (provider, _temp_dir) = create_test_mdbx_provider();
+
+            let code_hash = B256::from([42u8; 32]);
+            let bytecode = Bytecode::new_raw(alloy_primitives::Bytes::from(vec![
+                0x60, 0x00, 0x60, 0x00, 0xf3,
+            ]));
+
+            // Initially no code
+            assert!(provider.get_code(code_hash).unwrap().is_none());
+
+            // Set code
+            provider.set_code(code_hash, bytecode.clone()).unwrap();
+
+            // Get code
+            let retrieved = provider.get_code(code_hash).unwrap().unwrap();
+            assert_eq!(retrieved.bytecode(), bytecode.bytecode());
+        }
+
+        #[test]
+        fn test_mdbx_provider_block_hash_operations() {
+            let (provider, _temp_dir) = create_test_mdbx_provider();
+
+            let block_num = 12345u64;
+            let hash = B256::from([99u8; 32]);
+
+            // Initially no hash
+            assert!(provider.get_block_hash(block_num).unwrap().is_none());
+
+            // Set block hash
+            provider.set_block_hash(block_num, hash).unwrap();
+
+            // Get block hash
+            assert_eq!(provider.get_block_hash(block_num).unwrap().unwrap(), hash);
+        }
+
+        #[test]
+        fn test_mdbx_provider_with_database() {
+            let (provider, _temp_dir) = create_test_mdbx_provider();
+
+            let addr = Address::from([5u8; 20]);
+            let account = Account {
+                nonce: 10,
+                balance: U256::from(5000),
+                code_hash: B256::ZERO,
+                storage_root: B256::ZERO,
+            };
+            provider.set_account(addr, account).unwrap();
+
+            // Use with CipherBftDatabase
+            let mut db = CipherBftDatabase::new(provider);
+
+            // Query via revm Database trait
+            let info = db.basic(addr).unwrap().unwrap();
+            assert_eq!(info.nonce, 10);
+            assert_eq!(info.balance, U256::from(5000));
+        }
+
+        #[test]
+        fn test_mdbx_provider_persistence() {
+            // Test that data persists across provider instances
+            let temp_dir = tempfile::tempdir().unwrap();
+            let db_path = temp_dir.path();
+
+            let addr = Address::from([7u8; 20]);
+            let account = Account {
+                nonce: 100,
+                balance: U256::from(999999),
+                code_hash: B256::ZERO,
+                storage_root: B256::ZERO,
+            };
+
+            // First: Create provider and write data
+            {
+                let config = cipherbft_storage::mdbx::DatabaseConfig::new(db_path);
+                let db = Database::open(config).unwrap();
+                let store = MdbxEvmStore::new(Arc::clone(db.env()));
+                let provider = MdbxProvider::new(store);
+                provider.set_account(addr, account.clone()).unwrap();
+            }
+
+            // Second: Create new provider and verify data persists
+            {
+                let config = cipherbft_storage::mdbx::DatabaseConfig::new(db_path);
+                let db = Database::open(config).unwrap();
+                let store = MdbxEvmStore::new(Arc::clone(db.env()));
+                let provider = MdbxProvider::new(store);
+                let retrieved = provider.get_account(addr).unwrap().unwrap();
+                assert_eq!(retrieved.nonce, 100);
+                assert_eq!(retrieved.balance, U256::from(999999));
+            }
+        }
+    }
+}
+
+#[cfg(feature = "mdbx")]
+pub use mdbx_provider::MdbxProvider;

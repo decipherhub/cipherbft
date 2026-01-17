@@ -273,7 +273,7 @@ impl<P: Provider + Clone> ExecutionLayer for ExecutionEngine<P> {
             .iter()
             .map(|r| {
                 bincode::serialize(r).map(Bytes::from).map_err(|e| {
-                    ExecutionError::Internal(format!("Receipt serialization failed: {}", e))
+                    ExecutionError::Internal(format!("Receipt serialization failed: {e}"))
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -410,7 +410,7 @@ impl<P: Provider + Clone> ExecutionLayer for ExecutionEngine<P> {
             .get(&height)
             .copied()
             .ok_or_else(|| {
-                ExecutionError::InvalidBlock(format!("Block hash not found at height {}", height))
+                ExecutionError::InvalidBlock(format!("Block hash not found at height {height}"))
             })
     }
 
