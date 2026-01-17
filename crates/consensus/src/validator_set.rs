@@ -82,6 +82,11 @@ impl ConsensusValidatorSet {
     pub fn len(&self) -> usize {
         self.validators.len()
     }
+
+    /// Check if the validator set is empty.
+    pub fn is_empty(&self) -> bool {
+        self.validators.is_empty()
+    }
 }
 
 #[cfg(feature = "malachite")]

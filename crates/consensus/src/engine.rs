@@ -17,11 +17,11 @@
 
 use anyhow::Result;
 use informalsystems_malachitebft_config::{
-    ConsensusConfig as EngineConsensusConfig, ValuePayload as EngineValuePayload,
+    ConsensusConfig as EngineConsensusConfig, TimeoutConfig, ValuePayload as EngineValuePayload,
 };
 use informalsystems_malachitebft_core_consensus::Params as ConsensusParams;
-use informalsystems_malachitebft_core_types::ValuePayload;
 use informalsystems_malachitebft_core_driver::ThresholdParams;
+use informalsystems_malachitebft_core_types::ValuePayload;
 use informalsystems_malachitebft_app::types::core::SigningProvider;
 use informalsystems_malachitebft_engine::consensus::{Consensus, ConsensusRef};
 use informalsystems_malachitebft_engine::host::HostRef;
@@ -35,6 +35,7 @@ use tracing::info_span;
 
 use crate::config::ConsensusConfig;
 use crate::context::CipherBftContext;
+use crate::error::ConsensusError;
 use crate::types::ConsensusHeight;
 use crate::validator_set::{ConsensusAddress, ConsensusValidator, ConsensusValidatorSet};
 
@@ -56,6 +57,9 @@ use crate::validator_set::{ConsensusAddress, ConsensusValidator, ConsensusValida
 /// * `validators` - List of validators with Ed25519 public keys and voting power
 /// * `initial_height` - Starting height for consensus (defaults to 1 if None)
 ///
+/// # Errors
+/// Returns `ConsensusError::EmptyValidatorSet` if the validator list is empty.
+///
 /// # Example
 /// ```rust,ignore
 /// use cipherbft_consensus::{create_context, ConsensusValidator};
@@ -69,18 +73,18 @@ use crate::validator_set::{ConsensusAddress, ConsensusValidator, ConsensusValida
 ///         100, // voting power
 ///     ),
 /// ];
-/// let ctx = create_context("my-chain", validators, None);
+/// let ctx = create_context("my-chain", validators, None)?;
 /// ```
 pub fn create_context(
     chain_id: impl Into<String>,
     validators: Vec<ConsensusValidator>,
     initial_height: Option<ConsensusHeight>,
-) -> CipherBftContext {
+) -> Result<CipherBftContext, ConsensusError> {
     let config = ConsensusConfig::new(chain_id);
     let validator_set = ConsensusValidatorSet::new(validators);
     let initial_height = initial_height.unwrap_or_else(|| ConsensusHeight::from(1));
 
-    CipherBftContext::new(config, validator_set, initial_height)
+    CipherBftContext::try_new(config, validator_set, initial_height)
 }
 
 /// Create Malachite consensus params using our Context components.
@@ -105,6 +109,24 @@ pub fn default_engine_config_single_part() -> EngineConsensusConfig {
     let mut cfg = EngineConsensusConfig::default();
     cfg.value_payload = EngineValuePayload::ProposalOnly;
     cfg
+}
+
+/// Create engine config with timeouts from `ConsensusConfig`.
+///
+/// This wires the CipherBFT consensus timeouts into the Malachite engine config.
+pub fn create_engine_config(config: &ConsensusConfig) -> EngineConsensusConfig {
+    let timeout_config = TimeoutConfig {
+        propose_timeout: config.propose_timeout,
+        prevote_timeout: config.prevote_timeout,
+        precommit_timeout: config.precommit_timeout,
+        ..Default::default()
+    };
+
+    EngineConsensusConfig {
+        value_payload: EngineValuePayload::ProposalOnly,
+        timeouts: timeout_config,
+        ..Default::default()
+    }
 }
 
 /// Bundles all actor handles returned after spawning.

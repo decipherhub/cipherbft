@@ -26,6 +26,7 @@ malachite = [
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 hex = { workspace = true }
 

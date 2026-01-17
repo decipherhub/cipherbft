@@ -3,6 +3,7 @@ use informalsystems_malachitebft_core_types::{
 };
 
 use crate::config::ConsensusConfig;
+use crate::error::ConsensusError;
 use crate::proposal::{CutProposal, CutProposalPart};
 use crate::signing::Ed25519SigningScheme;
 use crate::types::{ConsensusHeight, ConsensusValue};
@@ -34,17 +35,36 @@ pub struct CipherBftContext {
 }
 
 impl CipherBftContext {
+    /// Create a new context with validation.
+    ///
+    /// # Errors
+    /// Returns `ConsensusError::EmptyValidatorSet` if the validator set is empty.
+    pub fn try_new(
+        config: ConsensusConfig,
+        validator_set: ConsensusValidatorSet,
+        initial_height: ConsensusHeight,
+    ) -> Result<Self, ConsensusError> {
+        if validator_set.is_empty() {
+            return Err(ConsensusError::EmptyValidatorSet);
+        }
+        Ok(Self {
+            config,
+            validator_set,
+            initial_height,
+        })
+    }
+
     /// Create a new context.
+    ///
+    /// # Panics
+    /// Panics if the validator set is empty. Use `try_new` for fallible construction.
     pub fn new(
         config: ConsensusConfig,
         validator_set: ConsensusValidatorSet,
         initial_height: ConsensusHeight,
     ) -> Self {
-        Self {
-            config,
-            validator_set,
-            initial_height,
-        }
+        Self::try_new(config, validator_set, initial_height)
+            .expect("validator set must not be empty")
     }
 
     /// Access the initial height.
