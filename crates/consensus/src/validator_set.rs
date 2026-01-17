@@ -14,7 +14,7 @@ use informalsystems_malachitebft_core_types::{
 use crate::signing::ConsensusPublicKey;
 
 /// Consensus address wrapper (Ed25519-derived validator ID).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct ConsensusAddress(pub ValidatorId);
 
 impl BorshSerialize for ConsensusAddress {

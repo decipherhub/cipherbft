@@ -161,12 +161,40 @@ impl BorshDeserialize for CutProposalPart {
 }
 
 impl CutProposalPart {
-    pub fn single(cut: Cut) -> Self {
+    /// Create a single-part proposal with all metadata.
+    ///
+    /// Since the Malachite StreamMessage no longer carries height/round/proposer,
+    /// we embed this metadata directly in the proposal part for reconstruction
+    /// on the receiving end.
+    pub fn single(
+        height: ConsensusHeight,
+        round: Round,
+        proposer: ConsensusAddress,
+        cut: Cut,
+    ) -> Self {
         Self {
+            height,
+            round,
+            proposer,
             cut,
             first: true,
             last: true,
         }
+    }
+
+    /// Accessor for height
+    pub fn height(&self) -> ConsensusHeight {
+        self.height
+    }
+
+    /// Accessor for round
+    pub fn round(&self) -> Round {
+        self.round
+    }
+
+    /// Accessor for proposer address
+    pub fn proposer(&self) -> &ConsensusAddress {
+        &self.proposer
     }
 }
 
