@@ -335,9 +335,10 @@ impl CipherBftHost {
                 let mut decided = self.decided_cuts.write().await;
                 if decided.len() > 100 {
                     let heights: Vec<_> = decided.keys().cloned().collect();
-                    let min_height = heights.iter().min().copied().unwrap_or(height);
-                    let cutoff = min_height.0.saturating_sub(100);
-                    decided.retain(|h, _| h.0 > cutoff);
+                    let max_height = heights.iter().max().copied().unwrap_or(height);
+                    // Keep heights within 100 of the maximum (i.e., recent heights)
+                    let cutoff = max_height.0.saturating_sub(100);
+                    decided.retain(|h, _| h.0 >= cutoff);
                 }
 
                 // Continue with next height and validator set
@@ -548,10 +549,35 @@ impl ractor::Actor for HostActor {
                 address,
                 value_id,
             } => {
-                debug!("Host: RestreamValue height {} round {} valid_round {} address {:?} value_id {:?}", height, round, valid_round, address, value_id);
-                // For now, we don't support restreaming proposals
-                // This would require publishing proposal parts via NetworkMsg::PublishProposalPart
-                warn!("Host: RestreamValue not yet implemented - this may cause sync issues");
+                // RestreamValue is called when a validator needs to republish a proposal
+                // (e.g., during leader election when the original proposer's message was lost).
+                // This requires access to the Network actor to re-publish proposal parts.
+                //
+                // For now, we verify the cut exists and log appropriately.
+                // Full implementation requires:
+                // 1. Access to NetworkRef to call PublishProposalPart
+                // 2. Reconstructing the CutProposalPart from the stored Cut
+                debug!(
+                    %height, %round, %valid_round, 
+                    ?address, ?value_id,
+                    "Host: RestreamValue requested"
+                );
+                
+                // Check if we have the value to restream
+                let cut = host.get_cut_by_value_id(&value_id).await;
+                if cut.is_some() {
+                    // We have the cut but can't publish it without network access
+                    // TODO: Store NetworkRef in HostActorState to enable restreaming
+                    warn!(
+                        %height, %round, ?value_id,
+                        "Host: RestreamValue - found cut but network publishing not yet implemented"
+                    );
+                } else {
+                    warn!(
+                        %height, %round, ?value_id,
+                        "Host: RestreamValue - cut not found, cannot restream"
+                    );
+                }
             }
             HostMsg::GetHistoryMinHeight { reply_to } => {
                 debug!("Host: GetHistoryMinHeight");
@@ -565,18 +591,43 @@ impl ractor::Actor for HostActor {
             }
             HostMsg::ReceivedProposalPart {
                 from,
-                part: _,
-                reply_to: _,
+                part,
+                reply_to,
             } => {
                 debug!("Host: ReceivedProposalPart from {:?}", from);
-                // For now, we don't handle proposal parts (single-part proposals only)
-                // This is a TODO: we should decode the part and check if it completes a proposal
-                // For now, we can't return a ProposedValue because we don't have a complete proposal
-                // This will cause the consensus to stall, but it's better than panicking
-                // Note: reply_to expects ProposedValue, but we don't have one
-                // We'll need to handle this properly when implementing proposal parts
-                warn!("Host: ReceivedProposalPart not fully implemented - cannot return ProposedValue");
-                // TODO: Implement proper proposal part handling to construct ProposedValue
+                // We use single-part proposals, so each part IS the complete proposal.
+                // Decode the CutProposalPart to extract the Cut and construct ProposedValue.
+                use crate::proposal::CutProposalPart;
+                use borsh::BorshDeserialize;
+                
+                // Attempt to decode the proposal part
+                match CutProposalPart::try_from_slice(&part.data) {
+                    Ok(proposal_part) => {
+                        // For single-part proposals, first == last == true
+                        if proposal_part.first && proposal_part.last {
+                            let cut = proposal_part.cut;
+                            let value = ConsensusValue(cut);
+                            let proposed = ProposedValue {
+                                height: part.height,
+                                round: part.round,
+                                valid_round: Round::Nil, // Not known from proposal part alone
+                                proposer: part.validator,
+                                value,
+                                validity: Validity::Valid,
+                            };
+                            let _ = reply_to.send(Some(proposed));
+                        } else {
+                            // Multi-part proposals not yet supported
+                            debug!("Host: Multi-part proposal received (first={}, last={}) - not yet supported", 
+                                   proposal_part.first, proposal_part.last);
+                            let _ = reply_to.send(None);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Host: Failed to decode proposal part from {:?}: {}", from, e);
+                        let _ = reply_to.send(None);
+                    }
+                }
             }
             HostMsg::GetValidatorSet { height, reply_to } => {
                 debug!("Host: GetValidatorSet height {}", height);
