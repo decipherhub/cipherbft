@@ -558,11 +558,11 @@ impl ractor::Actor for HostActor {
                 // 1. Access to NetworkRef to call PublishProposalPart
                 // 2. Reconstructing the CutProposalPart from the stored Cut
                 debug!(
-                    %height, %round, %valid_round, 
+                    %height, %round, %valid_round,
                     ?address, ?value_id,
                     "Host: RestreamValue requested"
                 );
-                
+
                 // Check if we have the value to restream
                 let cut = host.get_cut_by_value_id(&value_id).await;
                 if cut.is_some() {
@@ -596,36 +596,65 @@ impl ractor::Actor for HostActor {
             } => {
                 debug!("Host: ReceivedProposalPart from {:?}", from);
                 // We use single-part proposals, so each part IS the complete proposal.
-                // Decode the CutProposalPart to extract the Cut and construct ProposedValue.
-                use crate::proposal::CutProposalPart;
-                use borsh::BorshDeserialize;
-                
-                // Attempt to decode the proposal part
-                match CutProposalPart::try_from_slice(&part.data) {
-                    Ok(proposal_part) => {
+                //
+                // With the new Malachite API, StreamMessage contains StreamContent<CutProposalPart>
+                // where the proposal part is already deserialized. The metadata (height, round,
+                // proposer) is embedded in our CutProposalPart struct.
+                use informalsystems_malachitebft_engine::util::streaming::StreamContent;
+
+                match &part.content {
+                    StreamContent::Data(proposal_part) => {
                         // For single-part proposals, first == last == true
                         if proposal_part.first && proposal_part.last {
-                            let cut = proposal_part.cut;
+                            // Extract metadata from the proposal part itself
+                            let height = proposal_part.height();
+                            let round = proposal_part.round();
+                            let proposer = proposal_part.proposer().clone();
+                            let cut = proposal_part.cut.clone();
                             let value = ConsensusValue(cut);
                             let proposed = ProposedValue {
-                                height: part.height,
-                                round: part.round,
+                                height,
+                                round,
                                 valid_round: Round::Nil, // Not known from proposal part alone
-                                proposer: part.validator,
+                                proposer,
                                 value,
                                 validity: Validity::Valid,
                             };
-                            let _ = reply_to.send(Some(proposed));
+                            let _ = reply_to.send(proposed);
                         } else {
-                            // Multi-part proposals not yet supported
-                            debug!("Host: Multi-part proposal received (first={}, last={}) - not yet supported", 
-                                   proposal_part.first, proposal_part.last);
-                            let _ = reply_to.send(None);
+                            // Multi-part proposals: intermediate part, we need to buffer
+                            // For now, log and send a placeholder (full multi-part not yet supported)
+                            debug!(
+                                "Host: Multi-part proposal received (first={}, last={}) - buffering not yet implemented",
+                                proposal_part.first, proposal_part.last
+                            );
+                            // Send an invalid placeholder - Malachite will handle buffering at higher level
+                            let proposed = ProposedValue {
+                                height: proposal_part.height(),
+                                round: proposal_part.round(),
+                                valid_round: Round::Nil,
+                                proposer: proposal_part.proposer().clone(),
+                                value: ConsensusValue(proposal_part.cut.clone()),
+                                validity: Validity::Invalid,
+                            };
+                            let _ = reply_to.send(proposed);
                         }
                     }
-                    Err(e) => {
-                        warn!("Host: Failed to decode proposal part from {:?}: {}", from, e);
-                        let _ = reply_to.send(None);
+                    StreamContent::Fin => {
+                        // Stream end marker - this shouldn't happen for single-part proposals
+                        // but if it does, we can't construct a valid ProposedValue
+                        warn!("Host: Received Fin marker from {:?} - unexpected for single-part proposals", from);
+                        // We must still send something - create an empty invalid proposal
+                        let empty_cut = cipherbft_data_chain::Cut::new(0);
+                        let proposed = ProposedValue {
+                            height: ConsensusHeight::from(0),
+                            round: Round::new(0),
+                            valid_round: Round::Nil,
+                            proposer: crate::validator_set::ConsensusAddress::default(),
+                            value: ConsensusValue(empty_cut),
+                            validity: Validity::Invalid,
+                        };
+                        let _ = reply_to.send(proposed);
                     }
                 }
             }
