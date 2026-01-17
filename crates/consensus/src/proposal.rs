@@ -103,8 +103,13 @@ impl MalachiteProposal<CipherBftContext> for CutProposal {
 }
 
 /// Single-part proposal chunk.
+/// Contains the cut data along with proposal metadata needed to reconstruct
+/// the full proposal on the receiving end.
 #[derive(Clone, Debug)]
 pub struct CutProposalPart {
+    pub height: ConsensusHeight,
+    pub round: Round,
+    pub proposer: ConsensusAddress,
     pub cut: Cut,
     pub first: bool,
     pub last: bool,
@@ -112,6 +117,11 @@ pub struct CutProposalPart {
 
 impl BorshSerialize for CutProposalPart {
     fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        // Serialize metadata
+        self.height.serialize(writer)?;
+        (self.round.as_i64() as u32).serialize(writer)?;
+        self.proposer.serialize(writer)?;
+
         // Use bincode for Cut (contains HashMap which doesn't implement borsh)
         let cut_bytes = bincode::serialize(&self.cut)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -125,6 +135,13 @@ impl BorshSerialize for CutProposalPart {
 
 impl BorshDeserialize for CutProposalPart {
     fn deserialize_reader<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        // Deserialize metadata
+        let height = ConsensusHeight::deserialize_reader(reader)?;
+        let round_val: u32 = BorshDeserialize::deserialize_reader(reader)?;
+        let round = Round::new(round_val);
+        let proposer = ConsensusAddress::deserialize_reader(reader)?;
+
+        // Deserialize cut
         let len = u32::deserialize_reader(reader)? as usize;
         let mut cut_bytes = vec![0u8; len];
         reader.read_exact(&mut cut_bytes)?;
@@ -132,7 +149,14 @@ impl BorshDeserialize for CutProposalPart {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         let first = bool::deserialize_reader(reader)?;
         let last = bool::deserialize_reader(reader)?;
-        Ok(Self { cut, first, last })
+        Ok(Self {
+            height,
+            round,
+            proposer,
+            cut,
+            first,
+            last,
+        })
     }
 }
 
