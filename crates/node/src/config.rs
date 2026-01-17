@@ -11,8 +11,14 @@ use std::path::PathBuf;
 pub struct PeerConfig {
     /// Validator ID (20 bytes hex)
     pub validator_id: String,
+    /// BLS public key (hex encoded) for DCL layer signatures
+    pub bls_public_key_hex: String,
+    /// Ed25519 public key (hex encoded) for consensus layer signatures
+    pub ed25519_public_key_hex: String,
     /// Primary address for P2P
     pub primary_addr: SocketAddr,
+    /// Consensus address for Malachite p2p
+    pub consensus_addr: SocketAddr,
     /// Worker addresses for batch sync
     pub worker_addrs: Vec<SocketAddr>,
 }
@@ -127,13 +133,27 @@ pub fn generate_keypair() -> BlsKeyPair {
 pub fn generate_local_configs(n: usize) -> Vec<NodeConfig> {
     let mut configs: Vec<NodeConfig> = (0..n).map(|i| NodeConfig::for_local_test(i, n)).collect();
 
-    // Populate peer lists
+    // Populate peer lists with full public key information
+    // We need to derive public keys from each config's secret keys
     let peer_infos: Vec<_> = configs
         .iter()
-        .map(|c| PeerConfig {
-            validator_id: hex::encode(c.validator_id.as_bytes()),
-            primary_addr: c.primary_listen,
-            worker_addrs: c.worker_listens.clone(),
+        .map(|c| {
+            // Derive BLS public key from secret key
+            let bls_keypair = c.keypair().expect("valid BLS keypair in config");
+            let bls_pubkey_hex = hex::encode(bls_keypair.public_key.to_bytes());
+
+            // Derive Ed25519 public key from secret key
+            let ed25519_keypair = c.ed25519_keypair().expect("valid Ed25519 keypair in config");
+            let ed25519_pubkey_hex = hex::encode(ed25519_keypair.public_key.to_bytes());
+
+            PeerConfig {
+                validator_id: hex::encode(c.validator_id.as_bytes()),
+                bls_public_key_hex: bls_pubkey_hex,
+                ed25519_public_key_hex: ed25519_pubkey_hex,
+                primary_addr: c.primary_listen,
+                consensus_addr: c.consensus_listen,
+                worker_addrs: c.worker_listens.clone(),
+            }
         })
         .collect();
 

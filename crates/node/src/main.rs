@@ -279,8 +279,8 @@ fn init_tracing(log_level: &str, log_format: &str, no_color: bool) {
         _ => Level::INFO,
     };
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(level.to_string()));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level.to_string()));
 
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -298,7 +298,12 @@ fn init_tracing(log_level: &str, log_format: &str, no_color: bool) {
 // Command Implementations
 // =============================================================================
 
-fn cmd_init(home: &PathBuf, moniker: Option<String>, chain_id: &str, overwrite: bool) -> Result<()> {
+fn cmd_init(
+    home: &PathBuf,
+    moniker: Option<String>,
+    chain_id: &str,
+    overwrite: bool,
+) -> Result<()> {
     let config_dir = home.join("config");
     let data_dir = home.join("data");
 
@@ -319,7 +324,8 @@ fn cmd_init(home: &PathBuf, moniker: Option<String>, chain_id: &str, overwrite: 
     let config_path = config_dir.join("node.json");
     config.save(&config_path)?;
 
-    let node_moniker = moniker.unwrap_or_else(|| format!("node-{}", config.validator_id.0));
+    let node_moniker =
+        moniker.unwrap_or_else(|| format!("node-{}", hex::encode(&config.validator_id.0[..8])));
 
     println!("Successfully initialized node configuration");
     println!();
@@ -354,7 +360,10 @@ async fn cmd_start(config_path: PathBuf) -> Result<()> {
 }
 
 fn cmd_testnet(num_validators: usize, output: PathBuf) -> Result<()> {
-    println!("Generating testnet configuration for {} validators...", num_validators);
+    println!(
+        "Generating testnet configuration for {} validators...",
+        num_validators
+    );
     println!();
 
     std::fs::create_dir_all(&output)?;
@@ -368,10 +377,7 @@ fn cmd_testnet(num_validators: usize, output: PathBuf) -> Result<()> {
         let config_path = node_dir.join("config.json");
         config.save(&config_path)?;
 
-        println!(
-            "  Created node{} (validator {:?})",
-            i, config.validator_id
-        );
+        println!("  Created node{} (validator {:?})", i, config.validator_id);
     }
 
     println!();
@@ -506,7 +512,8 @@ fn cmd_keys(home: &PathBuf, command: KeysCommands) -> Result<()> {
                 anyhow::bail!("Key '{}' not found", name);
             }
 
-            let data: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&key_path)?)?;
+            let data: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&key_path)?)?;
             println!("Name:       {}", data["name"]);
             println!("Public Key: {}", data["public_key"]);
         }
@@ -545,7 +552,10 @@ fn cmd_keys(home: &PathBuf, command: KeysCommands) -> Result<()> {
             std::fs::create_dir_all(&keys_dir)?;
             let key_path = keys_dir.join(format!("{}.json", name));
             if key_path.exists() {
-                anyhow::bail!("Key '{}' already exists. Delete it first or choose a different name.", name);
+                anyhow::bail!(
+                    "Key '{}' already exists. Delete it first or choose a different name.",
+                    name
+                );
             }
 
             let data = std::fs::read_to_string(&file)?;
@@ -584,15 +594,16 @@ fn cmd_config(home: &PathBuf, command: ConfigCommands) -> Result<()> {
                 );
             }
 
-            let data: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&config_path)?)?;
+            let data: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&config_path)?)?;
 
             // Simple dot-notation path lookup
             let parts: Vec<&str> = key.split('.').collect();
             let mut current = &data;
             for part in &parts {
-                current = current.get(part).ok_or_else(|| {
-                    anyhow::anyhow!("Key '{}' not found in configuration", key)
-                })?;
+                current = current
+                    .get(part)
+                    .ok_or_else(|| anyhow::anyhow!("Key '{}' not found in configuration", key))?;
             }
 
             println!("{}", serde_json::to_string_pretty(current)?);
@@ -684,7 +695,10 @@ fn cmd_validate(home: &PathBuf, genesis_path: Option<PathBuf>) -> Result<()> {
 fn cmd_debug(command: DebugCommands) -> Result<()> {
     match command {
         DebugCommands::RawBytes { height } => {
-            println!("Debug: Fetching raw bytes for block at height {}...", height);
+            println!(
+                "Debug: Fetching raw bytes for block at height {}...",
+                height
+            );
             println!("Not yet implemented.");
         }
 

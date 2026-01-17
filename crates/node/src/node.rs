@@ -10,7 +10,7 @@ use cipherbft_consensus::{
     spawn_network, spawn_wal, ConsensusHeight, ConsensusSigner, ConsensusSigningProvider,
     ConsensusValidator, MalachiteEngineBuilder,
 };
-use cipherbft_crypto::{BlsKeyPair, BlsPublicKey};
+use cipherbft_crypto::{BlsKeyPair, BlsPublicKey, Ed25519PublicKey};
 use cipherbft_data_chain::{
     primary::{Primary, PrimaryConfig, PrimaryEvent},
     Cut, DclMessage,
@@ -28,6 +28,41 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+/// Validator public key information for both DCL and Consensus layers
+#[derive(Clone, Debug)]
+pub struct ValidatorInfo {
+    /// BLS public key for DCL layer (threshold signatures)
+    pub bls_public_key: BlsPublicKey,
+    /// Ed25519 public key for Consensus layer (Malachite signing)
+    pub ed25519_public_key: Ed25519PublicKey,
+    /// Voting power for consensus
+    pub voting_power: u64,
+}
+
+impl ValidatorInfo {
+    /// Create a new validator info with default voting power
+    pub fn new(bls_public_key: BlsPublicKey, ed25519_public_key: Ed25519PublicKey) -> Self {
+        Self {
+            bls_public_key,
+            ed25519_public_key,
+            voting_power: 100, // Default voting power
+        }
+    }
+
+    /// Create with custom voting power
+    pub fn with_voting_power(
+        bls_public_key: BlsPublicKey,
+        ed25519_public_key: Ed25519PublicKey,
+        voting_power: u64,
+    ) -> Self {
+        Self {
+            bls_public_key,
+            ed25519_public_key,
+            voting_power,
+        }
+    }
+}
+
 /// A running CipherBFT node
 pub struct Node {
     /// Configuration
@@ -36,8 +71,8 @@ pub struct Node {
     keypair: BlsKeyPair,
     /// Our validator ID
     validator_id: ValidatorId,
-    /// Known validators and their public keys
-    validators: HashMap<ValidatorId, BlsPublicKey>,
+    /// Known validators with both BLS and Ed25519 public keys
+    validators: HashMap<ValidatorId, ValidatorInfo>,
     /// Execution layer bridge
     execution_bridge: Option<Arc<ExecutionBridge>>,
 }
@@ -66,9 +101,29 @@ impl Node {
         })
     }
 
-    /// Add a known validator
-    pub fn add_validator(&mut self, id: ValidatorId, pubkey: BlsPublicKey) {
-        self.validators.insert(id, pubkey);
+    /// Add a known validator with both BLS and Ed25519 public keys
+    pub fn add_validator(
+        &mut self,
+        id: ValidatorId,
+        bls_pubkey: BlsPublicKey,
+        ed25519_pubkey: Ed25519PublicKey,
+    ) {
+        self.validators
+            .insert(id, ValidatorInfo::new(bls_pubkey, ed25519_pubkey));
+    }
+
+    /// Add a known validator with custom voting power
+    pub fn add_validator_with_power(
+        &mut self,
+        id: ValidatorId,
+        bls_pubkey: BlsPublicKey,
+        ed25519_pubkey: Ed25519PublicKey,
+        voting_power: u64,
+    ) {
+        self.validators.insert(
+            id,
+            ValidatorInfo::with_voting_power(bls_pubkey, ed25519_pubkey, voting_power),
+        );
     }
 
     /// Enable execution layer integration
@@ -125,10 +180,17 @@ impl Node {
         // Create channel for CutReady events to Consensus Host
         let (cut_tx, cut_rx) = mpsc::channel::<Cut>(100);
 
+        // Extract BLS public keys for DCL layer (Primary uses BLS for threshold signatures)
+        let bls_pubkeys: HashMap<ValidatorId, BlsPublicKey> = self
+            .validators
+            .iter()
+            .map(|(id, info)| (*id, info.bls_public_key.clone()))
+            .collect();
+
         // Spawn Primary task
         let (mut primary_handle, _worker_rxs) = Primary::spawn(
             primary_config,
-            self.validators.clone(),
+            bls_pubkeys,
             Box::new(TcpPrimaryNetworkAdapter {
                 network: primary_network,
             }),
@@ -143,15 +205,26 @@ impl Node {
         let signing_provider = ConsensusSigningProvider::new(consensus_signer);
 
         // Create Consensus context and validators
-        // TODO: Currently we only have BLS public keys in validators map
-        // Need to add Ed25519 public keys to validator set
-        // For now, create a minimal validator set with just ourselves
+        // Build validator set from all known validators using their Ed25519 public keys
         let chain_id = "cipherbft-test";
-        let consensus_validators = vec![ConsensusValidator::new(
+
+        // Start with ourselves
+        let mut consensus_validators = vec![ConsensusValidator::new(
             self.validator_id,
             ed25519_pubkey,
             100, // voting power
         )];
+
+        // Add all other validators from the known validator set
+        for (validator_id, info) in &self.validators {
+            if *validator_id != self.validator_id {
+                consensus_validators.push(ConsensusValidator::new(
+                    *validator_id,
+                    info.ed25519_public_key.clone(),
+                    info.voting_power,
+                ));
+            }
+        }
         let ctx = create_context(chain_id, consensus_validators, None)?;
         let our_address = ctx.validator_set().as_slice()[0].address;
         let params = default_consensus_params(&ctx, our_address);
