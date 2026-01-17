@@ -1,4 +1,30 @@
 //! TCP Network layer for Primary-to-Primary and Worker-to-Worker communication
+//!
+//! # Concurrency Model
+//!
+//! This module uses a hierarchical locking strategy:
+//!
+//! 1. **Peers Map (`Arc<RwLock<HashMap<ValidatorId, PeerConnection>>>`)**:
+//!    - Read lock: Getting/iterating peer connections
+//!    - Write lock: Adding/removing peers
+//!    - Lock duration: Minimized by cloning `Arc<Mutex<WriteHalf>>` and releasing
+//!
+//! 2. **Writer (`Arc<Mutex<tokio::io::WriteHalf<TcpStream>>>`)**:
+//!    - Protects individual TCP write operations
+//!    - Held during I/O (unavoidable for correct ordering)
+//!
+//! # Lock Ordering
+//!
+//! When both locks are needed: `peers` (read) → `writer` (exclusive)
+//!
+//! However, the design ensures the `peers` lock is always released before
+//! I/O operations, so in practice:
+//! 1. Acquire `peers` read lock
+//! 2. Clone the `Arc<Mutex<WriteHalf>>`
+//! 3. Release `peers` lock
+//! 4. Acquire `writer` lock and perform I/O
+//!
+//! This prevents the `peers` lock from being held during slow network operations.
 
 use crate::config::PeerConfig;
 use anyhow::Result;
@@ -198,35 +224,48 @@ impl TcpPrimaryNetwork {
     }
 
     /// Send a message to a specific peer
+    ///
+    /// # Concurrency
+    ///
+    /// This method minimizes lock duration by:
+    /// 1. Quickly cloning the Arc<Mutex<WriteHalf>> under a short read lock
+    /// 2. Releasing the peers lock before any I/O
+    /// 3. Serializing and writing without holding the peers lock
+    ///
+    /// This allows other operations on the peers map to proceed while I/O is in progress.
     async fn send_to(&self, validator_id: ValidatorId, msg: &NetworkMessage) -> Result<()> {
-        let peers = self.peers.read().await;
-
-        if let Some(conn) = peers.get(&validator_id) {
-            let data = bincode::serialize(msg)?;
-            let mut frame = BytesMut::with_capacity(HEADER_SIZE + data.len());
-            frame.put_u32(data.len() as u32);
-            frame.extend_from_slice(&data);
-
-            let mut writer = conn.writer.lock().await;
-            writer.write_all(&frame).await?;
-            writer.flush().await?;
-        } else {
-            // Try to connect first
-            drop(peers);
-            self.connect_to_peer(validator_id).await?;
-
+        // Get writer Arc with minimal lock duration - just clone the Arc
+        let writer = {
             let peers = self.peers.read().await;
-            if let Some(conn) = peers.get(&validator_id) {
-                let data = bincode::serialize(msg)?;
-                let mut frame = BytesMut::with_capacity(HEADER_SIZE + data.len());
-                frame.put_u32(data.len() as u32);
-                frame.extend_from_slice(&data);
+            peers
+                .get(&validator_id)
+                .map(|conn| Arc::clone(&conn.writer))
+        }; // Read lock released here
 
-                let mut writer = conn.writer.lock().await;
-                writer.write_all(&frame).await?;
-                writer.flush().await?;
+        // If peer not found, try to connect
+        let writer = match writer {
+            Some(w) => w,
+            None => {
+                self.connect_to_peer(validator_id).await?;
+                // Get the writer after connecting
+                let peers = self.peers.read().await;
+                peers
+                    .get(&validator_id)
+                    .map(|conn| Arc::clone(&conn.writer))
+                    .ok_or_else(|| anyhow::anyhow!("Failed to establish connection"))?
             }
-        }
+        }; // Read lock released here
+
+        // Serialize message AFTER releasing peers lock
+        let data = bincode::serialize(msg)?;
+        let mut frame = BytesMut::with_capacity(HEADER_SIZE + data.len());
+        frame.put_u32(data.len() as u32);
+        frame.extend_from_slice(&data);
+
+        // Now perform I/O with only the writer lock held (not peers lock)
+        let mut guard = writer.lock().await;
+        guard.write_all(&frame).await?;
+        guard.flush().await?;
 
         Ok(())
     }
@@ -323,36 +362,45 @@ impl TcpWorkerNetwork {
         Ok(())
     }
 
+    /// Send a message to a peer worker
+    ///
+    /// # Concurrency
+    ///
+    /// Uses the same "clone Arc and release" pattern as TcpPrimaryNetwork::send_to
+    /// to minimize lock duration during I/O operations.
     async fn send_to(&self, validator_id: ValidatorId, msg: &WorkerMessage) -> Result<()> {
-        let peers = self.peers.read().await;
-
-        if let Some(conn) = peers.get(&validator_id) {
-            let net_msg = NetworkMessage::Worker(msg.clone());
-            let data = bincode::serialize(&net_msg)?;
-            let mut frame = BytesMut::with_capacity(HEADER_SIZE + data.len());
-            frame.put_u32(data.len() as u32);
-            frame.extend_from_slice(&data);
-
-            let mut writer = conn.writer.lock().await;
-            writer.write_all(&frame).await?;
-            writer.flush().await?;
-        } else {
-            drop(peers);
-            self.connect_to_peer(validator_id).await?;
-
+        // Get writer Arc with minimal lock duration
+        let writer = {
             let peers = self.peers.read().await;
-            if let Some(conn) = peers.get(&validator_id) {
-                let net_msg = NetworkMessage::Worker(msg.clone());
-                let data = bincode::serialize(&net_msg)?;
-                let mut frame = BytesMut::with_capacity(HEADER_SIZE + data.len());
-                frame.put_u32(data.len() as u32);
-                frame.extend_from_slice(&data);
+            peers
+                .get(&validator_id)
+                .map(|conn| Arc::clone(&conn.writer))
+        }; // Read lock released here
 
-                let mut writer = conn.writer.lock().await;
-                writer.write_all(&frame).await?;
-                writer.flush().await?;
+        // If peer not found, try to connect
+        let writer = match writer {
+            Some(w) => w,
+            None => {
+                self.connect_to_peer(validator_id).await?;
+                let peers = self.peers.read().await;
+                peers
+                    .get(&validator_id)
+                    .map(|conn| Arc::clone(&conn.writer))
+                    .ok_or_else(|| anyhow::anyhow!("Failed to establish connection"))?
             }
-        }
+        }; // Read lock released here
+
+        // Serialize message AFTER releasing peers lock
+        let net_msg = NetworkMessage::Worker(msg.clone());
+        let data = bincode::serialize(&net_msg)?;
+        let mut frame = BytesMut::with_capacity(HEADER_SIZE + data.len());
+        frame.put_u32(data.len() as u32);
+        frame.extend_from_slice(&data);
+
+        // Perform I/O with only the writer lock held
+        let mut guard = writer.lock().await;
+        guard.write_all(&frame).await?;
+        guard.flush().await?;
 
         Ok(())
     }

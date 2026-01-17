@@ -192,23 +192,56 @@ impl<P: Provider> CipherBftDatabase<P> {
     }
 
     /// Commit pending changes to the underlying provider.
+    ///
+    /// # Concurrency
+    ///
+    /// This method uses a "snapshot and release" pattern to minimize lock duration:
+    /// 1. Take ownership of pending data (clears the maps atomically)
+    /// 2. Release locks immediately
+    /// 3. Write to provider without holding any locks
+    /// 4. Invalidate cache entries that were updated (prevents stale reads)
+    ///
+    /// This allows reads to continue while I/O is in progress.
     pub fn commit(&self) -> Result<()> {
-        // Commit accounts
-        let accounts = self.pending_accounts.write();
-        for (address, account) in accounts.iter() {
-            self.provider.set_account(*address, account.clone())?;
+        // Take ownership of pending data and clear the maps atomically.
+        // Using std::mem::take() gives us the data and leaves empty maps behind.
+        // This minimizes lock duration - we only hold locks briefly for the swap.
+        let accounts = std::mem::take(&mut *self.pending_accounts.write());
+        let code = std::mem::take(&mut *self.pending_code.write());
+        let storage = std::mem::take(&mut *self.pending_storage.write());
+
+        // Collect keys for cache invalidation
+        let account_keys: Vec<Address> = accounts.keys().copied().collect();
+        let code_keys: Vec<B256> = code.keys().copied().collect();
+
+        // Now write to provider WITHOUT holding any locks.
+        // This allows concurrent reads to continue during I/O.
+        for (address, account) in accounts {
+            self.provider.set_account(address, account)?;
         }
 
-        // Commit code
-        let code = self.pending_code.write();
-        for (code_hash, bytecode) in code.iter() {
-            self.provider.set_code(*code_hash, bytecode.clone())?;
+        for (code_hash, bytecode) in code {
+            self.provider.set_code(code_hash, bytecode)?;
         }
 
-        // Commit storage
-        let storage = self.pending_storage.write();
-        for ((address, slot), value) in storage.iter() {
-            self.provider.set_storage(*address, *slot, *value)?;
+        for ((address, slot), value) in storage {
+            self.provider.set_storage(address, slot, value)?;
+        }
+
+        // Invalidate cache entries that were committed.
+        // This ensures subsequent reads get the updated values from the provider.
+        // Without this, the cache would return stale data.
+        {
+            let mut cache = self.cache_accounts.write();
+            for address in account_keys {
+                cache.pop(&address);
+            }
+        }
+        {
+            let mut cache = self.cache_code.write();
+            for code_hash in code_keys {
+                cache.pop(&code_hash);
+            }
         }
 
         Ok(())
@@ -222,35 +255,47 @@ impl<P: Provider> CipherBftDatabase<P> {
     }
 
     /// Get account, checking pending changes first, then cache, then provider.
+    ///
+    /// # Lock Ordering
+    ///
+    /// This method follows the principle of acquiring locks in a consistent order
+    /// and releasing them as soon as possible. For cache operations, we use a
+    /// single lock acquisition to both check and update the cache.
     fn get_account_internal(&self, address: Address) -> Result<Option<Account>> {
-        // Check pending changes first
+        // Check pending changes first (read lock, released immediately)
         if let Some(account) = self.pending_accounts.read().get(&address) {
             return Ok(Some(account.clone()));
         }
 
-        // Check cache
-        if let Some(cached) = self.cache_accounts.write().get(&address) {
+        // Check cache and update in one lock acquisition
+        // Using a single write lock avoids potential TOCTOU issues and is more efficient
+        let mut cache = self.cache_accounts.write();
+        if let Some(cached) = cache.get(&address) {
             return Ok(cached.clone());
         }
 
-        // Load from provider
+        // Load from provider (lock is held but provider access should be fast for in-memory)
+        // For disk-backed providers, consider releasing the lock before provider access
         let account = self.provider.get_account(address)?;
 
-        // Update cache
-        self.cache_accounts.write().put(address, account.clone());
+        // Update cache (still holding the lock)
+        cache.put(address, account.clone());
 
         Ok(account)
     }
 
     /// Get code, checking pending changes first, then cache, then provider.
+    ///
+    /// Uses single lock acquisition for cache check and update.
     fn get_code_internal(&self, code_hash: B256) -> Result<Option<Bytecode>> {
-        // Check pending changes first
+        // Check pending changes first (read lock, released immediately)
         if let Some(bytecode) = self.pending_code.read().get(&code_hash) {
             return Ok(Some(bytecode.clone()));
         }
 
-        // Check cache
-        if let Some(cached) = self.cache_code.write().get(&code_hash) {
+        // Check cache and update in one lock acquisition
+        let mut cache = self.cache_code.write();
+        if let Some(cached) = cache.get(&code_hash) {
             return Ok(cached.clone());
         }
 
@@ -258,7 +303,7 @@ impl<P: Provider> CipherBftDatabase<P> {
         let bytecode = self.provider.get_code(code_hash)?;
 
         // Update cache
-        self.cache_code.write().put(code_hash, bytecode.clone());
+        cache.put(code_hash, bytecode.clone());
 
         Ok(bytecode)
     }
@@ -345,8 +390,20 @@ impl<P: Provider> revm::Database for CipherBftDatabase<P> {
 }
 
 /// Implement revm's DatabaseCommit trait for writing state changes.
+///
+/// # Concurrency
+///
+/// This implementation acquires all locks once at the start, processes all changes,
+/// then releases all locks. This is more efficient than acquiring/releasing locks
+/// repeatedly inside the loop, and ensures atomic visibility of all changes.
 impl<P: Provider> revm::DatabaseCommit for CipherBftDatabase<P> {
     fn commit(&mut self, changes: RevmHashMap<Address, RevmAccount>) {
+        // Acquire all locks once at the start for batch processing.
+        // This is more efficient than re-acquiring locks per account.
+        let mut pending_accounts = self.pending_accounts.write();
+        let mut pending_code = self.pending_code.write();
+        let mut pending_storage = self.pending_storage.write();
+
         for (address, account) in changes {
             // Update account info
             let acc = Account {
@@ -355,22 +412,19 @@ impl<P: Provider> revm::DatabaseCommit for CipherBftDatabase<P> {
                 code_hash: account.info.code_hash,
                 storage_root: B256::ZERO, // Will be computed during state root computation
             };
-            self.pending_accounts.write().insert(address, acc);
+            pending_accounts.insert(address, acc);
 
             // Store code if present
             if let Some(code) = account.info.code {
-                self.pending_code
-                    .write()
-                    .insert(account.info.code_hash, code);
+                pending_code.insert(account.info.code_hash, code);
             }
 
             // Update storage
             for (slot, value) in account.storage {
-                self.pending_storage
-                    .write()
-                    .insert((address, slot), value.present_value);
+                pending_storage.insert((address, slot), value.present_value);
             }
         }
+        // All locks released here when guards go out of scope
     }
 }
 
