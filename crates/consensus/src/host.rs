@@ -6,23 +6,23 @@
 use crate::context::CipherBftContext;
 use crate::types::{ConsensusHeight, ConsensusValue};
 use anyhow::Result;
+use bytes::Bytes;
 use cipherbft_data_chain::Cut;
 use informalsystems_malachitebft_app_channel::AppMsg;
+use informalsystems_malachitebft_core_types::{Round, Validity};
 use informalsystems_malachitebft_engine::host::{HostMsg, HostRef, Next, ProposedValue};
 use informalsystems_malachitebft_sync::RawDecidedValue;
-use informalsystems_malachitebft_core_types::{Round, Validity};
 use ractor::Actor;
 use ractor::ActorRef as RactorActorRef;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info, warn};
-use bytes::Bytes;
 
 /// Host actor that bridges between Malachite consensus and DCL.
 pub struct CipherBftHost {
-    /// Our validator ID
-    our_id: cipherbft_types::ValidatorId,
+    /// Our validator ID (stored for future use, e.g., leader election)
+    _our_id: cipherbft_types::ValidatorId,
     /// Consensus context (contains validator set, config, etc.)
     ctx: CipherBftContext,
     /// Pending cuts by height (waiting for consensus to request)
@@ -32,7 +32,14 @@ pub struct CipherBftHost {
     /// Decided cuts by height (for history queries)
     decided_cuts: Arc<RwLock<HashMap<ConsensusHeight, Cut>>>,
     /// Decided certificates by height (for GetDecidedValue)
-    decided_certificates: Arc<RwLock<HashMap<ConsensusHeight, informalsystems_malachitebft_core_types::CommitCertificate<CipherBftContext>>>>,
+    decided_certificates: Arc<
+        RwLock<
+            HashMap<
+                ConsensusHeight,
+                informalsystems_malachitebft_core_types::CommitCertificate<CipherBftContext>,
+            >,
+        >,
+    >,
     /// Channel to send Decided events (for logging/monitoring)
     decided_tx: Option<mpsc::Sender<(ConsensusHeight, Cut)>>,
 }
@@ -45,7 +52,7 @@ impl CipherBftHost {
         decided_tx: Option<mpsc::Sender<(ConsensusHeight, Cut)>>,
     ) -> Self {
         Self {
-            our_id,
+            _our_id: our_id,
             ctx,
             pending_cuts: Arc::new(RwLock::new(HashMap::new())),
             cuts_by_value_id: Arc::new(RwLock::new(HashMap::new())),
@@ -89,7 +96,7 @@ impl CipherBftHost {
             let value_id = value.id();
             let mut by_value_id = self.cuts_by_value_id.write().await;
             by_value_id.insert(value_id, cut.clone());
-            
+
             // Clean up old cuts_by_value_id (keep only last 100)
             if by_value_id.len() > 100 {
                 // Note: This is a simple cleanup - in practice we might want to track by height
@@ -98,62 +105,81 @@ impl CipherBftHost {
                     by_value_id.remove(key);
                 }
             }
-            
+
             Some(ConsensusValue(cut))
         } else {
             None
         }
     }
-    
+
     /// Get a cut by its value_id (for retrieval from certificates).
-    pub async fn get_cut_by_value_id(&self, value_id: &crate::types::ConsensusValueId) -> Option<Cut> {
+    pub async fn get_cut_by_value_id(
+        &self,
+        value_id: &crate::types::ConsensusValueId,
+    ) -> Option<Cut> {
         let by_value_id = self.cuts_by_value_id.read().await;
         by_value_id.get(value_id).cloned()
     }
-    
+
     /// Handle HostMsg::Decided - store certificate and cut
-    pub async fn handle_decided(&self, height: ConsensusHeight, cut: Cut, certificate: informalsystems_malachitebft_core_types::CommitCertificate<CipherBftContext>) {
+    pub async fn handle_decided(
+        &self,
+        height: ConsensusHeight,
+        cut: Cut,
+        certificate: informalsystems_malachitebft_core_types::CommitCertificate<CipherBftContext>,
+    ) {
         // Store in decided cuts and certificate
         {
             let mut decided = self.decided_cuts.write().await;
             decided.insert(height, cut.clone());
-            
+
             let mut certificates = self.decided_certificates.write().await;
             certificates.insert(height, certificate);
         }
-        
+
         // Send to channel if exists
         if let Some(ref tx) = self.decided_tx {
             let _ = tx.send((height, cut)).await;
         }
     }
-    
+
     /// Get validator set from context
     pub fn validator_set(&self) -> crate::validator_set::ConsensusValidatorSet {
         self.ctx.validator_set().clone()
     }
 
     /// Handle AppMsg from Malachite consensus engine.
-    /// 
+    ///
     /// NOTE: This method signature and return type need to match the actual
     /// Host trait from Malachite. The current implementation is based on
     /// compiler error messages and may need adjustment.
-    pub async fn handle_app_msg(&mut self, msg: AppMsg<CipherBftContext>) -> Next<CipherBftContext> {
+    pub async fn handle_app_msg(
+        &mut self,
+        msg: AppMsg<CipherBftContext>,
+    ) -> Next<CipherBftContext> {
         match msg {
             AppMsg::ConsensusReady { reply } => {
                 info!("Host: Consensus engine is ready");
                 // Reply with the initial height and validator set from context
                 let initial_height = self.ctx.initial_height();
                 let validator_set = self.ctx.validator_set().clone();
-                reply.send((initial_height, validator_set.clone()));
+                let _ = reply.send((initial_height, validator_set.clone()));
                 Next::Start(initial_height, validator_set)
             }
 
-            AppMsg::GetValue { height, reply, round, .. } => {
-                debug!("Host: GetValue request for height {} round {}", height, round);
+            AppMsg::GetValue {
+                height,
+                reply,
+                round,
+                ..
+            } => {
+                debug!(
+                    "Host: GetValue request for height {} round {}",
+                    height, round
+                );
 
                 let value = self.get_value(height).await;
-                
+
                 // Reply with the value (or None if not available)
                 if let Some(value) = value {
                     debug!("Host: Found Cut for height {}", height);
@@ -161,13 +187,13 @@ impl CipherBftHost {
                     // LocallyProposedValue::new expects 3 arguments: height, round, value
                     let proposed = LocallyProposedValue::new(height, round, value);
                     // reply.send() does not return a Future, so no .await
-                    reply.send(proposed);
+                    let _ = reply.send(proposed);
                 } else {
                     warn!("Host: No Cut available for height {}", height);
                     // TODO: Check how to send None for GetValue
                     warn!("Host: Cannot send None to GetValue reply (type mismatch)");
                 }
-                
+
                 // Continue with current height and validator set
                 let current_height = height; // Use the requested height
                 let validator_set = self.ctx.validator_set().clone();
@@ -184,10 +210,10 @@ impl CipherBftHost {
                 // ValueId<CipherBftContext> is the same as ConsensusValueId
                 let height = certificate.height;
                 let value_id = &certificate.value_id; // This is ConsensusValueId
-                
+
                 // Try to find cut by value_id first (most reliable)
                 let mut cut = self.get_cut_by_value_id(value_id).await;
-                
+
                 // If not found by value_id, try by height (fallback)
                 if cut.is_none() {
                     let decided = self.decided_cuts.read().await;
@@ -195,7 +221,7 @@ impl CipherBftHost {
                         cut = Some(c.clone());
                     }
                 }
-                
+
                 // If still not found, try pending_cuts as last resort
                 if cut.is_none() {
                     let pending = self.pending_cuts.read().await;
@@ -203,7 +229,7 @@ impl CipherBftHost {
                         cut = Some(c.clone());
                     }
                 }
-                
+
                 // If we still couldn't find it, this is an error condition
                 // In practice, the Cut should have been stored when GetValue was called
                 let cut = match cut {
@@ -217,7 +243,7 @@ impl CipherBftHost {
                         return Next::Start(height, self.ctx.validator_set().clone());
                     }
                 };
-                
+
                 let height = ConsensusHeight::from(cut.height);
                 info!(
                     "Host: ✅ CONSENSUS DECIDED at height {} with {} cars",
@@ -229,7 +255,7 @@ impl CipherBftHost {
                 {
                     let mut decided = self.decided_cuts.write().await;
                     decided.insert(height, cut.clone());
-                    
+
                     let mut certificates = self.decided_certificates.write().await;
                     certificates.insert(height, certificate.clone());
                 }
@@ -251,15 +277,15 @@ impl CipherBftHost {
                 // Continue with next height and validator set
                 let next_height = height.next();
                 let validator_set = self.ctx.validator_set().clone(); // TODO: Get next validator set if it changes
-                reply.send(Next::Start(next_height, validator_set.clone()));
+                let _ = reply.send(Next::Start(next_height, validator_set.clone()));
                 Next::Start(next_height, validator_set)
             }
 
             AppMsg::ReceivedProposalPart { reply, .. } => {
                 debug!("Host: Received proposal part");
-                reply.send(None); // Reply with None if not complete
-                // Continue with current height and validator set
-                // Note: ReceivedProposalPart doesn't have height field, use context initial height
+                let _ = reply.send(None); // Reply with None if not complete
+                                          // Continue with current height and validator set
+                                          // Note: ReceivedProposalPart doesn't have height field, use context initial height
                 let current_height = self.ctx.initial_height();
                 let validator_set = self.ctx.validator_set().clone();
                 Next::Start(current_height, validator_set)
@@ -267,8 +293,8 @@ impl CipherBftHost {
 
             AppMsg::ProcessSyncedValue { height, reply, .. } => {
                 debug!("Host: ProcessSyncedValue for height {}", height);
-                reply.send(None); // Reply with None if value cannot be decoded
-                // Continue with current height and validator set
+                let _ = reply.send(None); // Reply with None if value cannot be decoded
+                                          // Continue with current height and validator set
                 let current_height = height;
                 let validator_set = self.ctx.validator_set().clone();
                 Next::Start(current_height, validator_set)
@@ -278,27 +304,30 @@ impl CipherBftHost {
                 debug!("Host: GetDecidedValue for height {}", height);
                 let decided = self.decided_cuts.read().await;
                 let certificates = self.decided_certificates.read().await;
-                
+
                 match (decided.get(&height), certificates.get(&height)) {
                     (Some(cut), Some(certificate)) => {
-                        debug!("Host: Found decided Cut and certificate for height {}", height);
-                        use informalsystems_malachitebft_app::types::sync::RawDecidedValue;
+                        debug!(
+                            "Host: Found decided Cut and certificate for height {}",
+                            height
+                        );
                         use bytes::Bytes;
+                        use informalsystems_malachitebft_app::types::sync::RawDecidedValue;
                         // RawDecidedValue::new expects 2 arguments: value_bytes and certificate
                         let value_bytes = Bytes::from(bincode::serialize(&cut).unwrap()); // Serialize Cut to Bytes
                         let raw = RawDecidedValue::new(value_bytes, certificate.clone());
-                        reply.send(Some(raw));
+                        let _ = reply.send(Some(raw));
                     }
                     (Some(_cut), None) => {
                         // Cut exists but no certificate - this should not happen in normal operation
                         warn!("Host: Found decided Cut for height {} but no certificate - this should not happen if Decided was processed correctly", height);
                         // TODO: Reconstruct certificate from cut if possible
                         // For now, we'll return None - this is an error condition
-                        reply.send(None);
+                        let _ = reply.send(None);
                     }
                     _ => {
                         warn!("Host: No decided Cut found for height {}", height);
-                        reply.send(None);
+                        let _ = reply.send(None);
                     }
                 }
                 // Continue with current height and validator set
@@ -316,7 +345,7 @@ impl CipherBftHost {
                     .copied()
                     .unwrap_or(ConsensusHeight::from(1));
                 debug!("Host: History min height is {}", min_height);
-                reply.send(min_height);
+                let _ = reply.send(min_height);
                 // Continue with current height and validator set
                 // Note: GetHistoryMinHeight doesn't have height field, use context initial height
                 let current_height = self.ctx.initial_height();
@@ -371,13 +400,13 @@ impl ractor::Actor for HostActor {
         state: &mut Self::State,
     ) -> Result<(), ractor::ActorProcessingErr> {
         use informalsystems_malachitebft_engine::host::HostMsg;
-        
+
         // Convert HostMsg to AppMsg and handle it
         // Note: HostMsg and AppMsg have similar structure but different field names
         // For now, we'll handle HostMsg directly and use CipherBftHost internally
-        
+
         let host = state.host.write().await;
-        
+
         // Handle HostMsg
         match msg {
             HostMsg::ConsensusReady { reply_to } => {
@@ -386,12 +415,26 @@ impl ractor::Actor for HostActor {
                 let validator_set = host.validator_set();
                 let _ = reply_to.send((initial_height, validator_set));
             }
-            HostMsg::StartedRound { height, round, proposer, role, reply_to } => {
-                debug!("Host: StartedRound height {} round {} proposer {:?} role {:?}", height, round, proposer, role);
+            HostMsg::StartedRound {
+                height,
+                round,
+                proposer,
+                role,
+                reply_to,
+            } => {
+                debug!(
+                    "Host: StartedRound height {} round {} proposer {:?} role {:?}",
+                    height, round, proposer, role
+                );
                 // For recovery, we don't have undecided values to return
                 let _ = reply_to.send(vec![]);
             }
-            HostMsg::GetValue { height, round, reply_to, .. } => {
+            HostMsg::GetValue {
+                height,
+                round,
+                reply_to,
+                ..
+            } => {
                 debug!("Host: GetValue height {} round {}", height, round);
                 let value = host.get_value(height).await;
                 if let Some(value) = value {
@@ -404,17 +447,40 @@ impl ractor::Actor for HostActor {
                     // This will cause the consensus to stall, but it's better than panicking.
                 }
             }
-            HostMsg::ExtendVote { height, round, value_id, reply_to } => {
-                debug!("Host: ExtendVote height {} round {} value_id {:?}", height, round, value_id);
+            HostMsg::ExtendVote {
+                height,
+                round,
+                value_id,
+                reply_to,
+            } => {
+                debug!(
+                    "Host: ExtendVote height {} round {} value_id {:?}",
+                    height, round, value_id
+                );
                 // No vote extensions for now
                 let _ = reply_to.send(None);
             }
-            HostMsg::VerifyVoteExtension { height, round, value_id, extension: _, reply_to } => {
-                debug!("Host: VerifyVoteExtension height {} round {} value_id {:?}", height, round, value_id);
+            HostMsg::VerifyVoteExtension {
+                height,
+                round,
+                value_id,
+                extension: _,
+                reply_to,
+            } => {
+                debug!(
+                    "Host: VerifyVoteExtension height {} round {} value_id {:?}",
+                    height, round, value_id
+                );
                 // Accept all vote extensions for now
                 let _ = reply_to.send(Ok(()));
             }
-            HostMsg::RestreamValue { height, round, valid_round, address, value_id } => {
+            HostMsg::RestreamValue {
+                height,
+                round,
+                valid_round,
+                address,
+                value_id,
+            } => {
                 debug!("Host: RestreamValue height {} round {} valid_round {} address {:?} value_id {:?}", height, round, valid_round, address, value_id);
                 // For now, we don't support restreaming proposals
                 // This would require publishing proposal parts via NetworkMsg::PublishProposalPart
@@ -430,7 +496,11 @@ impl ractor::Actor for HostActor {
                     .unwrap_or(ConsensusHeight::from(1));
                 let _ = reply_to.send(min_height);
             }
-            HostMsg::ReceivedProposalPart { from, part: _, reply_to: _ } => {
+            HostMsg::ReceivedProposalPart {
+                from,
+                part: _,
+                reply_to: _,
+            } => {
                 debug!("Host: ReceivedProposalPart from {:?}", from);
                 // For now, we don't handle proposal parts (single-part proposals only)
                 // This is a TODO: we should decode the part and check if it completes a proposal
@@ -447,19 +517,27 @@ impl ractor::Actor for HostActor {
                 // TODO: Return different validator sets for different heights if validator set changes
                 let _ = reply_to.send(Some(validator_set));
             }
-            HostMsg::Decided { certificate, extensions: _, reply_to } => {
+            HostMsg::Decided {
+                certificate,
+                extensions: _,
+                reply_to,
+            } => {
                 // Extract cut from certificate using value_id
                 let height = certificate.height;
                 let value_id = &certificate.value_id;
-                
+
                 let cut = host.get_cut_by_value_id(value_id).await;
-                
+
                 if let Some(cut) = cut {
                     let height = ConsensusHeight::from(cut.height);
-                    info!("Host: ✅ CONSENSUS DECIDED at height {} with {} cars", height, cut.cars.len());
-                    
+                    info!(
+                        "Host: ✅ CONSENSUS DECIDED at height {} with {} cars",
+                        height,
+                        cut.cars.len()
+                    );
+
                     host.handle_decided(height, cut.clone(), certificate).await;
-                    
+
                     let next_height = height.next();
                     let validator_set = host.validator_set();
                     let _ = reply_to.send(Next::Start(next_height, validator_set));
@@ -480,13 +558,25 @@ impl ractor::Actor for HostActor {
                         let _ = reply_to.send(Some(raw));
                     }
                     _ => {
-                        warn!("Host: No decided Cut or Certificate found for height {}", height);
+                        warn!(
+                            "Host: No decided Cut or Certificate found for height {}",
+                            height
+                        );
                         let _ = reply_to.send(None);
                     }
                 }
             }
-            HostMsg::ProcessSyncedValue { height, round, proposer, value_bytes, reply_to } => {
-                debug!("Host: ProcessSyncedValue height {} round {} proposer {:?}", height, round, proposer);
+            HostMsg::ProcessSyncedValue {
+                height,
+                round,
+                proposer,
+                value_bytes,
+                reply_to,
+            } => {
+                debug!(
+                    "Host: ProcessSyncedValue height {} round {} proposer {:?}",
+                    height, round, proposer
+                );
                 // Try to decode the value from bytes
                 match bincode::deserialize::<Cut>(&value_bytes) {
                     Ok(cut) => {
@@ -534,7 +624,7 @@ impl ractor::Actor for HostActor {
                 }
             }
         }
-        
+
         Ok(())
     }
 }
@@ -549,9 +639,12 @@ pub async fn spawn_host(
     mut cut_rx: mpsc::Receiver<Cut>,
     decided_tx: Option<mpsc::Sender<(ConsensusHeight, Cut)>>,
 ) -> Result<HostRef<CipherBftContext>> {
-
     // Create host instance
-    let host_state = Arc::new(RwLock::new(CipherBftHost::new(our_id, ctx.clone(), decided_tx)));
+    let host_state = Arc::new(RwLock::new(CipherBftHost::new(
+        our_id,
+        ctx.clone(),
+        decided_tx,
+    )));
 
     // Spawn background task to process DCL cuts
     let host_for_cuts = Arc::clone(&host_state);
@@ -565,10 +658,8 @@ pub async fn spawn_host(
     });
 
     // Spawn HostActor using ractor
-    let actor_state = HostActorState {
-        host: host_state,
-    };
-    
+    let actor_state = HostActorState { host: host_state };
+
     // Spawn the actor - following Malachite's Connector::spawn pattern
     // Actor::spawn returns (ActorRef<Self::Msg>, JoinHandle)
     // Since Self::Msg is HostMsg<CipherBftContext>, actor_ref is ActorRef<HostMsg<CipherBftContext>>
@@ -594,5 +685,9 @@ pub async fn spawn_host(
     // If there's still a type mismatch, it's likely a ractor version mismatch.
     // For now, we'll use unsafe transmute as a last resort (should be safe since they're the same type).
     use std::mem;
-    Ok(unsafe { mem::transmute::<RactorActorRef<HostMsg<CipherBftContext>>, HostRef<CipherBftContext>>(actor_ref) })
+    Ok(unsafe {
+        mem::transmute::<RactorActorRef<HostMsg<CipherBftContext>>, HostRef<CipherBftContext>>(
+            actor_ref,
+        )
+    })
 }

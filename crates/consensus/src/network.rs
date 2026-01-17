@@ -27,21 +27,16 @@ pub async fn spawn_network(
 ) -> Result<NetworkRef<CipherBftContext>> {
     info!("Spawning consensus network actor");
 
-    // Create codec for message serialization
-    let codec = CipherBftCodec::default();
+    // Create codec for message serialization (unit struct, no Default needed)
+    let codec = CipherBftCodec;
 
     // Create tracing span for this network actor
     let span = info_span!("consensus-network");
 
     // Spawn network actor using Malachite's Network::spawn
-    let network_ref = Network::<CipherBftContext, CipherBftCodec>::spawn(
-        keypair,
-        config,
-        metrics,
-        codec,
-        span,
-    )
-    .await?;
+    let network_ref =
+        Network::<CipherBftContext, CipherBftCodec>::spawn(keypair, config, metrics, codec, span)
+            .await?;
 
     info!("Consensus network actor spawned successfully");
     Ok(network_ref)

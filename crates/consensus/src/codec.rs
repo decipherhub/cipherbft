@@ -16,7 +16,9 @@ use informalsystems_malachitebft_app::types::ProposedValue;
 use informalsystems_malachitebft_app::types::SignedConsensusMsg;
 use informalsystems_malachitebft_codec::Codec;
 use informalsystems_malachitebft_core_consensus::LivenessMsg;
-use informalsystems_malachitebft_sync::{Request as SyncRequest, Response as SyncResponse, Status as SyncStatus};
+use informalsystems_malachitebft_sync::{
+    Request as SyncRequest, Response as SyncResponse, Status as SyncStatus,
+};
 
 /// Error type for codec operations.
 #[derive(Debug)]

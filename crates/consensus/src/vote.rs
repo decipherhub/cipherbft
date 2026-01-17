@@ -60,12 +60,22 @@ impl BorshDeserialize for ConsensusVote {
         let value = match u8::deserialize_reader(reader)? {
             0 => NilOrVal::Nil,
             1 => NilOrVal::Val(ConsensusValueId::deserialize_reader(reader)?),
-            _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid NilOrVal tag")),
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "invalid NilOrVal tag",
+                ))
+            }
         };
         let vote_type = match u8::deserialize_reader(reader)? {
             0 => VoteType::Prevote,
             1 => VoteType::Precommit,
-            _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid VoteType tag")),
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "invalid VoteType tag",
+                ))
+            }
         };
         let validator = ConsensusAddress::deserialize_reader(reader)?;
         let extension = match u8::deserialize_reader(reader)? {
@@ -75,7 +85,12 @@ impl BorshDeserialize for ConsensusVote {
                 let signature = ConsensusSignature::deserialize_reader(reader)?;
                 Some(SignedExtension { message, signature })
             }
-            _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid extension tag")),
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "invalid extension tag",
+                ))
+            }
         };
         Ok(Self {
             height,

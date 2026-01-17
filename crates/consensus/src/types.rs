@@ -7,7 +7,19 @@ use cipherbft_data_chain::Cut;
 use cipherbft_types::Hash;
 
 /// Consensus height wrapper to keep Malachite types explicit.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct ConsensusHeight(pub u64);
 
 impl BorshSerialize for ConsensusHeight {
@@ -48,7 +60,18 @@ impl Display for ConsensusHeight {
 }
 
 /// Consensus value ID (hash of a `Cut`).
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct ConsensusValueId(pub Hash);
 
 impl BorshSerialize for ConsensusValueId {

@@ -6,14 +6,9 @@ use crate::network::TcpPrimaryNetwork;
 use crate::util::validator_id_from_bls;
 use anyhow::Result;
 use cipherbft_consensus::{
-    create_context, default_consensus_params, default_engine_config_single_part,
-    spawn_host, spawn_network, spawn_wal, ConsensusHeight, ConsensusSigner,
-    ConsensusSigningProvider, ConsensusValidator, MalachiteEngineBuilder,
-};
-use informalsystems_malachitebft_metrics::SharedRegistry;
-use informalsystems_malachitebft_network::{
-    Config as NetworkConfig, DiscoveryConfig, GossipSubConfig, Keypair, Multiaddr,
-    PubSubProtocol, TransportProtocol,
+    create_context, default_consensus_params, default_engine_config_single_part, spawn_host,
+    spawn_network, spawn_wal, ConsensusHeight, ConsensusSigner, ConsensusSigningProvider,
+    ConsensusValidator, MalachiteEngineBuilder,
 };
 use cipherbft_crypto::{BlsKeyPair, BlsPublicKey};
 use cipherbft_data_chain::{
@@ -22,6 +17,11 @@ use cipherbft_data_chain::{
 };
 use cipherbft_execution::ChainConfig;
 use cipherbft_types::ValidatorId;
+use informalsystems_malachitebft_metrics::SharedRegistry;
+use informalsystems_malachitebft_network::{
+    Config as NetworkConfig, DiscoveryConfig, GossipSubConfig, Keypair, Multiaddr, PubSubProtocol,
+    TransportProtocol,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -147,13 +147,11 @@ impl Node {
         // Need to add Ed25519 public keys to validator set
         // For now, create a minimal validator set with just ourselves
         let chain_id = "cipherbft-test";
-        let consensus_validators = vec![
-            ConsensusValidator::new(
-                self.validator_id,
-                ed25519_pubkey,
-                100, // voting power
-            ),
-        ];
+        let consensus_validators = vec![ConsensusValidator::new(
+            self.validator_id,
+            ed25519_pubkey,
+            100, // voting power
+        )];
         let ctx = create_context(chain_id, consensus_validators, None)?;
         let our_address = ctx.validator_set().as_slice()[0].address;
         let params = default_consensus_params(&ctx, our_address);
@@ -177,7 +175,7 @@ impl Node {
             transport: TransportProtocol::Tcp,
             gossipsub: GossipSubConfig::default(),
             pubsub_protocol: PubSubProtocol::default(),
-            rpc_max_size: 10 * 1024 * 1024, // 10 MiB
+            rpc_max_size: 10 * 1024 * 1024,    // 10 MiB
             pubsub_max_size: 10 * 1024 * 1024, // 10 MiB
             enable_sync: true,
         };
