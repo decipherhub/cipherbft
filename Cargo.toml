@@ -6,6 +6,8 @@ members = [
     "crates/storage",
     "crates/node",
     "crates/consensus",
+    "crates/execution",
+    "crates/mempool",
 ]
 resolver = "2"
 

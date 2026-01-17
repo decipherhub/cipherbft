@@ -1,6 +1,8 @@
 # Cipher BFT
 
-![cipher-bft-high-resolution-logo.png](assets/cipher-bft-high-resolution-logo.png)
+<p align="center">
+  <img src="assets/cipher-bft-high-resolution-logo.png" alt="Cipher BFT Logo" width="300">
+</p>
 
 
 
@@ -29,7 +31,9 @@ By exploring alternative consensus algorithms like **Autobahn BFT** and optimizi
 
 ### Three-Layer Architecture (DCL/CL/EL)
 
-![architecture-v0.0.2.png](assets/architecture-v0.0.2.png)
+<p align="center">
+  <img src="assets/architecture-v0.0.2.png" alt="architecture-v0.0.2" width="300">
+</p>
 
 CipherBFT implements Autobahn BFT's three-layer separation:
 
@@ -247,5 +251,3 @@ Licensed under the [MIT License](LICENSE).
 ---
 
 *Cipher BFT is a research collaboration between Decipher and B-Harvest, exploring the frontiers of high-performance consensus mechanisms.*
-
-**Status**: Design Phase (All ADRs PROPOSED) | [Architecture Docs](./docs/architecture/README.md)
