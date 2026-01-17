@@ -26,8 +26,10 @@ pub struct NodeConfig {
     pub bls_secret_key_hex: String,
     /// Ed25519 secret key (hex encoded) for Consensus Layer
     pub ed25519_secret_key_hex: String,
-    /// Primary listen address
+    /// Primary listen address (DCL layer)
     pub primary_listen: SocketAddr,
+    /// Consensus listen address (Malachite p2p layer)
+    pub consensus_listen: SocketAddr,
     /// Worker listen addresses
     pub worker_listens: Vec<SocketAddr>,
     /// Known peers
@@ -58,6 +60,7 @@ impl NodeConfig {
             bls_secret_key_hex: hex::encode(bls_keypair.secret_key.to_bytes()),
             ed25519_secret_key_hex: hex::encode(ed25519_keypair.secret_key.to_bytes()),
             primary_listen: format!("127.0.0.1:{}", base_port).parse().unwrap(),
+            consensus_listen: format!("127.0.0.1:{}", base_port + 5).parse().unwrap(),
             worker_listens: vec![format!("127.0.0.1:{}", base_port + 1).parse().unwrap()],
             peers: Vec::new(), // Will be populated after all nodes are created
             num_workers: 1,

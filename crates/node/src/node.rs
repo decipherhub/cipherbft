@@ -165,11 +165,17 @@ impl Node {
         let consensus_keypair = Keypair::generate_ed25519();
 
         // Create network config for consensus p2p layer
-        // TODO: Configure proper listen address and peer discovery from NodeConfig
-        let listen_addr: Multiaddr = "/ip4/0.0.0.0/tcp/9000".parse().expect("valid multiaddr");
+        // Convert SocketAddr to Multiaddr format
+        let listen_addr: Multiaddr = format!(
+            "/ip4/{}/tcp/{}",
+            self.config.consensus_listen.ip(),
+            self.config.consensus_listen.port()
+        )
+        .parse()
+        .expect("valid multiaddr from config");
         let network_config = NetworkConfig {
             listen_addr: listen_addr.clone(),
-            persistent_peers: vec![], // TODO: Configure from NodeConfig
+            persistent_peers: vec![], // TODO: Configure persistent_peers from NodeConfig.peers
             discovery: DiscoveryConfig::default(),
             idle_connection_timeout: Duration::from_secs(15 * 60),
             transport: TransportProtocol::Tcp,
