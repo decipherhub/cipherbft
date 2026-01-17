@@ -41,12 +41,12 @@
 use crate::config::MempoolConfig;
 use crate::error::MempoolError;
 use crate::validator::CipherBftValidator;
-use alloy_eips::eip2718::Decodable2718;
-use alloy_primitives::{Bytes, TxHash};
-use reth_primitives::{
-    PooledTransactionsElement, PooledTransactionsElementEcRecovered, TransactionSigned,
-    TransactionSignedEcRecovered, TransactionSignedNoHash,
-};
+use alloy_consensus::transaction::PooledTransaction;
+use alloy_consensus::Transaction;
+use alloy_primitives::TxHash;
+use reth_chainspec::EthereumHardforks;
+use reth_primitives::TransactionSigned;
+use reth_primitives_traits::{Recovered, SignedTransaction};
 use reth_storage_api::StateProviderFactory;
 use reth_transaction_pool::{
     blobstore::BlobStore, validate::EthTransactionValidator, CoinbaseTipOrdering,
@@ -54,6 +54,12 @@ use reth_transaction_pool::{
 };
 use std::sync::Arc;
 use tracing::{debug, warn};
+
+/// Type alias for recovered signed transaction (reth v1.9.3+)
+pub type RecoveredTx = Recovered<TransactionSigned>;
+
+/// Type alias for recovered pooled transaction (reth v1.9.3+)
+pub type RecoveredPooledTx = Recovered<PooledTransaction>;
 
 /// Mempool wrapper that adds BFT-specific pre-validation to Reth's Pool
 ///
@@ -116,33 +122,33 @@ impl<P: TransactionPool> CipherBftPool<P> {
         &self.config
     }
 
-    /// Borrow a worker-facing adapter over the underlying pool (ADR-006)
-    pub fn adapter(&self) -> CipherBftPoolAdapter<'_, P> {
-        CipherBftPoolAdapter::new(&self.pool)
-    }
-
     /// Recover and pre-validate a transaction before handing it to Reth
     ///
     /// Returns the recovered transaction if it passes CipherBFT policies.
     pub async fn recover_and_validate(
         &self,
         tx: TransactionSigned,
-    ) -> Result<TransactionSignedEcRecovered, MempoolError> {
-        let tx_recovered = tx.try_ecrecovered().ok_or(MempoolError::InvalidSignature)?;
-
-        let sender = tx_recovered.signer();
-        let tx_ref = tx_recovered.as_ref();
+    ) -> Result<RecoveredTx, MempoolError> {
+        // Recover signer using reth v1.9.3+ API
+        // SignedTransaction::try_recover() returns Result<Address, RecoveryError>
+        let signer = tx.try_recover().map_err(|_| MempoolError::InvalidSignature)?;
+        
+        // Create the Recovered wrapper with the transaction and its signer
+        let tx_recovered = Recovered::new_unchecked(tx, signer);
 
         debug!(
             "Pre-validating transaction from {:?}, nonce={}, gas_price={}",
-            sender,
-            tx_ref.nonce(),
-            tx_ref.max_fee_per_gas()
+            signer,
+            tx_recovered.nonce(),
+            tx_recovered.max_fee_per_gas()
         );
 
         self.validate_bft_policy(&tx_recovered).await?;
 
-        debug!("Transaction {:?} passed BFT policy checks", tx_ref.hash());
+        debug!(
+            "Transaction {:?} passed BFT policy checks",
+            tx_recovered.tx_hash()
+        );
 
         Ok(tx_recovered)
     }
@@ -160,15 +166,12 @@ impl<P: TransactionPool> CipherBftPool<P> {
     /// CipherBFT adds:
     /// 1. Minimum gas price (prevent spam)
     /// 2. Maximum nonce gap (prevent queue bloat)
-    async fn validate_bft_policy(
-        &self,
-        tx: &TransactionSignedEcRecovered,
-    ) -> Result<(), MempoolError> {
+    async fn validate_bft_policy(&self, tx: &RecoveredTx) -> Result<(), MempoolError> {
         let sender = tx.signer();
-        let tx_ref = tx.as_ref();
 
         // BFT Policy 1: Minimum gas price enforcement
-        let effective_gas_price = tx_ref.max_fee_per_gas();
+        // Access transaction fields via Deref to inner TransactionSigned
+        let effective_gas_price = tx.max_fee_per_gas();
         if effective_gas_price < self.config.min_gas_price {
             warn!(
                 "Transaction from {:?} rejected: gas price {} < min {}",
@@ -187,10 +190,10 @@ impl<P: TransactionPool> CipherBftPool<P> {
             .latest()
             .map_err(|e| MempoolError::Internal(format!("Failed to get state provider: {e}")))?;
         let current_nonce = state_provider
-            .account_nonce(sender)
+            .account_nonce(&sender)
             .map_err(|e| MempoolError::Internal(format!("Failed to get nonce: {}", e)))?
             .unwrap_or(0); // Default to 0 if account doesn't exist yet
-        let tx_nonce = tx_ref.nonce();
+        let tx_nonce = tx.nonce();
 
         if tx_nonce > current_nonce {
             let gap = tx_nonce - current_nonce - 1;
@@ -206,21 +209,33 @@ impl<P: TransactionPool> CipherBftPool<P> {
     }
 }
 
+impl<P> CipherBftPool<P>
+where
+    P: TransactionPool,
+    P::Transaction: PoolTransaction<Consensus = TransactionSigned>,
+{
+    /// Borrow a worker-facing adapter over the underlying pool (ADR-006)
+    pub fn adapter(&self) -> CipherBftPoolAdapter<'_, P> {
+        CipherBftPoolAdapter::new(&self.pool)
+    }
+}
+
 impl<Client, S> CipherBftPool<CipherBftRethPool<Client, S>>
 where
-    Client: StateProviderFactory + 'static,
+    Client: StateProviderFactory + reth_chainspec::ChainSpecProvider<ChainSpec: EthereumHardforks> + 'static,
     S: BlobStore + Clone,
 {
     /// Create a CipherBFT mempool that builds the underlying Reth pool internally.
+    ///
+    /// Note: In reth v1.9.3+, the client provides the chain spec via ChainSpecProvider trait,
+    /// so we no longer need to pass chain_spec separately.
     pub fn new(
-        chain_spec: Arc<reth_chainspec::ChainSpec>,
         client: Arc<Client>,
         blob_store: S,
         config: MempoolConfig,
     ) -> Result<Self, MempoolError> {
         let state_provider_factory: Arc<dyn StateProviderFactory> = client.clone();
-        let validator =
-            CipherBftValidator::new(chain_spec, Arc::clone(&client), blob_store.clone());
+        let validator = CipherBftValidator::new(Arc::clone(&client), blob_store.clone());
         let pool_config: reth_transaction_pool::PoolConfig = config.clone().into();
         let pool = Pool::new(
             validator,
@@ -237,7 +252,11 @@ pub struct CipherBftPoolAdapter<'a, P: TransactionPool> {
     pool: &'a P,
 }
 
-impl<'a, P: TransactionPool> CipherBftPoolAdapter<'a, P> {
+impl<'a, P> CipherBftPoolAdapter<'a, P>
+where
+    P: TransactionPool,
+    P::Transaction: PoolTransaction<Consensus = TransactionSigned>,
+{
     fn new(pool: &'a P) -> Self {
         Self { pool }
     }
@@ -260,7 +279,7 @@ impl<'a, P: TransactionPool> CipherBftPoolAdapter<'a, P> {
                 continue;
             }
             gas_used += tx_gas;
-            let signed = tx.to_recovered_transaction().into_signed();
+            let signed = tx.transaction.clone_into_consensus().into_inner();
             selected.push(signed);
         }
 
@@ -287,7 +306,7 @@ impl<'a, P: TransactionPool> CipherBftPoolAdapter<'a, P> {
         self.pool
             .pending_transactions()
             .into_iter()
-            .map(|tx| tx.to_recovered_transaction().into_signed())
+            .map(|tx| tx.transaction.clone_into_consensus().into_inner())
             .collect()
     }
 
@@ -296,7 +315,7 @@ impl<'a, P: TransactionPool> CipherBftPoolAdapter<'a, P> {
         self.pool
             .queued_transactions()
             .into_iter()
-            .map(|tx| tx.to_recovered_transaction().into_signed())
+            .map(|tx| tx.transaction.clone_into_consensus().into_inner())
             .collect()
     }
 }
@@ -304,167 +323,52 @@ impl<'a, P: TransactionPool> CipherBftPoolAdapter<'a, P> {
 impl<P> CipherBftPool<P>
 where
     P: TransactionPool,
-    P::Transaction: PoolTransaction + TryFrom<TransactionSignedEcRecovered>,
-    <P::Transaction as PoolTransaction>::Consensus: Into<TransactionSignedEcRecovered>,
-    <P::Transaction as PoolTransaction>::Pooled: From<PooledTransactionsElementEcRecovered>,
-    <P::Transaction as TryFrom<TransactionSignedEcRecovered>>::Error: std::fmt::Display,
+    P::Transaction: PoolTransaction + TryFrom<RecoveredTx>,
+    <P::Transaction as TryFrom<RecoveredTx>>::Error: std::fmt::Display,
 {
-    /// Add a transaction to the pool with CipherBFT validation (MP-2)
-    pub async fn add_transaction<T>(
+    /// Add a signed transaction to the pool with CipherBFT validation (MP-2)
+    ///
+    /// This is the primary entry point for adding transactions. The transaction
+    /// will be recovered, validated against BFT policies, and then added to the pool.
+    pub async fn add_signed_transaction(
         &self,
         origin: TransactionOrigin,
-        tx: T,
-    ) -> Result<(), MempoolError>
-    where
-        T: IntoPoolTransactionInput<P::Transaction>,
-    {
-        let pooled_tx = match tx.into_input()? {
-            PoolTransactionInput::Signed(tx) => {
-                let tx_recovered = self.recover_and_validate(tx).await?;
-                P::Transaction::try_from(tx_recovered)
-                    .map_err(|err| MempoolError::Conversion(err.to_string()))?
-            }
-            PoolTransactionInput::Recovered(tx_recovered) => {
-                self.validate_bft_policy(&tx_recovered).await?;
-                P::Transaction::try_from(tx_recovered)
-                    .map_err(|err| MempoolError::Conversion(err.to_string()))?
-            }
-            PoolTransactionInput::Pooled(PoolTx(pooled_tx)) => {
-                let tx_recovered: TransactionSignedEcRecovered =
-                    pooled_tx.clone().into_consensus().into();
-                self.validate_bft_policy(&tx_recovered).await?;
-                pooled_tx
-            }
-            PoolTransactionInput::PooledEcRecovered(pooled) => {
-                let pooled_tx = P::Transaction::from_pooled(pooled.into());
-                let tx_recovered: TransactionSignedEcRecovered =
-                    pooled_tx.clone().into_consensus().into();
-                self.validate_bft_policy(&tx_recovered).await?;
-                pooled_tx
-            }
-            PoolTransactionInput::PooledRaw(pooled) => {
-                let pooled = pooled
-                    .try_into_ecrecovered()
-                    .map_err(|_| MempoolError::InvalidSignature)?;
-                let pooled_tx = P::Transaction::from_pooled(pooled.into());
-                let tx_recovered: TransactionSignedEcRecovered =
-                    pooled_tx.clone().into_consensus().into();
-                self.validate_bft_policy(&tx_recovered).await?;
-                pooled_tx
-            }
-        };
+        tx: TransactionSigned,
+    ) -> Result<(), MempoolError> {
+        let tx_recovered = self.recover_and_validate(tx).await?;
+        let pooled_tx = P::Transaction::try_from(tx_recovered)
+            .map_err(|err| MempoolError::Conversion(err.to_string()))?;
         self.pool.add_transaction(origin, pooled_tx).await?;
         Ok(())
     }
 
-    /// Add a pooled transaction directly.
-    pub async fn add_pooled_transaction(
+    /// Add a pre-recovered transaction to the pool with BFT validation.
+    pub async fn add_recovered_transaction(
         &self,
         origin: TransactionOrigin,
-        tx: P::Transaction,
+        tx_recovered: RecoveredTx,
     ) -> Result<(), MempoolError> {
-        self.add_transaction(origin, PoolTx::new(tx)).await
+        self.validate_bft_policy(&tx_recovered).await?;
+        let pooled_tx = P::Transaction::try_from(tx_recovered)
+            .map_err(|err| MempoolError::Conversion(err.to_string()))?;
+        self.pool.add_transaction(origin, pooled_tx).await?;
+        Ok(())
     }
-}
 
-pub enum PoolTransactionInput<Tx> {
-    Signed(TransactionSigned),
-    Recovered(TransactionSignedEcRecovered),
-    Pooled(PoolTx<Tx>),
-    PooledEcRecovered(PooledTransactionsElementEcRecovered),
-    PooledRaw(PooledTransactionsElement),
-}
-
-pub trait IntoPoolTransactionInput<Tx> {
-    fn into_input(self) -> Result<PoolTransactionInput<Tx>, MempoolError>;
-}
-
-pub struct PoolTx<Tx>(pub Tx);
-
-impl<Tx> PoolTx<Tx> {
-    pub fn new(tx: Tx) -> Self {
-        Self(tx)
+    /// Add raw transaction bytes to the pool.
+    ///
+    /// Decodes the bytes as a TransactionSigned, recovers the signer,
+    /// validates against BFT policies, and adds to the pool.
+    pub async fn add_raw_transaction(
+        &self,
+        origin: TransactionOrigin,
+        bytes: &[u8],
+    ) -> Result<(), MempoolError> {
+        use alloy_rlp::Decodable;
+        let tx = TransactionSigned::decode(&mut &bytes[..])
+            .map_err(|err| MempoolError::Conversion(err.to_string()))?;
+        self.add_signed_transaction(origin, tx).await
     }
-}
-
-impl<Tx> IntoPoolTransactionInput<Tx> for TransactionSigned {
-    fn into_input(self) -> Result<PoolTransactionInput<Tx>, MempoolError> {
-        Ok(PoolTransactionInput::Signed(self))
-    }
-}
-
-impl<Tx> IntoPoolTransactionInput<Tx> for TransactionSignedEcRecovered {
-    fn into_input(self) -> Result<PoolTransactionInput<Tx>, MempoolError> {
-        Ok(PoolTransactionInput::Recovered(self))
-    }
-}
-
-impl<Tx> IntoPoolTransactionInput<Tx> for PoolTx<Tx> {
-    fn into_input(self) -> Result<PoolTransactionInput<Tx>, MempoolError> {
-        Ok(PoolTransactionInput::Pooled(self))
-    }
-}
-
-impl<Tx> IntoPoolTransactionInput<Tx> for PooledTransactionsElementEcRecovered
-where
-    Tx: PoolTransaction,
-    Tx::Pooled: From<PooledTransactionsElementEcRecovered>,
-{
-    fn into_input(self) -> Result<PoolTransactionInput<Tx>, MempoolError> {
-        Ok(PoolTransactionInput::PooledEcRecovered(self))
-    }
-}
-
-impl<Tx> IntoPoolTransactionInput<Tx> for PooledTransactionsElement
-where
-    Tx: PoolTransaction,
-    Tx::Pooled: From<PooledTransactionsElementEcRecovered>,
-{
-    fn into_input(self) -> Result<PoolTransactionInput<Tx>, MempoolError> {
-        Ok(PoolTransactionInput::PooledRaw(self))
-    }
-}
-
-impl<Tx> IntoPoolTransactionInput<Tx> for TransactionSignedNoHash {
-    fn into_input(self) -> Result<PoolTransactionInput<Tx>, MempoolError> {
-        Ok(PoolTransactionInput::Signed(self.into()))
-    }
-}
-
-impl<Tx> IntoPoolTransactionInput<Tx> for Bytes
-where
-    Tx: PoolTransaction,
-    Tx::Pooled: From<PooledTransactionsElementEcRecovered>,
-{
-    fn into_input(self) -> Result<PoolTransactionInput<Tx>, MempoolError> {
-        decode_pooled_from_bytes(&self).map(PoolTransactionInput::PooledRaw)
-    }
-}
-
-impl<Tx> IntoPoolTransactionInput<Tx> for Vec<u8>
-where
-    Tx: PoolTransaction,
-    Tx::Pooled: From<PooledTransactionsElementEcRecovered>,
-{
-    fn into_input(self) -> Result<PoolTransactionInput<Tx>, MempoolError> {
-        decode_pooled_from_bytes(&self).map(PoolTransactionInput::PooledRaw)
-    }
-}
-
-impl<Tx> IntoPoolTransactionInput<Tx> for &[u8]
-where
-    Tx: PoolTransaction,
-    Tx::Pooled: From<PooledTransactionsElementEcRecovered>,
-{
-    fn into_input(self) -> Result<PoolTransactionInput<Tx>, MempoolError> {
-        decode_pooled_from_bytes(self).map(PoolTransactionInput::PooledRaw)
-    }
-}
-
-fn decode_pooled_from_bytes(bytes: &[u8]) -> Result<PooledTransactionsElement, MempoolError> {
-    let mut slice = bytes;
-    PooledTransactionsElement::decode_2718(&mut slice)
-        .map_err(|err| MempoolError::Conversion(err.to_string()))
 }
 
 /// Simplified pool stats view for metrics (ADR-006)

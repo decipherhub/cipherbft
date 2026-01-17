@@ -7,15 +7,18 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-# Reth transaction pool and primitives
-reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
-reth-primitives = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
-reth-storage-api = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
-reth-chainspec = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0" }
+# Reth transaction pool and primitives (matching workspace v1.9.3)
+reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
+reth-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
+reth-primitives-traits = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
+reth-storage-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3" }
 
-# Ethereum types (alloy suite - use Reth compatible version)
-alloy-primitives = "0.8"
-alloy-eips = "0.4"
+# Ethereum types (alloy suite - reth 1.9.3 uses alloy 1.x)
+alloy-primitives = "1"
+alloy-eips = "1"
+alloy-consensus = "1"
+alloy-rlp = "0.3"
 
 # Serialization
 serde = { workspace = true }
@@ -32,5 +35,5 @@ async-trait = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0", features = ["test-utils"] }
-reth-provider = { git = "https://github.com/paradigmxyz/reth", rev = "v1.1.0", features = ["test-utils"] }
+reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3", features = ["test-utils"] }
+reth-provider = { git = "https://github.com/paradigmxyz/reth", tag = "v1.9.3", features = ["test-utils"] }

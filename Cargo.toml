@@ -7,7 +7,7 @@ members = [
     "crates/node",
     "crates/consensus",
     "crates/execution",
-    # "crates/mempool",  # Temporarily excluded - requires reth v1.8.4+ migration due to c-kzg dependency conflict
+    "crates/mempool",
 ]
 resolver = "2"
 
