@@ -2,6 +2,25 @@
 //!
 //! This implementation is primarily for testing and development.
 //! It stores all data in memory using concurrent hash maps.
+//!
+//! # Concurrency Safety
+//!
+//! This module is designed with the following concurrency guarantees:
+//!
+//! 1. **Single-Lock Principle**: Related data structures that must be updated
+//!    atomically are grouped under a single lock to prevent deadlocks.
+//!
+//! 2. **Lock Ordering**: When multiple locks must be acquired, they are always
+//!    acquired in a consistent order: batches → car_state → attestations →
+//!    pending_cuts → finalized_cuts.
+//!
+//! 3. **Minimal Lock Duration**: Locks are held for the minimum necessary time.
+//!    Data is cloned before returning to release locks quickly.
+//!
+//! # Thread Safety
+//!
+//! All operations are thread-safe. The `parking_lot::RwLock` is used for
+//! efficient read-write locking with reader-writer fairness.
 
 use crate::dcl::{DclStore, StorageStats};
 use crate::error::{Result, StorageError};
@@ -13,30 +32,90 @@ use cipherbft_types::{Hash, ValidatorId};
 use parking_lot::RwLock;
 use std::collections::{BTreeMap, HashMap};
 
+/// Internal state for Car-related data.
+///
+/// Bundling these together under a single lock eliminates the risk of deadlocks
+/// that could occur when acquiring multiple locks in different orders.
+struct CarState {
+    /// Cars indexed by (ValidatorId, position)
+    cars: HashMap<(ValidatorId, u64), Car>,
+    /// Car hash to (ValidatorId, position) mapping for reverse lookups
+    car_index: HashMap<Hash, (ValidatorId, u64)>,
+    /// Highest position for each validator (cached for O(1) lookup)
+    highest_positions: HashMap<ValidatorId, u64>,
+}
+
+impl CarState {
+    fn new() -> Self {
+        Self {
+            cars: HashMap::new(),
+            car_index: HashMap::new(),
+            highest_positions: HashMap::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.cars.clear();
+        self.car_index.clear();
+        self.highest_positions.clear();
+    }
+}
+
+/// Internal state for Cut-related data.
+///
+/// Bundling pending and finalized cuts under a single lock ensures atomic
+/// transitions during finalization without risk of deadlocks.
+struct CutState {
+    /// Pending Cuts indexed by height
+    pending: BTreeMap<u64, Cut>,
+    /// Finalized Cuts indexed by height
+    finalized: BTreeMap<u64, Cut>,
+}
+
+impl CutState {
+    fn new() -> Self {
+        Self {
+            pending: BTreeMap::new(),
+            finalized: BTreeMap::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.pending.clear();
+        self.finalized.clear();
+    }
+}
+
 /// In-memory DCL store implementation
 ///
-/// Uses parking_lot RwLock for thread-safe concurrent access.
+/// Uses parking_lot RwLock for thread-safe concurrent access with minimal
+/// contention. Related data structures are grouped under single locks to
+/// prevent deadlocks.
+///
+/// # Lock Ordering
+///
+/// If multiple locks must be acquired, they MUST be acquired in this order:
+/// 1. `batches`
+/// 2. `car_state`
+/// 3. `attestations`
+/// 4. `cut_state`
+///
+/// This ordering is enforced by the API design - most operations only need
+/// a single lock.
 pub struct InMemoryStore {
     /// Batches indexed by hash
     batches: RwLock<HashMap<Hash, Batch>>,
 
-    /// Cars indexed by (ValidatorId, position)
-    cars: RwLock<HashMap<(ValidatorId, u64), Car>>,
-
-    /// Car hash to (ValidatorId, position) mapping
-    car_index: RwLock<HashMap<Hash, (ValidatorId, u64)>>,
-
-    /// Highest position for each validator
-    highest_positions: RwLock<HashMap<ValidatorId, u64>>,
+    /// Combined Car state (cars, index, highest positions) under single lock
+    /// This eliminates deadlock risk from separate locks on related data
+    car_state: RwLock<CarState>,
 
     /// Aggregated attestations indexed by Car hash
     attestations: RwLock<HashMap<Hash, AggregatedAttestation>>,
 
-    /// Pending Cuts indexed by height
-    pending_cuts: RwLock<BTreeMap<u64, Cut>>,
-
-    /// Finalized Cuts indexed by height
-    finalized_cuts: RwLock<BTreeMap<u64, Cut>>,
+    /// Combined Cut state (pending and finalized) under single lock
+    /// This enables atomic finalization transitions
+    cut_state: RwLock<CutState>,
 }
 
 impl InMemoryStore {
@@ -44,24 +123,28 @@ impl InMemoryStore {
     pub fn new() -> Self {
         Self {
             batches: RwLock::new(HashMap::new()),
-            cars: RwLock::new(HashMap::new()),
-            car_index: RwLock::new(HashMap::new()),
-            highest_positions: RwLock::new(HashMap::new()),
+            car_state: RwLock::new(CarState::new()),
             attestations: RwLock::new(HashMap::new()),
-            pending_cuts: RwLock::new(BTreeMap::new()),
-            finalized_cuts: RwLock::new(BTreeMap::new()),
+            cut_state: RwLock::new(CutState::new()),
         }
     }
 
     /// Clear all data (for testing)
+    ///
+    /// # Concurrency
+    ///
+    /// Acquires write locks in the defined ordering to prevent deadlocks.
     pub fn clear(&self) {
-        self.batches.write().clear();
-        self.cars.write().clear();
-        self.car_index.write().clear();
-        self.highest_positions.write().clear();
-        self.attestations.write().clear();
-        self.pending_cuts.write().clear();
-        self.finalized_cuts.write().clear();
+        // Acquire locks in defined order: batches → car_state → attestations → cut_state
+        let mut batches = self.batches.write();
+        let mut car_state = self.car_state.write();
+        let mut attestations = self.attestations.write();
+        let mut cut_state = self.cut_state.write();
+
+        batches.clear();
+        car_state.clear();
+        attestations.clear();
+        cut_state.clear();
     }
 }
 
@@ -112,11 +195,10 @@ impl DclStore for InMemoryStore {
         let key = (car.proposer, car.position);
         let hash = car.hash();
 
-        let mut cars = self.cars.write();
-        let mut car_index = self.car_index.write();
-        let mut highest_positions = self.highest_positions.write();
+        // Single lock acquisition for all car-related state
+        let mut state = self.car_state.write();
 
-        if cars.contains_key(&key) {
+        if state.cars.contains_key(&key) {
             return Err(StorageError::DuplicateEntry(format!(
                 "car {} at position {}",
                 car.proposer, car.position
@@ -124,39 +206,40 @@ impl DclStore for InMemoryStore {
         }
 
         // Update highest position
-        let current_highest = highest_positions.get(&car.proposer).copied();
+        let current_highest = state.highest_positions.get(&car.proposer).copied();
         if current_highest.is_none() || car.position > current_highest.unwrap() {
-            highest_positions.insert(car.proposer, car.position);
+            state.highest_positions.insert(car.proposer, car.position);
         }
 
-        car_index.insert(hash, key);
-        cars.insert(key, car);
+        state.car_index.insert(hash, key);
+        state.cars.insert(key, car);
         Ok(())
     }
 
     async fn get_car(&self, validator: &ValidatorId, position: u64) -> Result<Option<Car>> {
-        let cars = self.cars.read();
-        Ok(cars.get(&(*validator, position)).cloned())
+        let state = self.car_state.read();
+        Ok(state.cars.get(&(*validator, position)).cloned())
     }
 
     async fn get_car_by_hash(&self, hash: &Hash) -> Result<Option<Car>> {
-        let car_index = self.car_index.read();
-        let cars = self.cars.read();
+        // Single lock - no risk of deadlock from multiple lock acquisition
+        let state = self.car_state.read();
 
-        match car_index.get(hash) {
-            Some(key) => Ok(cars.get(key).cloned()),
+        match state.car_index.get(hash) {
+            Some(key) => Ok(state.cars.get(key).cloned()),
             None => Ok(None),
         }
     }
 
     async fn get_highest_car_position(&self, validator: &ValidatorId) -> Result<Option<u64>> {
-        let highest_positions = self.highest_positions.read();
-        Ok(highest_positions.get(validator).copied())
+        let state = self.car_state.read();
+        Ok(state.highest_positions.get(validator).copied())
     }
 
     async fn get_cars_range(&self, range: CarRange) -> Result<Vec<Car>> {
-        let cars = self.cars.read();
-        let mut result: Vec<Car> = cars
+        let state = self.car_state.read();
+        let mut result: Vec<Car> = state
+            .cars
             .iter()
             .filter(|((vid, pos), _)| {
                 *vid == range.validator_id
@@ -171,22 +254,22 @@ impl DclStore for InMemoryStore {
     }
 
     async fn has_car(&self, validator: &ValidatorId, position: u64) -> Result<bool> {
-        let cars = self.cars.read();
-        Ok(cars.contains_key(&(*validator, position)))
+        let state = self.car_state.read();
+        Ok(state.cars.contains_key(&(*validator, position)))
     }
 
     async fn delete_car(&self, validator: &ValidatorId, position: u64) -> Result<bool> {
         let key = (*validator, position);
-        let mut cars = self.cars.write();
-        let mut car_index = self.car_index.write();
-        let mut highest_positions = self.highest_positions.write();
+        // Single lock acquisition for atomic deletion
+        let mut state = self.car_state.write();
 
-        if let Some(car) = cars.remove(&key) {
-            car_index.remove(&car.hash());
+        if let Some(car) = state.cars.remove(&key) {
+            state.car_index.remove(&car.hash());
 
             // Update highest position if we deleted the highest
-            if highest_positions.get(validator) == Some(&position) {
-                let new_highest = cars
+            if state.highest_positions.get(validator) == Some(&position) {
+                let new_highest = state
+                    .cars
                     .keys()
                     .filter(|(vid, _)| vid == validator)
                     .map(|(_, pos)| *pos)
@@ -194,10 +277,10 @@ impl DclStore for InMemoryStore {
 
                 match new_highest {
                     Some(pos) => {
-                        highest_positions.insert(*validator, pos);
+                        state.highest_positions.insert(*validator, pos);
                     }
                     None => {
-                        highest_positions.remove(validator);
+                        state.highest_positions.remove(validator);
                     }
                 }
             }
@@ -238,27 +321,29 @@ impl DclStore for InMemoryStore {
     // ============================================================
 
     async fn put_pending_cut(&self, cut: Cut) -> Result<()> {
-        let mut pending_cuts = self.pending_cuts.write();
-        pending_cuts.insert(cut.height, cut);
+        let mut state = self.cut_state.write();
+        state.pending.insert(cut.height, cut);
         Ok(())
     }
 
     async fn get_pending_cut(&self, height: u64) -> Result<Option<Cut>> {
-        let pending_cuts = self.pending_cuts.read();
-        Ok(pending_cuts.get(&height).cloned())
+        let state = self.cut_state.read();
+        Ok(state.pending.get(&height).cloned())
     }
 
     async fn get_all_pending_cuts(&self) -> Result<Vec<Cut>> {
-        let pending_cuts = self.pending_cuts.read();
-        Ok(pending_cuts.values().cloned().collect())
+        let state = self.cut_state.read();
+        Ok(state.pending.values().cloned().collect())
     }
 
     async fn finalize_cut(&self, height: u64) -> Result<Option<Cut>> {
-        let mut pending_cuts = self.pending_cuts.write();
-        let mut finalized_cuts = self.finalized_cuts.write();
+        // Single lock for atomic pending → finalized transition
+        // This eliminates the race condition where another thread could
+        // see a cut that's neither pending nor finalized
+        let mut state = self.cut_state.write();
 
-        if let Some(cut) = pending_cuts.remove(&height) {
-            finalized_cuts.insert(height, cut.clone());
+        if let Some(cut) = state.pending.remove(&height) {
+            state.finalized.insert(height, cut.clone());
             Ok(Some(cut))
         } else {
             Ok(None)
@@ -266,29 +351,30 @@ impl DclStore for InMemoryStore {
     }
 
     async fn delete_pending_cut(&self, height: u64) -> Result<bool> {
-        let mut pending_cuts = self.pending_cuts.write();
-        Ok(pending_cuts.remove(&height).is_some())
+        let mut state = self.cut_state.write();
+        Ok(state.pending.remove(&height).is_some())
     }
 
     async fn put_finalized_cut(&self, cut: Cut) -> Result<()> {
-        let mut finalized_cuts = self.finalized_cuts.write();
-        finalized_cuts.insert(cut.height, cut);
+        let mut state = self.cut_state.write();
+        state.finalized.insert(cut.height, cut);
         Ok(())
     }
 
     async fn get_finalized_cut(&self, height: u64) -> Result<Option<Cut>> {
-        let finalized_cuts = self.finalized_cuts.read();
-        Ok(finalized_cuts.get(&height).cloned())
+        let state = self.cut_state.read();
+        Ok(state.finalized.get(&height).cloned())
     }
 
     async fn get_latest_finalized_cut(&self) -> Result<Option<Cut>> {
-        let finalized_cuts = self.finalized_cuts.read();
-        Ok(finalized_cuts.values().last().cloned())
+        let state = self.cut_state.read();
+        Ok(state.finalized.values().last().cloned())
     }
 
     async fn get_finalized_cuts_range(&self, range: CutRange) -> Result<Vec<Cut>> {
-        let finalized_cuts = self.finalized_cuts.read();
-        let result: Vec<Cut> = finalized_cuts
+        let state = self.cut_state.read();
+        let result: Vec<Cut> = state
+            .finalized
             .range(range.start..)
             .take_while(|(h, _)| range.end.is_none_or(|end| **h < end))
             .map(|(_, cut)| cut.clone())
@@ -303,14 +389,14 @@ impl DclStore for InMemoryStore {
     async fn prune_before(&self, height: u64) -> Result<u64> {
         let mut pruned = 0u64;
 
-        // Prune finalized cuts
+        // Prune finalized cuts - single lock acquisition
         {
-            let mut finalized_cuts = self.finalized_cuts.write();
+            let mut state = self.cut_state.write();
             let keys_to_remove: Vec<u64> =
-                finalized_cuts.range(..height).map(|(h, _)| *h).collect();
+                state.finalized.range(..height).map(|(h, _)| *h).collect();
 
             for key in keys_to_remove {
-                finalized_cuts.remove(&key);
+                state.finalized.remove(&key);
                 pruned += 1;
             }
         }
@@ -325,18 +411,18 @@ impl DclStore for InMemoryStore {
     }
 
     async fn stats(&self) -> Result<StorageStats> {
+        // Acquire locks in documented order to prevent deadlocks
         let batches = self.batches.read();
-        let cars = self.cars.read();
+        let car_state = self.car_state.read();
         let attestations = self.attestations.read();
-        let pending_cuts = self.pending_cuts.read();
-        let finalized_cuts = self.finalized_cuts.read();
+        let cut_state = self.cut_state.read();
 
         Ok(StorageStats {
             batch_count: batches.len() as u64,
-            car_count: cars.len() as u64,
+            car_count: car_state.cars.len() as u64,
             attestation_count: attestations.len() as u64,
-            pending_cut_count: pending_cuts.len() as u64,
-            finalized_cut_count: finalized_cuts.len() as u64,
+            pending_cut_count: cut_state.pending.len() as u64,
+            finalized_cut_count: cut_state.finalized.len() as u64,
             storage_bytes: 0, // In-memory doesn't track this
         })
     }
