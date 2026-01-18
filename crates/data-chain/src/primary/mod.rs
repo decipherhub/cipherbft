@@ -110,7 +110,7 @@ impl PrimaryDcl {
         let cut_former = cut_former::CutFormer::new(sorted_validators.clone());
 
         // Create state
-        let state = state::PrimaryState::new(our_id);
+        let state = state::PrimaryState::new(our_id, config.equivocation_retention);
 
         Self {
             our_id,

@@ -21,6 +21,11 @@ pub struct PrimaryConfig {
     pub max_empty_cars: u32,
     /// Number of workers per validator (default: 1)
     pub worker_count: u8,
+    /// Number of heights to retain equivocation data (default: 1000).
+    ///
+    /// Higher values preserve forensic evidence longer for slashing proofs,
+    /// at the cost of increased memory usage.
+    pub equivocation_retention: u64,
 }
 
 impl PrimaryConfig {
@@ -34,6 +39,7 @@ impl PrimaryConfig {
             attestation_timeout_max: Duration::from_millis(5000),
             max_empty_cars: 3,
             worker_count: 1,
+            equivocation_retention: 1000,
         }
     }
 
@@ -61,6 +67,12 @@ impl PrimaryConfig {
         self.worker_count = count;
         self
     }
+
+    /// Set equivocation retention (number of heights to keep equivocation data)
+    pub fn with_equivocation_retention(mut self, retention: u64) -> Self {
+        self.equivocation_retention = retention;
+        self
+    }
 }
 
 impl std::fmt::Debug for PrimaryConfig {
@@ -72,6 +84,7 @@ impl std::fmt::Debug for PrimaryConfig {
             .field("attestation_timeout_max", &self.attestation_timeout_max)
             .field("max_empty_cars", &self.max_empty_cars)
             .field("worker_count", &self.worker_count)
+            .field("equivocation_retention", &self.equivocation_retention)
             .finish()
     }
 }

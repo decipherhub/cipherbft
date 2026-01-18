@@ -97,6 +97,8 @@ pub struct PrimaryState {
     pub last_attested_idx: usize,
     /// Known equivocations (validator -> position -> multiple car hashes)
     pub equivocations: HashMap<ValidatorId, HashMap<u64, Vec<Hash>>>,
+    /// Number of heights to retain equivocation data
+    equivocation_retention: u64,
 
     // =========================================================
     // Pipeline state tracking (T111)
@@ -115,7 +117,11 @@ pub struct PrimaryState {
 
 impl PrimaryState {
     /// Create new state for a validator
-    pub fn new(our_id: ValidatorId) -> Self {
+    ///
+    /// # Arguments
+    /// * `our_id` - Our validator identity
+    /// * `equivocation_retention` - Number of heights to retain equivocation data
+    pub fn new(our_id: ValidatorId, equivocation_retention: u64) -> Self {
         Self {
             our_id,
             current_height: 0,
@@ -131,6 +137,7 @@ impl PrimaryState {
             attested_cars: HashMap::new(),
             last_attested_idx: 0,
             equivocations: HashMap::new(),
+            equivocation_retention,
             // Pipeline state (T111)
             pipeline_stage: PipelineStage::Collecting,
             next_height_attestations: HashMap::new(),
@@ -420,8 +427,8 @@ impl PrimaryState {
             .retain(|h, _| *h >= self.current_height);
 
         // Cleanup stale data to prevent memory leaks
-        // Keep equivocation data for last 1000 heights (configurable if needed)
-        self.cleanup_stale_equivocations(1000);
+        // Keep equivocation data for configured retention window
+        self.cleanup_stale_equivocations(self.equivocation_retention);
 
         // Cleanup old pending cars and cars awaiting batches
         self.cleanup_stale_pending_data();
@@ -609,7 +616,7 @@ mod tests {
 
     #[test]
     fn test_empty_car_tracking() {
-        let mut state = PrimaryState::new(ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]));
+        let mut state = PrimaryState::new(ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]), 1000);
 
         // Initially can create empty cars
         assert!(state.can_create_empty_car(3));
@@ -630,7 +637,7 @@ mod tests {
 
     #[test]
     fn test_position_tracking() {
-        let mut state = PrimaryState::new(ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]));
+        let mut state = PrimaryState::new(ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]), 1000);
         let validator = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
 
         // Expected position for unknown validator is 0
@@ -643,7 +650,7 @@ mod tests {
 
     #[test]
     fn test_equivocation_detection() {
-        let mut state = PrimaryState::new(ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]));
+        let mut state = PrimaryState::new(ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]), 1000);
         let validator = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
 
         // First car at position 5
@@ -664,7 +671,7 @@ mod tests {
 
     #[test]
     fn test_pipeline_stage_transitions() {
-        let mut state = PrimaryState::new(ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]));
+        let mut state = PrimaryState::new(ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]), 1000);
 
         // Initially in Collecting stage
         assert_eq!(state.pipeline_stage, PipelineStage::Collecting);
@@ -688,7 +695,7 @@ mod tests {
         use bitvec::prelude::*;
 
         let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
-        let mut state = PrimaryState::new(our_id);
+        let mut state = PrimaryState::new(our_id, 1000);
 
         let validator1 = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
         let validator2 = ValidatorId::from_bytes([3u8; VALIDATOR_ID_SIZE]);
@@ -738,7 +745,7 @@ mod tests {
     #[test]
     fn test_next_height_attestations() {
         let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
-        let mut state = PrimaryState::new(our_id);
+        let mut state = PrimaryState::new(our_id, 1000);
         state.current_height = 5;
 
         let attester = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
@@ -771,7 +778,7 @@ mod tests {
     #[test]
     fn test_finalize_height() {
         let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
-        let mut state = PrimaryState::new(our_id);
+        let mut state = PrimaryState::new(our_id, 1000);
         state.current_height = 5;
 
         // Store some next-height attestations
@@ -803,7 +810,7 @@ mod tests {
         use bitvec::prelude::*;
 
         let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
-        let mut state = PrimaryState::new(our_id);
+        let mut state = PrimaryState::new(our_id, 1000);
 
         let validator = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
 
@@ -845,7 +852,7 @@ mod tests {
     #[test]
     fn test_pipeline_summary() {
         let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
-        let mut state = PrimaryState::new(our_id);
+        let mut state = PrimaryState::new(our_id, 1000);
         state.current_height = 10;
         state.last_finalized_height = 9;
 

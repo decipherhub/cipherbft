@@ -241,7 +241,7 @@ impl Primary {
         event_sender: mpsc::Sender<PrimaryEvent>,
         storage: Option<Arc<dyn CarStore>>,
     ) -> Self {
-        let state = PrimaryState::new(config.validator_id);
+        let state = PrimaryState::new(config.validator_id, config.equivocation_retention);
 
         let proposer = Proposer::new(
             config.validator_id,
