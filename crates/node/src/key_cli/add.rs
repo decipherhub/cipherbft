@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 /// * `passphrase_file` - Optional file to read passphrase from
 /// * `force` - If true, overwrite existing keys
 /// * `dry_run` - If true, don't actually store keys
+#[allow(clippy::too_many_arguments)]
 pub fn execute(
     home: &Path,
     keyring_backend: KeyringBackend,

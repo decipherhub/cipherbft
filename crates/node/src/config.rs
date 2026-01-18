@@ -531,10 +531,7 @@ mod tests {
         // Verify validator ID matches BLS public key
         let expected_validator_id =
             crate::util::validator_id_from_bls(&test_config.bls_keypair.public_key);
-        assert_eq!(
-            test_config.config.validator_id,
-            Some(expected_validator_id)
-        );
+        assert_eq!(test_config.config.validator_id, Some(expected_validator_id));
     }
 
     #[test]

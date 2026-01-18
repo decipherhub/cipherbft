@@ -239,16 +239,18 @@ pub fn execute_keys_command(home: &std::path::Path, command: KeysCommand) -> Res
             passphrase_file,
             dry_run,
         } => {
-            eprintln!("WARNING: 'keys generate' is deprecated. Use 'keys add --validator' instead.");
+            eprintln!(
+                "WARNING: 'keys generate' is deprecated. Use 'keys add --validator' instead."
+            );
             add::execute(
                 home,
                 keyring_backend.into(),
                 "validator", // default name for backward compatibility
                 account,
                 output_dir,
-                mnemonic,   // recover flag
-                true,       // validator flag (generate always created both keys)
-                None,       // mnemonic_file
+                mnemonic, // recover flag
+                true,     // validator flag (generate always created both keys)
+                None,     // mnemonic_file
                 passphrase_file,
                 false, // force
                 dry_run,

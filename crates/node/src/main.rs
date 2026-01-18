@@ -4,9 +4,7 @@
 
 use alloy_primitives::U256;
 use anyhow::{Context, Result};
-use cipherbft_crypto::{
-    BlsKeyPair, BlsSecretKey, Ed25519KeyPair, Ed25519SecretKey, ExposeSecret,
-};
+use cipherbft_crypto::{BlsKeyPair, BlsSecretKey, Ed25519KeyPair, Ed25519SecretKey, ExposeSecret};
 use cipherd::{
     execute_keys_command, generate_local_configs, GenesisGenerator, GenesisGeneratorConfig,
     GenesisLoader, KeysCommand, Node, NodeConfig, ValidatorKeyFile, CIPHERD_HOME_ENV,
@@ -482,7 +480,10 @@ fn cmd_init(
     println!("     cipherd keys add validator --validator");
     println!();
     println!("  2. For a new network, generate genesis:");
-    println!("     cipherd genesis generate --output {}", config_dir.join("genesis.json").display());
+    println!(
+        "     cipherd genesis generate --output {}",
+        config_dir.join("genesis.json").display()
+    );
     println!();
     println!("  3. For joining an existing network, copy the genesis file to:");
     println!("     {}", config_dir.join("genesis.json").display());
@@ -719,7 +720,9 @@ fn cmd_testnet_init_files(
         println!(
             "  Created node{} (validator {:?}, port {})",
             i,
-            tc.config.validator_id.expect("test config should have validator_id"),
+            tc.config
+                .validator_id
+                .expect("test config should have validator_id"),
             starting_port + (i as u16 * 10)
         );
     }
