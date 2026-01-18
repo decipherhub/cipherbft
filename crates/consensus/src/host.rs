@@ -17,8 +17,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use informalsystems_malachitebft_app::streaming::StreamContent;
+use informalsystems_malachitebft_app::types::ProposedValue;
 use informalsystems_malachitebft_core_consensus::LocallyProposedValue;
-use informalsystems_malachitebft_core_types::CommitCertificate;
+use informalsystems_malachitebft_core_types::{CommitCertificate, Round, Validity};
 use informalsystems_malachitebft_engine::host::{HostMsg, HostRef, Next};
 use informalsystems_malachitebft_sync::RawDecidedValue;
 use ractor::{async_trait as ractor_async_trait, Actor, ActorProcessingErr, ActorRef};
@@ -344,8 +346,8 @@ impl Actor for CipherBftHost {
 
             HostMsg::ReceivedProposalPart {
                 from,
-                part: _,
-                reply_to: _,
+                part,
+                reply_to,
             } => {
                 trace!(
                     parent: &self.span,
@@ -353,10 +355,64 @@ impl Actor for CipherBftHost {
                     "Received proposal part"
                 );
 
-                // For single-part proposals (ProposalOnly mode), the part contains
-                // the complete proposal. Parse and return it.
-                // In a full implementation, this would assemble multi-part proposals.
-                // TODO: Implement proposal part handling and reply with ProposedValue
+                // Extract the CutProposalPart from the StreamMessage
+                match part.content {
+                    StreamContent::Data(proposal_part) => {
+                        // For single-part proposals (ProposalOnly mode), the part contains
+                        // the complete proposal with first=true and last=true.
+                        if proposal_part.first && proposal_part.last {
+                            let height = proposal_part.height;
+                            let round = proposal_part.round;
+                            let proposer = proposal_part.proposer;
+                            let value = ConsensusValue(proposal_part.cut);
+
+                            debug!(
+                                parent: &self.span,
+                                from = %from,
+                                height = height.0,
+                                round = %round,
+                                proposer = %proposer,
+                                "Assembled complete proposal from single part"
+                            );
+
+                            // Build ProposedValue for the received proposal
+                            let proposed_value = ProposedValue {
+                                height,
+                                round,
+                                valid_round: Round::Nil,
+                                proposer,
+                                value,
+                                validity: Validity::Valid,
+                            };
+
+                            // Send the assembled proposal back to the consensus engine
+                            if reply_to.send(proposed_value).is_err() {
+                                warn!(
+                                    parent: &self.span,
+                                    "Failed to send ProposedValue reply"
+                                );
+                            }
+                        } else {
+                            // Multi-part proposal handling would go here.
+                            // For now, we only support single-part proposals (ProposalOnly mode).
+                            warn!(
+                                parent: &self.span,
+                                from = %from,
+                                first = proposal_part.first,
+                                last = proposal_part.last,
+                                "Received multi-part proposal, but only single-part is supported"
+                            );
+                        }
+                    }
+                    StreamContent::Fin => {
+                        // End-of-stream marker - no action needed for single-part proposals
+                        trace!(
+                            parent: &self.span,
+                            from = %from,
+                            "Received proposal stream Fin marker"
+                        );
+                    }
+                }
             }
 
             HostMsg::GetValidatorSet { height, reply_to } => {
