@@ -1,71 +1,93 @@
 //! Unified Key Management CLI for CipherBFT
 //!
-//! This module provides secure key management commands for validator keys:
+//! This module provides secure key management commands following Cosmos SDK patterns:
 //!
-//! - `generate`: Create new validator keys from a mnemonic phrase
-//! - `import`: Import validator keys from an existing mnemonic
+//! - `add`: Create new keys from a mnemonic phrase (or recover with --recover)
 //! - `export`: Export public key information (never exports private keys)
 //! - `list`: List all keystores in a directory
 //!
 //! # Security Features
 //!
-//! - Keys are stored in EIP-2335 encrypted keystores
+//! - Keys are stored using pluggable keyring backends
 //! - Passphrases are read securely from terminal (not echoed)
 //! - Mnemonic phrases support optional BIP-39 passphrases
 //! - Memory is zeroed when keys go out of scope
+//!
+//! # Keyring Backends
+//!
+//! - `file` (default): EIP-2335 encrypted keystores - most secure for production
+//! - `os`: Operating system's native keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service)
+//! - `test`: Unencrypted storage - **ONLY for development/testing**
+//!
+//! # Key Types
+//!
+//! By default, only an Ed25519 key is created (sufficient for most users).
+//! Validators should use the `--validator` flag to also create a BLS key
+//! required for threshold signatures in the Data Chain Layer.
 
+pub mod add;
 pub mod common;
 pub mod export;
-pub mod generate;
-pub mod import;
 pub mod list;
 
+// Keep generate and import for backward compatibility (they redirect to add)
+pub mod generate;
+pub mod import;
+
 use anyhow::Result;
-use clap::Subcommand;
+use cipherbft_crypto::KeyringBackend;
+use clap::{Subcommand, ValueEnum};
 use std::path::PathBuf;
 
-/// Key management subcommands
+/// Keyring backend selection for CLI
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum KeyringBackendArg {
+    /// File-based encrypted keystore (EIP-2335 format) - most secure
+    #[default]
+    File,
+    /// Operating system's native keyring (macOS Keychain, Windows Credential Manager, etc.)
+    Os,
+    /// Unencrypted storage for testing - NOT safe for production!
+    Test,
+}
+
+impl From<KeyringBackendArg> for KeyringBackend {
+    fn from(arg: KeyringBackendArg) -> Self {
+        match arg {
+            KeyringBackendArg::File => KeyringBackend::File,
+            KeyringBackendArg::Os => KeyringBackend::Os,
+            KeyringBackendArg::Test => KeyringBackend::Test,
+        }
+    }
+}
+
+/// Key management subcommands (Cosmos SDK style)
 #[derive(Subcommand)]
 pub enum KeysCommand {
-    /// Generate new validator keys from a fresh mnemonic phrase
+    /// Add a new key or recover existing key from mnemonic
     ///
-    /// Creates a new 24-word BIP-39 mnemonic and derives validator keys
-    /// (Ed25519 for consensus, BLS12-381 for data chain). Keys are stored
-    /// in EIP-2335 encrypted keystores protected by a passphrase.
+    /// Creates a new key with a fresh mnemonic, or recovers an existing key
+    /// using --recover. By default, only creates an Ed25519 key. Validators
+    /// should use --validator to also create a BLS key for threshold signatures.
     ///
-    /// IMPORTANT: The mnemonic phrase is shown ONCE. Write it down and
-    /// store it securely - it's the only way to recover your keys.
-    Generate {
-        /// Account index for key derivation (default: 0)
-        #[arg(long, default_value = "0")]
-        account: u32,
+    /// Examples:
+    ///   cipherd keys add mykey                     # New key, Ed25519 only
+    ///   cipherd keys add mykey --validator         # New validator key (Ed25519 + BLS)
+    ///   cipherd keys add mykey --recover           # Recover from mnemonic
+    ///   cipherd keys add mykey --recover --validator  # Recover validator key
+    Add {
+        /// Name for the key (e.g., "my-key", "validator", "default")
+        name: String,
 
-        /// Output directory for keystore files
-        #[arg(long)]
-        output_dir: Option<PathBuf>,
-
-        /// Use an existing mnemonic instead of generating a new one
+        /// Keyring backend for storing keys
         ///
-        /// The mnemonic will be read interactively from the terminal.
-        #[arg(long)]
-        mnemonic: bool,
+        /// - file: EIP-2335 encrypted keystores (default, recommended)
+        /// - os: OS native keyring (macOS Keychain, Windows Credential Manager)
+        /// - test: Unencrypted storage (development only!)
+        #[arg(long, default_value = "file", value_enum)]
+        keyring_backend: KeyringBackendArg,
 
-        /// Read passphrase from file instead of prompting
-        #[arg(long)]
-        passphrase_file: Option<PathBuf>,
-
-        /// Dry run: show what would be created without writing files
-        #[arg(long)]
-        dry_run: bool,
-    },
-
-    /// Import validator keys from an existing mnemonic phrase
-    ///
-    /// Reads a mnemonic phrase and derives validator keys at the specified
-    /// account index. Use this to recover keys or set up a new node from
-    /// an existing mnemonic.
-    Import {
-        /// Account index for key derivation (default: 0)
+        /// Account index for HD key derivation (default: 0)
         #[arg(long, default_value = "0")]
         account: u32,
 
@@ -73,7 +95,22 @@ pub enum KeysCommand {
         #[arg(long)]
         output_dir: Option<PathBuf>,
 
-        /// Read mnemonic from file instead of prompting
+        /// Recover key from existing mnemonic phrase
+        ///
+        /// Instead of generating a new mnemonic, prompts for an existing one.
+        /// Use this to recover keys or set up a new node from an existing mnemonic.
+        #[arg(long)]
+        recover: bool,
+
+        /// Create BLS key in addition to Ed25519 (required for validators)
+        ///
+        /// Validators need both Ed25519 (for consensus signing and p2p identity)
+        /// and BLS12-381 (for DCL threshold signatures). Regular users/nodes
+        /// only need Ed25519.
+        #[arg(long)]
+        validator: bool,
+
+        /// Read mnemonic from file instead of prompting (for --recover)
         #[arg(long)]
         mnemonic_file: Option<PathBuf>,
 
@@ -81,16 +118,58 @@ pub enum KeysCommand {
         #[arg(long)]
         passphrase_file: Option<PathBuf>,
 
-        /// Overwrite existing keystores
+        /// Overwrite existing keys
+        #[arg(long)]
+        force: bool,
+
+        /// Dry run: show what would be created without writing files
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// [Deprecated] Generate new validator keys - use 'add --validator' instead
+    #[command(hide = true)]
+    Generate {
+        #[arg(long, default_value = "file", value_enum)]
+        keyring_backend: KeyringBackendArg,
+        #[arg(long, default_value = "0")]
+        account: u32,
+        #[arg(long)]
+        output_dir: Option<PathBuf>,
+        #[arg(long)]
+        mnemonic: bool,
+        #[arg(long)]
+        passphrase_file: Option<PathBuf>,
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// [Deprecated] Import keys from mnemonic - use 'add --recover' instead
+    #[command(hide = true)]
+    Import {
+        #[arg(long, default_value = "file", value_enum)]
+        keyring_backend: KeyringBackendArg,
+        #[arg(long, default_value = "0")]
+        account: u32,
+        #[arg(long)]
+        output_dir: Option<PathBuf>,
+        #[arg(long)]
+        mnemonic_file: Option<PathBuf>,
+        #[arg(long)]
+        passphrase_file: Option<PathBuf>,
         #[arg(long)]
         force: bool,
     },
 
     /// Export public key information
     ///
-    /// Outputs validator public keys and IDs. Never exports private keys.
+    /// Outputs key public keys and IDs. Never exports private keys.
     /// Useful for sharing validator info with others or for configuration.
     Export {
+        /// Keyring backend to read keys from
+        #[arg(long, default_value = "file", value_enum)]
+        keyring_backend: KeyringBackendArg,
+
         /// Output format (json, text)
         #[arg(long, default_value = "text")]
         format: String,
@@ -106,9 +185,13 @@ pub enum KeysCommand {
 
     /// List all keystores in a directory
     ///
-    /// Shows validator IDs and public keys for all keystores found.
+    /// Shows key names and public keys for all keystores found.
     /// Does not require passphrases (only reads public information).
     List {
+        /// Keyring backend to list keys from
+        #[arg(long, default_value = "file", value_enum)]
+        keyring_backend: KeyringBackendArg,
+
         /// Directory containing keystore files
         #[arg(long)]
         keys_dir: Option<PathBuf>,
@@ -122,42 +205,94 @@ pub enum KeysCommand {
 /// Execute a keys command
 pub fn execute_keys_command(home: &std::path::Path, command: KeysCommand) -> Result<()> {
     match command {
-        KeysCommand::Generate {
+        KeysCommand::Add {
+            name,
+            keyring_backend,
             account,
             output_dir,
-            mnemonic,
+            recover,
+            validator,
+            mnemonic_file,
             passphrase_file,
+            force,
             dry_run,
-        } => generate::execute(
+        } => add::execute(
             home,
+            keyring_backend.into(),
+            &name,
             account,
             output_dir,
-            mnemonic,
+            recover,
+            validator,
+            mnemonic_file,
             passphrase_file,
+            force,
             dry_run,
         ),
 
+        // Deprecated: redirect to add with --validator
+        KeysCommand::Generate {
+            keyring_backend,
+            account,
+            output_dir,
+            mnemonic,
+            passphrase_file,
+            dry_run,
+        } => {
+            eprintln!("WARNING: 'keys generate' is deprecated. Use 'keys add --validator' instead.");
+            add::execute(
+                home,
+                keyring_backend.into(),
+                "validator", // default name for backward compatibility
+                account,
+                output_dir,
+                mnemonic,   // recover flag
+                true,       // validator flag (generate always created both keys)
+                None,       // mnemonic_file
+                passphrase_file,
+                false, // force
+                dry_run,
+            )
+        }
+
+        // Deprecated: redirect to add with --recover --validator
         KeysCommand::Import {
+            keyring_backend,
             account,
             output_dir,
             mnemonic_file,
             passphrase_file,
             force,
-        } => import::execute(
-            home,
-            account,
-            output_dir,
-            mnemonic_file,
-            passphrase_file,
-            force,
-        ),
+        } => {
+            eprintln!(
+                "WARNING: 'keys import' is deprecated. Use 'keys add --recover --validator' instead."
+            );
+            add::execute(
+                home,
+                keyring_backend.into(),
+                "validator", // default name for backward compatibility
+                account,
+                output_dir,
+                true, // recover flag
+                true, // validator flag (import was for validators)
+                mnemonic_file,
+                passphrase_file,
+                force,
+                false, // dry_run
+            )
+        }
 
         KeysCommand::Export {
+            keyring_backend,
             format,
             keys_dir,
             output,
-        } => export::execute(home, &format, keys_dir, output),
+        } => export::execute(home, keyring_backend.into(), &format, keys_dir, output),
 
-        KeysCommand::List { keys_dir, format } => list::execute(home, keys_dir, &format),
+        KeysCommand::List {
+            keyring_backend,
+            keys_dir,
+            format,
+        } => list::execute(home, keyring_backend.into(), keys_dir, &format),
     }
 }

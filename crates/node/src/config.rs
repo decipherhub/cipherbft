@@ -52,6 +52,22 @@ pub const DEFAULT_GENESIS_FILENAME: &str = "genesis.json";
 /// The full default path is `~/.cipherd/keys`.
 pub const DEFAULT_KEYS_DIR: &str = "keys";
 
+/// Default keyring backend.
+pub const DEFAULT_KEYRING_BACKEND: &str = "file";
+
+/// Default key name.
+pub const DEFAULT_KEY_NAME: &str = "default";
+
+/// Serde default function for keyring_backend
+fn default_keyring_backend() -> String {
+    DEFAULT_KEYRING_BACKEND.to_string()
+}
+
+/// Serde default function for key_name
+fn default_key_name() -> String {
+    DEFAULT_KEY_NAME.to_string()
+}
+
 /// Peer configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerConfig {
@@ -71,32 +87,50 @@ pub struct PeerConfig {
 
 /// Node configuration
 ///
-/// Keys are loaded from EIP-2335 encrypted keystores in `keystore_dir`.
+/// Keys are loaded from the keyring backend specified by `keyring_backend`.
 /// For local testing, use `for_local_test()` which returns keypairs separately.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeConfig {
-    /// This node's validator ID
-    pub validator_id: ValidatorId,
+    /// This node's validator ID (derived from BLS key at runtime for validators).
+    ///
+    /// This field is optional and will be derived from the BLS key when starting
+    /// a validator node. For non-validator nodes, this can remain None.
+    #[serde(default)]
+    pub validator_id: Option<ValidatorId>,
 
-    /// Directory containing EIP-2335 encrypted keystores.
+    /// Keyring backend for key storage.
+    ///
+    /// - "file": EIP-2335 encrypted keystores (default, recommended)
+    /// - "os": OS native keyring (macOS Keychain, Windows Credential Manager)
+    /// - "test": Unencrypted storage (development only!)
+    #[serde(default = "default_keyring_backend")]
+    pub keyring_backend: String,
+
+    /// Name of the key to use for this node.
+    ///
+    /// This corresponds to the key name used in `cipherd keys add <name>`.
+    /// If not set, defaults to "default".
+    #[serde(default = "default_key_name")]
+    pub key_name: String,
+
+    /// Directory containing keystore files (for file backend).
     ///
     /// Expected structure:
     /// ```text
     /// {keystore_dir}/
-    ///   validator_0/
-    ///     consensus.json     # Ed25519 keystore
-    ///     data_chain.json    # BLS keystore
-    ///     validator_info.json
+    ///   <key_name>/
+    ///     ed25519.json       # Ed25519 keystore (consensus/p2p)
+    ///     bls.json           # BLS keystore (optional, validators only)
+    ///     key_info.json      # Public key info
     /// ```
     ///
     /// If not set, defaults to `{data_dir}/keys` or `~/.cipherd/keys`.
     #[serde(default)]
     pub keystore_dir: Option<PathBuf>,
 
-    /// Account index within the keystore directory (default: 0).
+    /// Account index for HD key derivation (default: 0).
     ///
-    /// Used to select which validator's keys to load when multiple
-    /// validators exist in the keystore directory.
+    /// Used when deriving keys from a mnemonic phrase.
     #[serde(default)]
     pub keystore_account: Option<u32>,
 
@@ -157,7 +191,9 @@ impl NodeConfig {
 
         let home_dir = PathBuf::from(format!("/tmp/cipherd-{}", index));
         let config = Self {
-            validator_id,
+            validator_id: Some(validator_id),
+            keyring_backend: "test".to_string(),
+            key_name: format!("validator_{}", index),
             keystore_dir: None,
             keystore_account: None,
             primary_listen: format!("127.0.0.1:{}", base_port).parse().unwrap(),
@@ -216,9 +252,25 @@ impl NodeConfig {
         home.join("config").join(DEFAULT_GENESIS_FILENAME)
     }
 
-    /// Check if keystore-based key storage is configured.
-    pub fn has_keystore_config(&self) -> bool {
+    /// Check if key storage is properly configured.
+    ///
+    /// Returns true if either:
+    /// - keystore_dir is set (file backend)
+    /// - keyring_backend is "os" or "test" (doesn't require explicit keystore_dir)
+    pub fn has_key_config(&self) -> bool {
         self.keystore_dir.is_some()
+            || self.keyring_backend == "os"
+            || self.keyring_backend == "test"
+    }
+
+    /// Get the effective key name.
+    pub fn effective_key_name(&self) -> &str {
+        &self.key_name
+    }
+
+    /// Get the keyring backend string.
+    pub fn effective_keyring_backend(&self) -> &str {
+        &self.keyring_backend
     }
 
     /// Resolve the effective keystore directory path.
@@ -275,7 +327,12 @@ pub fn generate_local_configs(n: usize) -> Vec<LocalTestConfig> {
             let ed25519_pubkey_hex = hex::encode(tc.ed25519_keypair.public_key.to_bytes());
 
             PeerConfig {
-                validator_id: hex::encode(tc.config.validator_id.as_bytes()),
+                validator_id: hex::encode(
+                    tc.config
+                        .validator_id
+                        .expect("validator_id should be set in test config")
+                        .as_bytes(),
+                ),
                 bls_public_key_hex: bls_pubkey_hex,
                 ed25519_public_key_hex: ed25519_pubkey_hex,
                 primary_addr: tc.config.primary_listen,
@@ -376,7 +433,7 @@ mod tests {
 
         let config: NodeConfig = serde_json::from_str(json).unwrap();
         assert!(config.genesis_path.is_none());
-        assert!(config.has_keystore_config());
+        assert!(config.has_key_config());
     }
 
     #[test]
@@ -391,11 +448,24 @@ mod tests {
 
     #[test]
     fn test_keystore_config() {
+        // Test with "file" backend - no keystore_dir means no key config
         let mut test_config = NodeConfig::for_local_test(0, 1);
-        assert!(!test_config.config.has_keystore_config());
+        test_config.config.keyring_backend = "file".to_string();
+        test_config.config.keystore_dir = None;
+        assert!(!test_config.config.has_key_config());
 
+        // File backend with keystore_dir has key config
         test_config.config.keystore_dir = Some(PathBuf::from("/path/to/keys"));
-        assert!(test_config.config.has_keystore_config());
+        assert!(test_config.config.has_key_config());
+
+        // Test backend always has key config (uses system keyring, no file path needed)
+        test_config.config.keyring_backend = "test".to_string();
+        test_config.config.keystore_dir = None;
+        assert!(test_config.config.has_key_config());
+
+        // OS backend always has key config (uses system keyring, no file path needed)
+        test_config.config.keyring_backend = "os".to_string();
+        assert!(test_config.config.has_key_config());
     }
 
     #[test]
@@ -445,7 +515,7 @@ mod tests {
         }"#;
 
         let config: NodeConfig = serde_json::from_str(json).unwrap();
-        assert!(config.has_keystore_config());
+        assert!(config.has_key_config());
         assert_eq!(
             config.effective_keystore_dir(),
             PathBuf::from("/path/to/keys")
@@ -461,7 +531,10 @@ mod tests {
         // Verify validator ID matches BLS public key
         let expected_validator_id =
             crate::util::validator_id_from_bls(&test_config.bls_keypair.public_key);
-        assert_eq!(test_config.config.validator_id, expected_validator_id);
+        assert_eq!(
+            test_config.config.validator_id,
+            Some(expected_validator_id)
+        );
     }
 
     #[test]

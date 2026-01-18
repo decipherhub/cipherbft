@@ -5,8 +5,7 @@
 use alloy_primitives::U256;
 use anyhow::{Context, Result};
 use cipherbft_crypto::{
-    derive_validator_keys, BlsKeyPair, BlsSecretKey, Ed25519KeyPair, Ed25519SecretKey,
-    EncryptedKeystore, ExposeSecret, KeystoreBuilder, Mnemonic,
+    BlsKeyPair, BlsSecretKey, Ed25519KeyPair, Ed25519SecretKey, ExposeSecret,
 };
 use cipherd::{
     execute_keys_command, generate_local_configs, GenesisGenerator, GenesisGeneratorConfig,
@@ -411,7 +410,7 @@ fn cmd_init(
     moniker: Option<String>,
     chain_id: u64,
     network_id: &str,
-    initial_stake_eth: u64,
+    _initial_stake_eth: u64,
     overwrite: bool,
 ) -> Result<()> {
     let config_dir = home.join("config");
@@ -425,107 +424,23 @@ fn cmd_init(
         );
     }
 
+    // Create directory structure
     std::fs::create_dir_all(&config_dir)?;
     std::fs::create_dir_all(&data_dir)?;
     std::fs::create_dir_all(&keys_dir)?;
 
-    // Generate a new mnemonic
-    println!("Generating new 24-word mnemonic phrase...");
-    let mnemonic =
-        Mnemonic::generate().map_err(|e| anyhow::anyhow!("Failed to generate mnemonic: {}", e))?;
+    // Generate a random node identifier for the moniker (not validator ID)
+    let node_id: [u8; 4] = rand::random();
+    let node_moniker = moniker.unwrap_or_else(|| format!("node-{}", hex::encode(node_id)));
 
-    // Display mnemonic warning
-    println!();
-    println!("=============================================================================");
-    println!("  IMPORTANT: Write down this mnemonic phrase and store it safely!");
-    println!("  This is the ONLY time it will be displayed.");
-    println!("=============================================================================");
-    println!();
-    println!("  {}", mnemonic.phrase());
-    println!();
-    println!("=============================================================================");
-    println!();
-
-    // Use a default passphrase for non-interactive initialization
-    // In production, users should use `cipherd keys generate` with a proper passphrase
-    let passphrase = "cipherbft-init-passphrase";
-    println!("Using default passphrase for keystore encryption.");
-    println!("For production use, regenerate keys with: cipherd keys generate");
-    println!();
-
-    // Derive validator keys from mnemonic
-    let account = 0u32;
-    let validator_keys = derive_validator_keys(&mnemonic, account, None)
-        .map_err(|e| anyhow::anyhow!("Key derivation failed: {}", e))?;
-
-    let validator_id = validator_keys.validator_id();
-
-    // Create validator subdirectory
-    let validator_dir = keys_dir.join(format!("validator_{}", account));
-    std::fs::create_dir_all(&validator_dir)?;
-
-    // Create consensus (Ed25519) keystore
-    let consensus_path = validator_dir.join("consensus.json");
-    let consensus_secret_bytes = validator_keys.consensus_secret().to_bytes();
-    let consensus_pubkey_hex = hex::encode(validator_keys.consensus_pubkey().to_bytes());
-
-    let consensus_keystore = KeystoreBuilder::new()
-        .secret(&consensus_secret_bytes)
-        .passphrase(passphrase)
-        .pubkey(&consensus_pubkey_hex)
-        .description(&format!(
-            "CipherBFT Consensus Key (Ed25519) - Validator {} - Account {}",
-            hex::encode(&validator_id.0[..8]),
-            account
-        ))
-        .build()
-        .context("Failed to encrypt consensus key")?;
-
-    consensus_keystore
-        .save(&consensus_path)
-        .context("Failed to save consensus keystore")?;
-
-    // Create data chain (BLS) keystore
-    let data_chain_path = validator_dir.join("data_chain.json");
-    let data_chain_secret_bytes = validator_keys.data_chain_secret().to_bytes();
-    let data_chain_pubkey_hex = hex::encode(validator_keys.data_chain_pubkey().to_bytes());
-
-    let data_chain_keystore = KeystoreBuilder::new()
-        .secret(&data_chain_secret_bytes)
-        .passphrase(passphrase)
-        .pubkey(&data_chain_pubkey_hex)
-        .description(&format!(
-            "CipherBFT Data Chain Key (BLS12-381) - Validator {} - Account {}",
-            hex::encode(&validator_id.0[..8]),
-            account
-        ))
-        .build()
-        .context("Failed to encrypt data chain key")?;
-
-    data_chain_keystore
-        .save(&data_chain_path)
-        .context("Failed to save data chain keystore")?;
-
-    // Write validator metadata file (public info only)
-    let metadata_path = validator_dir.join("validator_info.json");
-    let metadata = serde_json::json!({
-        "validator_id": format!("0x{}", hex::encode(validator_id.0)),
-        "account_index": account,
-        "consensus_pubkey": consensus_pubkey_hex,
-        "data_chain_pubkey": data_chain_pubkey_hex,
-        "keystores": {
-            "consensus": "consensus.json",
-            "data_chain": "data_chain.json",
-        }
-    });
-    std::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata)?)?;
-
-    // Create NodeConfig with keystore_dir (no plaintext keys)
+    // Create NodeConfig without validator_id (will be derived at start time from keys)
     let base_port = 9000u16;
     let config = NodeConfig {
-        validator_id,
+        validator_id: None, // Derived at runtime from BLS key
+        keyring_backend: cipherd::DEFAULT_KEYRING_BACKEND.to_string(),
+        key_name: cipherd::DEFAULT_KEY_NAME.to_string(),
         keystore_dir: Some(keys_dir.clone()),
-        keystore_account: Some(account),
+        keystore_account: Some(0),
         primary_listen: format!("127.0.0.1:{}", base_port).parse().unwrap(),
         consensus_listen: format!("127.0.0.1:{}", base_port + 5).parse().unwrap(),
         worker_listens: vec![format!("127.0.0.1:{}", base_port + 1).parse().unwrap()],
@@ -542,24 +457,15 @@ fn cmd_init(
     let config_path = config_dir.join("node.json");
     config.save(&config_path)?;
 
-    let node_moniker =
-        moniker.unwrap_or_else(|| format!("node-{}", hex::encode(&config.validator_id.0[..8])));
-
-    // Generate genesis file from validator keys
-    let genesis_path = config_dir.join("genesis.json");
-    let initial_stake = U256::from(initial_stake_eth) * U256::from(1_000_000_000_000_000_000u128);
-    let initial_balance = U256::from(100u64) * U256::from(1_000_000_000_000_000_000u128);
-
-    let genesis = GenesisGenerator::generate_from_validator_keys(
-        &validator_keys,
-        chain_id,
-        network_id,
-        initial_stake,
-        initial_balance,
-    )?;
-
-    let genesis_json = genesis.to_json()?;
-    std::fs::write(&genesis_path, genesis_json)?;
+    // Write a node info file with basic metadata
+    let node_info_path = config_dir.join("node_info.json");
+    let node_info = serde_json::json!({
+        "moniker": node_moniker,
+        "chain_id": chain_id,
+        "network_id": network_id,
+        "created_at": chrono::Utc::now().to_rfc3339(),
+    });
+    std::fs::write(&node_info_path, serde_json::to_string_pretty(&node_info)?)?;
 
     println!("Successfully initialized node configuration");
     println!();
@@ -568,18 +474,28 @@ fn cmd_init(
     println!("  Chain ID:   {}", chain_id);
     println!("  Network ID: {}", network_id);
     println!("  Config:     {}", config_path.display());
-    println!("  Genesis:    {}", genesis_path.display());
-    println!("  Keys:       {}", keys_dir.display());
+    println!("  Keys dir:   {}", keys_dir.display());
     println!();
-    println!("To start the node:");
-    println!("  cipherd start --home {}", home.display());
+    println!("Next steps:");
     println!();
-    println!("When prompted, enter the passphrase: {}", passphrase);
+    println!("  1. Create validator keys:");
+    println!("     cipherd keys add validator --validator");
+    println!();
+    println!("  2. For a new network, generate genesis:");
+    println!("     cipherd genesis generate --output {}", config_dir.join("genesis.json").display());
+    println!();
+    println!("  3. For joining an existing network, copy the genesis file to:");
+    println!("     {}", config_dir.join("genesis.json").display());
+    println!();
+    println!("  4. Start the node:");
+    println!("     cipherd start --home {}", home.display());
 
     Ok(())
 }
 
 async fn cmd_start(config_path: PathBuf, genesis_override: Option<PathBuf>) -> Result<()> {
+    use cipherbft_crypto::{Keyring, KeyringBackend};
+
     if !config_path.exists() {
         anyhow::bail!(
             "Configuration file not found: {}\nRun 'cipherd init' first to create configuration.",
@@ -592,69 +508,111 @@ async fn cmd_start(config_path: PathBuf, genesis_override: Option<PathBuf>) -> R
     let mut config = NodeConfig::load(&config_path)?;
 
     // Verify that keystore is configured
-    if !config.has_keystore_config() {
+    if !config.has_key_config() {
         anyhow::bail!(
-            "No keystore_dir configured in {}.\n\
-             Run 'cipherd init' to create a new node with encrypted keystores.",
+            "No keystore configured in {}.\n\
+             Run 'cipherd init' to create a new node,\n\
+             then run 'cipherd keys add' to create keys.",
             config_path.display()
         );
     }
 
-    // Load keypairs from encrypted keystores
-    let keystore_dir = config
-        .keystore_dir
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("keystore_dir not configured"))?;
-    let account = config.keystore_account.unwrap_or(0);
-    let validator_dir = keystore_dir.join(format!("validator_{}", account));
+    // Parse keyring backend from config
+    let keyring_backend: KeyringBackend = config
+        .effective_keyring_backend()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid keyring backend: {}", config.keyring_backend))?;
 
-    let consensus_path = validator_dir.join("consensus.json");
-    let data_chain_path = validator_dir.join("data_chain.json");
-
-    if !consensus_path.exists() || !data_chain_path.exists() {
-        anyhow::bail!(
-            "Keystore files not found in {}.\n\
-             Expected: consensus.json and data_chain.json\n\
-             Run 'cipherd init' to create new keystores.",
-            validator_dir.display()
+    // Warn if using non-production backend
+    if !keyring_backend.is_production_safe() {
+        eprintln!(
+            "WARNING: Using '{}' backend which is NOT safe for production!",
+            keyring_backend
         );
     }
 
-    // Prompt for passphrase
-    let passphrase = rpassword::prompt_password("Enter keystore passphrase: ")
-        .context("Failed to read passphrase")?;
+    // Get keys directory
+    let keys_dir = config.effective_keystore_dir();
+    let key_name = config.effective_key_name();
+    let account = config.effective_keystore_account();
 
-    info!("Loading consensus key from {}", consensus_path.display());
-    let consensus_keystore =
-        EncryptedKeystore::load(&consensus_path).context("Failed to load consensus keystore")?;
-    let consensus_secret_bytes = consensus_keystore
-        .decrypt(&passphrase)
-        .context("Failed to decrypt consensus keystore (wrong passphrase?)")?;
+    info!(
+        "Loading keys from {} (backend: {}, key: {})",
+        keys_dir.display(),
+        keyring_backend,
+        key_name
+    );
 
-    info!("Loading data chain key from {}", data_chain_path.display());
-    let data_chain_keystore =
-        EncryptedKeystore::load(&data_chain_path).context("Failed to load data chain keystore")?;
-    let data_chain_secret_bytes = data_chain_keystore
-        .decrypt(&passphrase)
-        .context("Failed to decrypt data chain keystore (wrong passphrase?)")?;
+    // Create keyring
+    let keyring = Keyring::new(keyring_backend, &keys_dir)
+        .map_err(|e| anyhow::anyhow!("Failed to initialize keyring: {}", e))?;
 
-    // Reconstruct keypairs from decrypted bytes
-    let consensus_secret_vec = consensus_secret_bytes.expose_secret();
-    let consensus_bytes: [u8; 32] = consensus_secret_vec
+    // Key names follow the pattern: {key_name}_{account}_{type}
+    let ed25519_key_name = format!("{}_{}_ed25519", key_name, account);
+    let bls_key_name = format!("{}_{}_bls", key_name, account);
+
+    // Check if keys exist
+    if !keyring.key_exists(&ed25519_key_name) {
+        anyhow::bail!(
+            "Ed25519 key '{}' not found.\n\
+             Run 'cipherd keys add {} --validator' to create keys.",
+            ed25519_key_name,
+            key_name
+        );
+    }
+
+    if !keyring.key_exists(&bls_key_name) {
+        anyhow::bail!(
+            "BLS key '{}' not found.\n\
+             Validators require both Ed25519 and BLS keys.\n\
+             Run 'cipherd keys add {} --validator' to create keys.",
+            bls_key_name,
+            key_name
+        );
+    }
+
+    // Get passphrase if required by the backend
+    let passphrase = if keyring_backend.requires_passphrase() {
+        Some(
+            rpassword::prompt_password("Enter keystore passphrase: ")
+                .context("Failed to read passphrase")?,
+        )
+    } else {
+        None
+    };
+
+    // Load Ed25519 key
+    info!("Loading Ed25519 key: {}", ed25519_key_name);
+    let ed25519_secret_bytes = keyring
+        .get_key(&ed25519_key_name, passphrase.as_deref())
+        .map_err(|e| anyhow::anyhow!("Failed to load Ed25519 key: {}", e))?;
+
+    let ed25519_bytes: [u8; 32] = ed25519_secret_bytes
+        .expose_secret()
         .as_slice()
         .try_into()
-        .map_err(|_| anyhow::anyhow!("Invalid consensus key length, expected 32 bytes"))?;
-    let ed25519_secret = Ed25519SecretKey::from_bytes(&consensus_bytes);
+        .map_err(|_| anyhow::anyhow!("Invalid Ed25519 key length, expected 32 bytes"))?;
+    let ed25519_secret = Ed25519SecretKey::from_bytes(&ed25519_bytes);
     let ed25519_keypair = Ed25519KeyPair::from_secret_key(ed25519_secret);
 
-    let data_chain_secret_vec = data_chain_secret_bytes.expose_secret();
-    let data_chain_bytes: [u8; 32] = data_chain_secret_vec
+    // Load BLS key
+    info!("Loading BLS key: {}", bls_key_name);
+    let bls_secret_bytes = keyring
+        .get_key(&bls_key_name, passphrase.as_deref())
+        .map_err(|e| anyhow::anyhow!("Failed to load BLS key: {}", e))?;
+
+    let bls_bytes: [u8; 32] = bls_secret_bytes
+        .expose_secret()
         .as_slice()
         .try_into()
-        .map_err(|_| anyhow::anyhow!("Invalid data chain key length, expected 32 bytes"))?;
-    let bls_secret = BlsSecretKey::from_bytes(&data_chain_bytes)
+        .map_err(|_| anyhow::anyhow!("Invalid BLS key length, expected 32 bytes"))?;
+    let bls_secret = BlsSecretKey::from_bytes(&bls_bytes)
         .map_err(|e| anyhow::anyhow!("Invalid BLS key: {:?}", e))?;
     let bls_keypair = BlsKeyPair::from_secret_key(bls_secret);
+
+    // Derive validator ID from BLS public key
+    let validator_id = cipherd::util::validator_id_from_bls(&bls_keypair.public_key);
+    info!("Derived validator ID: {:?}", validator_id);
 
     // Override genesis path if provided via CLI
     if genesis_override.is_some() {
@@ -667,7 +625,7 @@ async fn cmd_start(config_path: PathBuf, genesis_override: Option<PathBuf>) -> R
 
     let genesis = GenesisLoader::load_and_validate(&genesis_path)?;
 
-    info!("Starting node with validator ID: {:?}", config.validator_id);
+    info!("Starting node as validator {:?}", validator_id);
 
     // Create node with keypairs and bootstrap validators from genesis
     let mut node = Node::new(config, bls_keypair, ed25519_keypair)?;
@@ -761,7 +719,7 @@ fn cmd_testnet_init_files(
         println!(
             "  Created node{} (validator {:?}, port {})",
             i,
-            tc.config.validator_id,
+            tc.config.validator_id.expect("test config should have validator_id"),
             starting_port + (i as u16 * 10)
         );
     }
@@ -811,11 +769,14 @@ async fn cmd_testnet_start(num_validators: usize, duration: u64) -> Result<()> {
     let test_configs = generate_local_configs(num_validators);
 
     // Collect validator info for cross-registration (both BLS and Ed25519 keys)
+    // Note: test configs always have validator_id set, so unwrap is safe here
     let validator_info: Vec<_> = test_configs
         .iter()
         .map(|tc| {
             (
-                tc.config.validator_id,
+                tc.config
+                    .validator_id
+                    .expect("test config should have validator_id"),
                 tc.bls_keypair.public_key.clone(),
                 tc.ed25519_keypair.public_key.clone(),
             )
@@ -826,7 +787,10 @@ async fn cmd_testnet_start(num_validators: usize, duration: u64) -> Result<()> {
     let mut handles = Vec::new();
 
     for tc in test_configs {
-        let validator_id = tc.config.validator_id;
+        let validator_id = tc
+            .config
+            .validator_id
+            .expect("test config should have validator_id");
         let mut node = Node::new(tc.config, tc.bls_keypair, tc.ed25519_keypair)?;
 
         // Register ALL validators (including ourselves - needed for threshold calculation)

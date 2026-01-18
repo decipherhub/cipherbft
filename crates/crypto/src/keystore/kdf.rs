@@ -1,16 +1,17 @@
 //! Key Derivation Function (KDF) implementation
 //!
 //! Implements scrypt-based key derivation following EIP-2335 specification.
-//! Default parameters (n=262144, r=8, p=1) provide strong security against
-//! brute-force attacks while remaining practical for user-facing operations.
+//! Default parameters use fast settings (n=8192) for development.
+//! For production, consider using n=262144 (2^18) for stronger security.
 
 use serde::{Deserialize, Serialize};
 
 use super::error::{KeystoreError, KeystoreResult};
 use crate::secure::SecretBytes;
 
-/// EIP-2335 standard scrypt parameters
-pub const SCRYPT_N: u32 = 262144; // 2^18 - memory cost
+/// Fast scrypt parameters for development (reduced from EIP-2335 standard)
+/// Production should use N=262144 (2^18) for stronger security
+pub const SCRYPT_N: u32 = 8192; // 2^13 - fast for development
 pub const SCRYPT_R: u32 = 8; // block size
 pub const SCRYPT_P: u32 = 1; // parallelization
 pub const SCRYPT_DKLEN: usize = 32; // derived key length

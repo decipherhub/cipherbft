@@ -5,10 +5,12 @@
 //! - Ed25519 signatures for CL (Consensus Layer, via Malachite) - Voting/Proposals
 //! - ValidatorKeys for dual key management
 //! - Domain separation for cross-context security
+//! - Keyring backends for secure key storage (file, OS, test)
 
 pub mod bls;
 pub mod ed25519;
 pub mod error;
+pub mod keyring;
 pub mod keys;
 pub mod keystore;
 pub mod mnemonic;
@@ -40,3 +42,11 @@ pub use keystore::{EncryptedKeystore, KeystoreBuilder, KeystoreError};
 
 // Mnemonic exports
 pub use mnemonic::{derive_validator_keys, Mnemonic, MnemonicError};
+
+// Keyring exports
+#[cfg(feature = "keychain")]
+pub use keyring::OsKeyring;
+pub use keyring::{
+    FileKeyring, KeyMetadata, Keyring, KeyringBackend, KeyringBackendTrait, KeyringError,
+    KeyringResult, TestKeyring,
+};

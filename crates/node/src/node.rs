@@ -95,13 +95,16 @@ impl Node {
     ) -> Result<Self> {
         let validator_id = validator_id_from_bls(&bls_keypair.public_key);
 
-        // Verify validator ID matches
-        if validator_id != config.validator_id {
-            anyhow::bail!(
-                "Validator ID mismatch: config has {:?}, derived {:?}",
-                config.validator_id,
-                validator_id
-            );
+        // Verify validator ID matches if configured
+        // If not configured, we derive it from the BLS key
+        if let Some(config_vid) = config.validator_id {
+            if validator_id != config_vid {
+                anyhow::bail!(
+                    "Validator ID mismatch: config has {:?}, derived {:?}",
+                    config_vid,
+                    validator_id
+                );
+            }
         }
 
         Ok(Self {

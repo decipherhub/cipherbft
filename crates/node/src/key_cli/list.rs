@@ -3,8 +3,8 @@
 //! Lists all keystores in a directory with their public information.
 
 use super::common::resolve_keys_dir;
-use anyhow::{anyhow, Result};
-use cipherbft_crypto::EncryptedKeystore;
+use anyhow::{anyhow, Context, Result};
+use cipherbft_crypto::{EncryptedKeystore, Keyring, KeyringBackend};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -14,13 +14,20 @@ struct KeystoreInfo {
     account: u32,
     validator_id: Option<String>,
     key_type: String,
-    path: PathBuf,
-    uuid: String,
+    path: Option<PathBuf>,
+    uuid: Option<String>,
     description: Option<String>,
+    pubkey: Option<String>,
+    backend: KeyringBackend,
 }
 
 /// Execute the list command
-pub fn execute(home: &Path, keys_dir: Option<PathBuf>, format: &str) -> Result<()> {
+pub fn execute(
+    home: &Path,
+    keyring_backend: KeyringBackend,
+    keys_dir: Option<PathBuf>,
+    format: &str,
+) -> Result<()> {
     let keys_dir = resolve_keys_dir(home, keys_dir);
 
     if !keys_dir.exists() {
@@ -30,10 +37,45 @@ pub fn execute(home: &Path, keys_dir: Option<PathBuf>, format: &str) -> Result<(
         ));
     }
 
-    // Collect keystore info from all subdirectories
+    // Warn if using test backend
+    if !keyring_backend.is_production_safe() {
+        eprintln!(
+            "WARNING: Using '{}' backend which is NOT safe for production!",
+            keyring_backend
+        );
+    }
+
+    // Collect keystores based on backend type
+    let keystores = match keyring_backend {
+        KeyringBackend::File => list_file_keystores(&keys_dir)?,
+        _ => list_keyring_keys(&keys_dir, keyring_backend)?,
+    };
+
+    if keystores.is_empty() {
+        println!(
+            "No keystores found in {} (backend: {})",
+            keys_dir.display(),
+            keyring_backend
+        );
+        println!();
+        println!("Run 'cipherd keys generate' to create new validator keys.");
+        return Ok(());
+    }
+
+    // Format output
+    match format {
+        "json" => print_json(&keystores)?,
+        _ => print_text(&keystores, &keys_dir, keyring_backend)?,
+    }
+
+    Ok(())
+}
+
+/// List keystores from file backend (EIP-2335 JSON files)
+fn list_file_keystores(keys_dir: &Path) -> Result<Vec<KeystoreInfo>> {
     let mut keystores = Vec::new();
 
-    for entry in fs::read_dir(&keys_dir)? {
+    for entry in fs::read_dir(keys_dir)? {
         let entry = entry?;
         let path = entry.path();
 
@@ -82,21 +124,16 @@ pub fn execute(home: &Path, keys_dir: Option<PathBuf>, format: &str) -> Result<(
                             account,
                             validator_id: validator_id.clone(),
                             key_type: file_name.to_string(),
-                            path: keystore_path,
-                            uuid: keystore.uuid().to_string(),
+                            path: Some(keystore_path),
+                            uuid: Some(keystore.uuid().to_string()),
                             description: keystore.description().map(String::from),
+                            pubkey: Some(keystore.pubkey().to_string()),
+                            backend: KeyringBackend::File,
                         });
                     }
                 }
             }
         }
-    }
-
-    if keystores.is_empty() {
-        println!("No keystores found in {}", keys_dir.display());
-        println!();
-        println!("Run 'cipherd keys generate' to create new validator keys.");
-        return Ok(());
     }
 
     // Sort by account then key type
@@ -106,17 +143,75 @@ pub fn execute(home: &Path, keys_dir: Option<PathBuf>, format: &str) -> Result<(
             .then_with(|| a.key_type.cmp(&b.key_type))
     });
 
-    // Format output
-    match format {
-        "json" => print_json(&keystores)?,
-        _ => print_text(&keystores, &keys_dir)?,
-    }
-
-    Ok(())
+    Ok(keystores)
 }
 
-fn print_text(keystores: &[KeystoreInfo], keys_dir: &Path) -> Result<()> {
-    println!("Keystores in {}", keys_dir.display());
+/// List keys from OS or test keyring backend
+fn list_keyring_keys(
+    keys_dir: &Path,
+    keyring_backend: KeyringBackend,
+) -> Result<Vec<KeystoreInfo>> {
+    let keyring =
+        Keyring::new(keyring_backend, keys_dir).context("Failed to initialize keyring backend")?;
+
+    let keys = keyring.list_keys().context("Failed to list keys")?;
+    let mut keystores = Vec::new();
+
+    for key_name in keys {
+        // Parse account index from key name (e.g., "validator_0_consensus")
+        let account = parse_account_from_key_name(&key_name).unwrap_or(0);
+        let key_type = parse_key_type_from_name(&key_name);
+
+        let metadata = keyring
+            .get_metadata(&key_name)
+            .context(format!("Failed to get metadata for {}", key_name))?;
+
+        keystores.push(KeystoreInfo {
+            account,
+            validator_id: None, // OS/test backends don't store validator_id separately
+            key_type,
+            path: None,
+            uuid: None,
+            description: metadata.description,
+            pubkey: Some(metadata.pubkey),
+            backend: keyring_backend,
+        });
+    }
+
+    // Sort by account then key type
+    keystores.sort_by(|a, b| {
+        a.account
+            .cmp(&b.account)
+            .then_with(|| a.key_type.cmp(&b.key_type))
+    });
+
+    Ok(keystores)
+}
+
+/// Parse account index from key name (e.g., "validator_0_consensus" -> Some(0))
+fn parse_account_from_key_name(name: &str) -> Option<u32> {
+    if name.starts_with("validator_") {
+        let rest = name.strip_prefix("validator_")?;
+        let account_str = rest.split('_').next()?;
+        account_str.parse().ok()
+    } else {
+        None
+    }
+}
+
+/// Parse key type from name (e.g., "validator_0_consensus" -> "consensus")
+fn parse_key_type_from_name(name: &str) -> String {
+    if let Some(rest) = name.strip_prefix("validator_") {
+        // Skip account number and get the rest (e.g., "0_consensus" -> "consensus")
+        if let Some(idx) = rest.find('_') {
+            return rest[idx + 1..].to_string();
+        }
+    }
+    name.to_string()
+}
+
+fn print_text(keystores: &[KeystoreInfo], keys_dir: &Path, backend: KeyringBackend) -> Result<()> {
+    println!("Keystores in {} (backend: {})", keys_dir.display(), backend);
     println!();
 
     let mut current_account: Option<u32> = None;
@@ -137,7 +232,18 @@ fn print_text(keystores: &[KeystoreInfo], keys_dir: &Path) -> Result<()> {
             current_account = Some(ks.account);
         }
 
-        println!("  {} ({})", ks.key_type, ks.uuid);
+        let identifier = ks
+            .uuid
+            .as_ref()
+            .map(|u| format!("uuid: {}", u))
+            .or_else(|| {
+                ks.pubkey
+                    .as_ref()
+                    .map(|p| format!("pubkey: {}...", &p[..32.min(p.len())]))
+            })
+            .unwrap_or_default();
+
+        println!("  {} ({})", ks.key_type, identifier);
         if let Some(desc) = &ks.description {
             if !desc.is_empty() {
                 println!("    {}", desc);
@@ -146,7 +252,7 @@ fn print_text(keystores: &[KeystoreInfo], keys_dir: &Path) -> Result<()> {
     }
 
     println!();
-    println!("Total: {} keystore(s)", keystores.len());
+    println!("Total: {} key(s)", keystores.len());
 
     Ok(())
 }
@@ -159,9 +265,11 @@ fn print_json(keystores: &[KeystoreInfo]) -> Result<()> {
                 "account": ks.account,
                 "validator_id": ks.validator_id,
                 "key_type": ks.key_type,
-                "path": ks.path.display().to_string(),
+                "path": ks.path.as_ref().map(|p| p.display().to_string()),
                 "uuid": ks.uuid,
+                "pubkey": ks.pubkey,
                 "description": ks.description,
+                "backend": ks.backend.to_string(),
             })
         })
         .collect();
