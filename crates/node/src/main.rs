@@ -413,7 +413,8 @@ fn cmd_init(
 ) -> Result<()> {
     let config_dir = home.join("config");
     let data_dir = home.join("data");
-    let keys_dir = data_dir.join("keys");
+    // Keys are stored in {home}/keys (consistent with client.toml and keys commands)
+    let keys_dir = home.join("keys");
 
     if config_dir.exists() && !overwrite {
         anyhow::bail!(
@@ -431,13 +432,26 @@ fn cmd_init(
     let node_id: [u8; 4] = rand::random();
     let node_moniker = moniker.unwrap_or_else(|| format!("node-{}", hex::encode(node_id)));
 
+    // Create client.toml (Cosmos SDK style) for CLI settings
+    let client_config = cipherd::ClientConfig {
+        chain_id: chain_id.to_string(),
+        keyring_backend: cipherd::DEFAULT_KEYRING_BACKEND.to_string(),
+        keyring_dir: String::new(), // Use default: {home}/keys
+        keyring_default_keyname: cipherd::DEFAULT_KEY_NAME.to_string(),
+        output: "text".to_string(),
+        node: "tcp://localhost:26657".to_string(),
+        broadcast_mode: "sync".to_string(),
+    };
+    client_config.save(home)?;
+
     // Create NodeConfig without validator_id (will be derived at start time from keys)
+    // Note: keystore settings are now in client.toml
     let base_port = 9000u16;
     let config = NodeConfig {
         validator_id: None, // Derived at runtime from BLS key
         keyring_backend: cipherd::DEFAULT_KEYRING_BACKEND.to_string(),
         key_name: cipherd::DEFAULT_KEY_NAME.to_string(),
-        keystore_dir: Some(keys_dir.clone()),
+        keystore_dir: None, // Use client.toml settings
         keystore_account: Some(0),
         primary_listen: format!("127.0.0.1:{}", base_port).parse().unwrap(),
         consensus_listen: format!("127.0.0.1:{}", base_port + 5).parse().unwrap(),
@@ -465,14 +479,17 @@ fn cmd_init(
     });
     std::fs::write(&node_info_path, serde_json::to_string_pretty(&node_info)?)?;
 
+    let client_config_path = cipherd::ClientConfig::config_path(home);
+
     println!("Successfully initialized node configuration");
     println!();
-    println!("  Home:       {}", home.display());
-    println!("  Moniker:    {}", node_moniker);
-    println!("  Chain ID:   {}", chain_id);
-    println!("  Network ID: {}", network_id);
-    println!("  Config:     {}", config_path.display());
-    println!("  Keys dir:   {}", keys_dir.display());
+    println!("  Home:         {}", home.display());
+    println!("  Moniker:      {}", node_moniker);
+    println!("  Chain ID:     {}", chain_id);
+    println!("  Network ID:   {}", network_id);
+    println!("  Node config:  {}", config_path.display());
+    println!("  Client config: {}", client_config_path.display());
+    println!("  Keys dir:     {}", keys_dir.display());
     println!();
     println!("Next steps:");
     println!();
@@ -508,21 +525,20 @@ async fn cmd_start(config_path: PathBuf, genesis_override: Option<PathBuf>) -> R
 
     let mut config = NodeConfig::load(&config_path)?;
 
-    // Verify that keystore is configured
-    if !config.has_key_config() {
-        anyhow::bail!(
-            "No keystore configured in {}.\n\
-             Run 'cipherd init' to create a new node,\n\
-             then run 'cipherd keys add' to create keys.",
-            config_path.display()
-        );
-    }
+    // Derive home directory from config path (config_path is typically {home}/config/node.json)
+    let home = config_path
+        .parent() // config/
+        .and_then(|p| p.parent()) // home/
+        .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory from config path"))?;
 
-    // Parse keyring backend from config
-    let keyring_backend: KeyringBackend = config
-        .effective_keyring_backend()
+    // Load client config (Cosmos SDK style) for keyring settings
+    let client_config = cipherd::ClientConfig::load(home)?;
+
+    // Parse keyring backend from client.toml (primary) or node.json (fallback)
+    let keyring_backend_str = client_config.effective_keyring_backend();
+    let keyring_backend: KeyringBackend = keyring_backend_str
         .parse()
-        .map_err(|_| anyhow::anyhow!("Invalid keyring backend: {}", config.keyring_backend))?;
+        .map_err(|_| anyhow::anyhow!("Invalid keyring backend: {}", keyring_backend_str))?;
 
     // Warn if using non-production backend
     if !keyring_backend.is_production_safe() {
@@ -532,9 +548,9 @@ async fn cmd_start(config_path: PathBuf, genesis_override: Option<PathBuf>) -> R
         );
     }
 
-    // Get keys directory
-    let keys_dir = config.effective_keystore_dir();
-    let key_name = config.effective_key_name();
+    // Get keys directory from client.toml (primary source of truth for keyring settings)
+    let keys_dir = client_config.effective_keyring_dir(home);
+    let key_name = client_config.effective_key_name();
     let account = config.effective_keystore_account();
 
     info!(

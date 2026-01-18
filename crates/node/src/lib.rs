@@ -4,6 +4,7 @@
 //! the Data Chain Layer (DCL) with multiple validators communicating
 //! via TCP on localhost.
 
+pub mod client_config;
 pub mod config;
 pub mod execution_bridge;
 pub mod genesis_bootstrap;
@@ -12,6 +13,7 @@ pub mod network;
 pub mod node;
 pub mod util;
 
+pub use client_config::ClientConfig;
 pub use config::{
     generate_keypair, generate_local_configs, LocalTestConfig, NodeConfig, PeerConfig,
     CIPHERD_GENESIS_PATH_ENV, CIPHERD_HOME_ENV, DEFAULT_GENESIS_FILENAME, DEFAULT_HOME_DIR,
