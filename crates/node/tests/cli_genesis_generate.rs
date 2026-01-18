@@ -6,6 +6,8 @@
 //! - Supports all CLI options (validators, chain-id, network-id, etc.)
 //! - Performs generation in under 5 seconds for 100 validators
 
+#![allow(deprecated)] // Command::cargo_bin is deprecated but still works
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::time::Instant;
@@ -149,7 +151,11 @@ fn test_cli_genesis_generate_creates_key_files() {
     // Verify key lengths
     let ed25519_pubkey = key_json["ed25519_pubkey"].as_str().unwrap();
     let bls_pubkey = key_json["bls_pubkey"].as_str().unwrap();
-    assert_eq!(ed25519_pubkey.len(), 64, "Ed25519 pubkey should be 64 hex chars");
+    assert_eq!(
+        ed25519_pubkey.len(),
+        64,
+        "Ed25519 pubkey should be 64 hex chars"
+    );
     assert_eq!(bls_pubkey.len(), 96, "BLS pubkey should be 96 hex chars");
 }
 

@@ -57,6 +57,7 @@ fn minimal_genesis_json() -> &'static str {
 /// Hex values (verified using Rust U256):
 ///   - 64 ETH = 64000000000000000000 wei = 0x3782dace9d900000
 ///   - 32 ETH = 32000000000000000000 wei = 0x1bc16d674ec80000
+///
 /// Total: 64 + 32 + 32 = 128 ETH = 128000000000000000000 wei = 0x6f05b59d3b200000
 fn multi_validator_genesis_json() -> &'static str {
     r#"{

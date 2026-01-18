@@ -5,6 +5,8 @@
 //! - Returns proper exit code (0 on success, 1 on failure)
 //! - Outputs specific error messages for invalid genesis files
 
+#![allow(deprecated)] // Command::cargo_bin is deprecated but still works
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::io::Write;

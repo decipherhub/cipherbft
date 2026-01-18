@@ -11,12 +11,12 @@ use cipherbft_consensus::{
     ConsensusValidator, MalachiteEngineBuilder,
 };
 use cipherbft_crypto::{BlsKeyPair, BlsPublicKey, Ed25519PublicKey};
-use cipherbft_types::genesis::Genesis;
 use cipherbft_data_chain::{
     primary::{Primary, PrimaryConfig, PrimaryEvent},
     Cut, DclMessage,
 };
 use cipherbft_execution::ChainConfig;
+use cipherbft_types::genesis::Genesis;
 use cipherbft_types::ValidatorId;
 use informalsystems_malachitebft_metrics::SharedRegistry;
 use informalsystems_malachitebft_network::{

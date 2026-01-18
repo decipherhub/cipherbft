@@ -130,11 +130,19 @@ pub struct Genesis {
     pub difficulty: U256,
 
     /// Genesis nonce (optional).
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "opt_u256_quantity")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "opt_u256_quantity"
+    )]
     pub nonce: Option<U256>,
 
     /// Genesis timestamp in seconds since epoch.
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "opt_u256_quantity")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "opt_u256_quantity"
+    )]
     pub timestamp: Option<U256>,
 
     /// Extra data field (optional, max 32 bytes).
@@ -556,7 +564,11 @@ pub enum GenesisError {
 
     /// Stake below minimum.
     #[error("Validator {addr} stake {stake} below minimum {min}")]
-    StakeBelowMinimum { addr: Address, stake: U256, min: U256 },
+    StakeBelowMinimum {
+        addr: Address,
+        stake: U256,
+        min: U256,
+    },
 
     /// Zero total stake.
     #[error("Total stake cannot be zero")]
@@ -642,7 +654,10 @@ mod tests {
     fn sample_genesis() -> Genesis {
         let validator = sample_validator();
         let mut alloc = HashMap::new();
-        alloc.insert(validator.address, AllocEntry::new(U256::from(100_000_000_000_000_000_000u128)));
+        alloc.insert(
+            validator.address,
+            AllocEntry::new(U256::from(100_000_000_000_000_000_000u128)),
+        );
 
         Genesis {
             config: GethConfig::new(85300),
@@ -754,7 +769,10 @@ mod tests {
     #[test]
     fn test_total_staked() {
         let genesis = sample_genesis();
-        assert_eq!(genesis.total_staked(), U256::from(32_000_000_000_000_000_000u128));
+        assert_eq!(
+            genesis.total_staked(),
+            U256::from(32_000_000_000_000_000_000u128)
+        );
     }
 
     #[test]
@@ -781,7 +799,10 @@ mod tests {
     #[test]
     fn test_staking_params_defaults() {
         let params = StakingParams::default();
-        assert_eq!(params.min_stake_wei, U256::from(1_000_000_000_000_000_000u128));
+        assert_eq!(
+            params.min_stake_wei,
+            U256::from(1_000_000_000_000_000_000u128)
+        );
         assert_eq!(params.unbonding_period_seconds, 604_800);
     }
 

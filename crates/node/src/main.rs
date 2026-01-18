@@ -773,17 +773,15 @@ fn cmd_genesis(command: GenesisCommands) -> Result<()> {
             output,
             keys_dir,
             no_keys,
-        } => {
-            cmd_genesis_generate(
-                validators,
-                chain_id,
-                &network_id,
-                initial_stake_eth,
-                &output,
-                &keys_dir,
-                no_keys,
-            )
-        }
+        } => cmd_genesis_generate(
+            validators,
+            chain_id,
+            &network_id,
+            initial_stake_eth,
+            &output,
+            &keys_dir,
+            no_keys,
+        ),
     }
 }
 
@@ -842,7 +840,10 @@ fn cmd_genesis_generate(
     println!("  Chain ID:    {}", result.genesis.chain_id());
     println!("  Network ID:  {}", result.genesis.cipherbft.network_id);
     println!("  Validators:  {}", result.genesis.validator_count());
-    println!("  Total Stake: {} ETH", initial_stake_eth * num_validators as u64);
+    println!(
+        "  Total Stake: {} ETH",
+        initial_stake_eth * num_validators as u64
+    );
     println!();
 
     // Print validator info

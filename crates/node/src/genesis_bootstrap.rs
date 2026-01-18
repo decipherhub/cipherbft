@@ -180,10 +180,7 @@ impl GenesisLoader {
         info!("  Network ID:  {}", genesis.cipherbft.network_id);
         info!("  Validators:  {}", genesis.validator_count());
         info!("  Total Stake: {} wei", genesis.total_staked());
-        info!(
-            "  Genesis Time: {}",
-            genesis.cipherbft.genesis_time
-        );
+        info!("  Genesis Time: {}", genesis.cipherbft.genesis_time);
     }
 }
 
@@ -393,7 +390,10 @@ impl GenesisGenerator {
             genesis.total_staked()
         );
 
-        Ok(GenesisGenerationResult { genesis, validators })
+        Ok(GenesisGenerationResult {
+            genesis,
+            validators,
+        })
     }
 
     /// Create a default genesis template with sensible defaults.
@@ -469,11 +469,11 @@ impl ValidatorKeyFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy_primitives::{Address, U256};
     use cipherbft_types::genesis::{
         CipherBftConfig, ConsensusParams, DclParams, GenesisValidator, StakingParams,
     };
     use cipherbft_types::geth::{AllocEntry, GethConfig};
-    use alloy_primitives::{Address, U256};
     use std::collections::HashMap;
     use std::io::Write;
     use tempfile::NamedTempFile;
@@ -715,10 +715,7 @@ mod tests {
 
         let result = GenesisLoader::validate(&genesis);
         assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            GenesisError::MissingField(_)
-        ));
+        assert!(matches!(result.unwrap_err(), GenesisError::MissingField(_)));
     }
 
     #[test]
@@ -846,9 +843,15 @@ mod tests {
         assert_eq!(config.chain_id, 85300);
         assert_eq!(config.network_id, "cipherbft-testnet-1");
         // 32 ETH in wei
-        assert_eq!(config.initial_stake, U256::from(32_000_000_000_000_000_000u128));
+        assert_eq!(
+            config.initial_stake,
+            U256::from(32_000_000_000_000_000_000u128)
+        );
         // 100 ETH in wei
-        assert_eq!(config.initial_balance, U256::from(100_000_000_000_000_000_000u128));
+        assert_eq!(
+            config.initial_balance,
+            U256::from(100_000_000_000_000_000_000u128)
+        );
         // 30M gas
         assert_eq!(config.gas_limit, U256::from(30_000_000u64));
     }
@@ -913,7 +916,10 @@ mod tests {
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
-            GenesisError::InvalidField { field: "num_validators", .. }
+            GenesisError::InvalidField {
+                field: "num_validators",
+                ..
+            }
         ));
     }
 
@@ -925,8 +931,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = GenesisGenerator::generate(&mut rng, config)
-            .expect("should generate genesis");
+        let result = GenesisGenerator::generate(&mut rng, config).expect("should generate genesis");
 
         // Collect all addresses
         let addresses: Vec<_> = result.validators.iter().map(|v| v.address).collect();
@@ -936,7 +941,11 @@ mod tests {
         assert_eq!(addresses.len(), unique_addresses.len());
 
         // Collect all ed25519 pubkeys
-        let pubkeys: Vec<_> = result.validators.iter().map(|v| &v.ed25519_pubkey_hex).collect();
+        let pubkeys: Vec<_> = result
+            .validators
+            .iter()
+            .map(|v| &v.ed25519_pubkey_hex)
+            .collect();
         let unique_pubkeys: std::collections::HashSet<_> = pubkeys.iter().collect();
 
         // All pubkeys should be unique
@@ -948,8 +957,7 @@ mod tests {
         let mut rng = rand::thread_rng();
         let config = GenesisGeneratorConfig::default();
 
-        let result = GenesisGenerator::generate(&mut rng, config)
-            .expect("should generate genesis");
+        let result = GenesisGenerator::generate(&mut rng, config).expect("should generate genesis");
 
         for validator in &result.validators {
             // Ed25519 pubkey: 32 bytes = 64 hex chars
@@ -971,8 +979,8 @@ mod tests {
             ..Default::default()
         };
 
-        let result = GenesisGenerator::generate(&mut rng, config.clone())
-            .expect("should generate genesis");
+        let result =
+            GenesisGenerator::generate(&mut rng, config.clone()).expect("should generate genesis");
 
         // Each validator should have an alloc entry
         for validator in &result.validators {
@@ -991,8 +999,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = GenesisGenerator::generate(&mut rng, config)
-            .expect("should generate genesis");
+        let result = GenesisGenerator::generate(&mut rng, config).expect("should generate genesis");
 
         // Total stake should be 5 * 10 ETH = 50 ETH
         let expected_total = U256::from(50_000_000_000_000_000_000u128);
@@ -1004,8 +1011,7 @@ mod tests {
         let mut rng = rand::thread_rng();
         let config = GenesisGeneratorConfig::default();
 
-        let result = GenesisGenerator::generate(&mut rng, config)
-            .expect("should generate genesis");
+        let result = GenesisGenerator::generate(&mut rng, config).expect("should generate genesis");
 
         // Genesis time should be a valid RFC3339 timestamp
         let genesis_time = &result.genesis.cipherbft.genesis_time;
@@ -1072,8 +1078,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = GenesisGenerator::generate(&mut rng, config)
-            .expect("should generate genesis");
+        let result = GenesisGenerator::generate(&mut rng, config).expect("should generate genesis");
 
         let key_file = ValidatorKeyFile::from_generated(0, &result.validators[0]);
 
@@ -1093,8 +1098,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = GenesisGenerator::generate(&mut rng, config)
-            .expect("should generate genesis");
+        let result = GenesisGenerator::generate(&mut rng, config).expect("should generate genesis");
 
         let key_file = ValidatorKeyFile::from_generated(0, &result.validators[0]);
         let json = key_file.to_json().expect("should serialize to JSON");
@@ -1116,8 +1120,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = GenesisGenerator::generate(&mut rng, config)
-            .expect("should generate genesis");
+        let result = GenesisGenerator::generate(&mut rng, config).expect("should generate genesis");
 
         let key_file = ValidatorKeyFile::from_generated(0, &result.validators[0]);
         let json = key_file.to_json().expect("should serialize");

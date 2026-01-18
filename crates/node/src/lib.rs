@@ -12,8 +12,8 @@ pub mod node;
 pub mod util;
 
 pub use config::{
-    generate_keypair, generate_local_configs, NodeConfig, PeerConfig,
-    CIPHERD_GENESIS_PATH_ENV, DEFAULT_GENESIS_FILENAME,
+    generate_keypair, generate_local_configs, NodeConfig, PeerConfig, CIPHERD_GENESIS_PATH_ENV,
+    DEFAULT_GENESIS_FILENAME,
 };
 pub use execution_bridge::{create_default_bridge, ExecutionBridge};
 pub use genesis_bootstrap::{
