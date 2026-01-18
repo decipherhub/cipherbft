@@ -209,7 +209,11 @@ mod tests {
     fn make_test_validator(seed: u8) -> ConsensusValidator {
         let mut rng = rand::thread_rng();
         let keypair = Ed25519KeyPair::generate(&mut rng);
-        ConsensusValidator::new(keypair.validator_id(), keypair.public_key, seed as u64 * 100)
+        ConsensusValidator::new(
+            keypair.validator_id(),
+            keypair.public_key,
+            seed as u64 * 100,
+        )
     }
 
     #[test]
@@ -241,7 +245,7 @@ mod tests {
     #[test]
     fn test_bounded_deserialization_accepts_valid_size() {
         // Create a small valid set
-        let validators: Vec<ConsensusValidator> = (0..10).map(|i| make_test_validator(i)).collect();
+        let validators: Vec<ConsensusValidator> = (0..10).map(make_test_validator).collect();
         let set = ConsensusValidatorSet::new(validators);
 
         let serialized = bincode::serialize(&set).expect("serialization should succeed");
@@ -275,9 +279,13 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn test_max_validators_constant_is_reasonable() {
         // Ensure MAX_VALIDATORS is set to a reasonable value
-        assert!(MAX_VALIDATORS >= 100, "MAX_VALIDATORS should be at least 100");
+        assert!(
+            MAX_VALIDATORS >= 100,
+            "MAX_VALIDATORS should be at least 100"
+        );
         assert!(
             MAX_VALIDATORS <= 100_000,
             "MAX_VALIDATORS should not exceed 100,000"

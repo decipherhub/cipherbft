@@ -70,7 +70,11 @@ where
         type Value = Vec<Hash>;
 
         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            write!(formatter, "a sequence of at most {} hashes", MAX_SYNC_DIGESTS)
+            write!(
+                formatter,
+                "a sequence of at most {} hashes",
+                MAX_SYNC_DIGESTS
+            )
         }
 
         fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>

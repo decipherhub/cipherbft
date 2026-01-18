@@ -36,7 +36,10 @@ pub enum ConsensusError {
     InvalidConfig(String),
 
     /// Validator set size exceeds maximum allowed.
-    #[error("invalid validator set size: {0} exceeds maximum of {}", MAX_VALIDATORS)]
+    #[error(
+        "invalid validator set size: {0} exceeds maximum of {}",
+        MAX_VALIDATORS
+    )]
     InvalidValidatorSetSize(usize),
 
     /// Collection size exceeds maximum allowed during deserialization.
@@ -104,6 +107,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn test_max_validators_constant() {
         // Ensure the constant is reasonable (between 100 and 100,000)
         assert!(MAX_VALIDATORS >= 100);
