@@ -23,6 +23,13 @@ pub mod validator_set;
 #[cfg(feature = "malachite")]
 pub mod vote;
 
+#[cfg(feature = "malachite")]
+pub mod host;
+#[cfg(feature = "malachite")]
+pub mod staking_bridge;
+#[cfg(feature = "malachite")]
+pub mod validator_set_manager;
+
 pub use config::ConsensusConfig;
 pub use types::{ConsensusHeight, ConsensusRound, ConsensusValue};
 
@@ -38,6 +45,18 @@ pub use proposal::{CutProposal, CutProposalPart};
 #[cfg(feature = "malachite")]
 pub use signing::{ConsensusSigner, ConsensusSigningProvider};
 #[cfg(feature = "malachite")]
-pub use validator_set::ConsensusValidatorSet;
+pub use validator_set::{ConsensusAddress, ConsensusValidator, ConsensusValidatorSet};
 #[cfg(feature = "malachite")]
 pub use vote::ConsensusVote;
+
+#[cfg(feature = "malachite")]
+pub use host::{CipherBftHost, HostConfig};
+#[cfg(feature = "malachite")]
+pub use staking_bridge::{
+    ConsensusValidatorProvider, EpochTransitionTrigger, ValidatorSetEvent, ValidatorSetObserver,
+};
+#[cfg(feature = "malachite")]
+pub use validator_set_manager::{
+    EpochConfig, EpochValidatorSet, InMemoryValidatorSetStorage, ValidatorSetManager,
+    ValidatorSetStorageProvider,
+};
