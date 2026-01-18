@@ -6,6 +6,24 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+/// Environment variable for genesis file path override.
+///
+/// When set, this environment variable takes precedence over the config file's
+/// `genesis_path` field. This enables container-friendly deployments where
+/// paths are injected at runtime.
+///
+/// # Example
+///
+/// ```bash
+/// CIPHERD_GENESIS_PATH=/etc/cipherd/genesis.json cipherd start
+/// ```
+pub const CIPHERD_GENESIS_PATH_ENV: &str = "CIPHERD_GENESIS_PATH";
+
+/// Default genesis file path relative to the data directory.
+///
+/// The full default path is `~/.cipherd/config/genesis.json`.
+pub const DEFAULT_GENESIS_FILENAME: &str = "config/genesis.json";
+
 /// Peer configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerConfig {
@@ -44,6 +62,12 @@ pub struct NodeConfig {
     pub num_workers: usize,
     /// Data directory
     pub data_dir: PathBuf,
+    /// Path to the genesis file.
+    ///
+    /// Defaults to `{data_dir}/config/genesis.json`. Can be overridden by
+    /// the `CIPHERD_GENESIS_PATH` environment variable.
+    #[serde(default)]
+    pub genesis_path: Option<PathBuf>,
     /// Car creation interval (ms)
     pub car_interval_ms: u64,
     /// Maximum transactions per batch
@@ -71,10 +95,40 @@ impl NodeConfig {
             peers: Vec::new(), // Will be populated after all nodes are created
             num_workers: 1,
             data_dir: PathBuf::from(format!("/tmp/cipherd-{}", index)),
+            genesis_path: None, // Uses default: {data_dir}/config/genesis.json
             car_interval_ms: 100,
             max_batch_txs: 100,
             max_batch_bytes: 1024 * 1024, // 1MB
         }
+    }
+
+    /// Resolve the effective genesis file path.
+    ///
+    /// Resolution order (highest priority first):
+    /// 1. `CIPHERD_GENESIS_PATH` environment variable
+    /// 2. `genesis_path` field in config (if set)
+    /// 3. Default: `{data_dir}/config/genesis.json`
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let config = NodeConfig::load(&path)?;
+    /// let genesis_path = config.effective_genesis_path();
+    /// println!("Loading genesis from: {}", genesis_path.display());
+    /// ```
+    pub fn effective_genesis_path(&self) -> PathBuf {
+        // 1. Check environment variable first
+        if let Ok(env_path) = std::env::var(CIPHERD_GENESIS_PATH_ENV) {
+            return PathBuf::from(env_path);
+        }
+
+        // 2. Use configured path if set
+        if let Some(ref configured_path) = self.genesis_path {
+            return configured_path.clone();
+        }
+
+        // 3. Fall back to default: {data_dir}/config/genesis.json
+        self.data_dir.join(DEFAULT_GENESIS_FILENAME)
     }
 
     /// Generate BLS keypair from config
@@ -168,4 +222,89 @@ pub fn generate_local_configs(n: usize) -> Vec<NodeConfig> {
     }
 
     configs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use std::sync::Mutex;
+
+    // Mutex to serialize tests that modify environment variables
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn test_effective_genesis_path_default() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Ensure env var is not set
+        env::remove_var(CIPHERD_GENESIS_PATH_ENV);
+
+        let config = NodeConfig::for_local_test(0, 1);
+        let expected = config.data_dir.join(DEFAULT_GENESIS_FILENAME);
+        assert_eq!(config.effective_genesis_path(), expected);
+    }
+
+    #[test]
+    fn test_effective_genesis_path_configured() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Ensure env var is not set
+        env::remove_var(CIPHERD_GENESIS_PATH_ENV);
+
+        let mut config = NodeConfig::for_local_test(0, 1);
+        let custom_path = PathBuf::from("/custom/genesis.json");
+        config.genesis_path = Some(custom_path.clone());
+
+        assert_eq!(config.effective_genesis_path(), custom_path);
+    }
+
+    #[test]
+    fn test_effective_genesis_path_env_override() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+
+        let env_path = "/env/override/genesis.json";
+        env::set_var(CIPHERD_GENESIS_PATH_ENV, env_path);
+
+        let mut config = NodeConfig::for_local_test(0, 1);
+        // Even with configured path, env var takes precedence
+        config.genesis_path = Some(PathBuf::from("/custom/genesis.json"));
+
+        let result = config.effective_genesis_path();
+
+        // Clean up env var before assertion (so it's cleaned even if assertion fails)
+        env::remove_var(CIPHERD_GENESIS_PATH_ENV);
+
+        assert_eq!(result, PathBuf::from(env_path));
+    }
+
+    #[test]
+    fn test_genesis_path_field_optional_in_serde() {
+        // Test that genesis_path is optional in JSON (backwards compatibility)
+        let json = r#"{
+            "validator_id": "0000000000000000000000000000000000000000",
+            "bls_secret_key_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+            "ed25519_secret_key_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+            "primary_listen": "127.0.0.1:9000",
+            "consensus_listen": "127.0.0.1:9005",
+            "worker_listens": ["127.0.0.1:9001"],
+            "peers": [],
+            "num_workers": 1,
+            "data_dir": "/tmp/cipherd-0",
+            "car_interval_ms": 100,
+            "max_batch_txs": 100,
+            "max_batch_bytes": 1048576
+        }"#;
+
+        let config: NodeConfig = serde_json::from_str(json).unwrap();
+        assert!(config.genesis_path.is_none());
+    }
+
+    #[test]
+    fn test_genesis_path_serialization() {
+        let mut config = NodeConfig::for_local_test(0, 1);
+        config.genesis_path = Some(PathBuf::from("/custom/genesis.json"));
+
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("genesis_path"));
+        assert!(json.contains("/custom/genesis.json"));
+    }
 }

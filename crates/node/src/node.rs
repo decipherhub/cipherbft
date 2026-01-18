@@ -11,6 +11,7 @@ use cipherbft_consensus::{
     ConsensusValidator, MalachiteEngineBuilder,
 };
 use cipherbft_crypto::{BlsKeyPair, BlsPublicKey, Ed25519PublicKey};
+use cipherbft_types::genesis::Genesis;
 use cipherbft_data_chain::{
     primary::{Primary, PrimaryConfig, PrimaryEvent},
     Cut, DclMessage,
@@ -126,6 +127,118 @@ impl Node {
         );
     }
 
+    /// Bootstrap validators from genesis file (T029).
+    ///
+    /// Parses validator public keys from genesis and adds them to the node's
+    /// validator set with voting power derived from staked amounts.
+    ///
+    /// # Arguments
+    ///
+    /// * `genesis` - Validated genesis configuration
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Ed25519 public key parsing fails (invalid hex or length)
+    /// - BLS public key parsing fails (invalid hex or length)
+    pub fn bootstrap_validators_from_genesis(&mut self, genesis: &Genesis) -> Result<()> {
+        let total_stake = genesis.total_staked();
+
+        info!(
+            "Bootstrapping {} validators from genesis (total stake: {} wei)",
+            genesis.validator_count(),
+            total_stake
+        );
+
+        for validator in &genesis.cipherbft.validators {
+            // Parse Ed25519 public key (strip 0x prefix if present)
+            let ed25519_hex = validator.ed25519_pubkey.trim_start_matches("0x");
+            let ed25519_bytes = hex::decode(ed25519_hex).map_err(|e| {
+                anyhow::anyhow!(
+                    "Invalid Ed25519 public key hex for {}: {}",
+                    validator.address,
+                    e
+                )
+            })?;
+
+            if ed25519_bytes.len() != 32 {
+                anyhow::bail!(
+                    "Ed25519 public key for {} must be 32 bytes, got {}",
+                    validator.address,
+                    ed25519_bytes.len()
+                );
+            }
+
+            let mut ed25519_arr = [0u8; 32];
+            ed25519_arr.copy_from_slice(&ed25519_bytes);
+            let ed25519_pubkey = Ed25519PublicKey::from_bytes(&ed25519_arr).map_err(|e| {
+                anyhow::anyhow!(
+                    "Invalid Ed25519 public key for {}: {:?}",
+                    validator.address,
+                    e
+                )
+            })?;
+
+            // Parse BLS public key (strip 0x prefix if present)
+            let bls_hex = validator.bls_pubkey.trim_start_matches("0x");
+            let bls_bytes = hex::decode(bls_hex).map_err(|e| {
+                anyhow::anyhow!(
+                    "Invalid BLS public key hex for {}: {}",
+                    validator.address,
+                    e
+                )
+            })?;
+
+            if bls_bytes.len() != 48 {
+                anyhow::bail!(
+                    "BLS public key for {} must be 48 bytes, got {}",
+                    validator.address,
+                    bls_bytes.len()
+                );
+            }
+
+            let mut bls_arr = [0u8; 48];
+            bls_arr.copy_from_slice(&bls_bytes);
+            let bls_pubkey = BlsPublicKey::from_bytes(&bls_arr).map_err(|e| {
+                anyhow::anyhow!("Invalid BLS public key for {}: {:?}", validator.address, e)
+            })?;
+
+            // Derive validator ID from BLS public key
+            let validator_id = validator_id_from_bls(&bls_pubkey);
+
+            // Calculate voting power from stake (proportional to total stake)
+            // Scale to reasonable voting power values (avoid overflow)
+            let voting_power = if total_stake.is_zero() {
+                100u64 // Default if no stake
+            } else {
+                // voting_power = (stake * 10000) / total_stake
+                // This gives voting power proportional to stake share
+                // with 10000 as the scaling factor for precision
+                let stake_u128: u128 = validator.staked_amount.try_into().unwrap_or(u128::MAX);
+                let total_u128: u128 = total_stake.try_into().unwrap_or(u128::MAX);
+                let power = (stake_u128.saturating_mul(10000)) / total_u128.max(1);
+                power.max(1) as u64 // Ensure at least 1 voting power
+            };
+
+            debug!(
+                "Adding validator {} (stake: {}, voting_power: {})",
+                validator.address, validator.staked_amount, voting_power
+            );
+
+            self.validators.insert(
+                validator_id,
+                ValidatorInfo::with_voting_power(bls_pubkey, ed25519_pubkey, voting_power),
+            );
+        }
+
+        info!(
+            "Bootstrapped {} validators from genesis",
+            self.validators.len()
+        );
+
+        Ok(())
+    }
+
     /// Enable execution layer integration
     ///
     /// Must be called before `run()` to enable Cut execution.
@@ -206,7 +319,9 @@ impl Node {
 
         // Create Consensus context and validators
         // Build validator set from all known validators using their Ed25519 public keys
-        let chain_id = "cipherbft-test";
+        // Chain ID: cipherbft-testnet-1 (Cosmos-style for consensus layer)
+        // Note: For EVM execution layer, use numeric chain ID 84530001
+        let chain_id = "cipherbft-testnet-1";
 
         // Start with ourselves
         let mut consensus_validators = vec![ConsensusValidator::new(

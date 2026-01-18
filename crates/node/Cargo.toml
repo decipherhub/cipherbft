@@ -19,6 +19,9 @@ cipherbft-storage = { path = "../storage" }
 cipherbft-execution = { path = "../execution" }
 cipherbft-consensus = { path = "../consensus", features = ["malachite"] }
 
+# Ethereum primitives (for genesis types in tests)
+alloy-primitives = { version = "1", features = ["serde"] }
+
 # Async runtime
 tokio = { workspace = true, features = ["full", "signal"] }
 async-trait = { workspace = true }
@@ -46,9 +49,15 @@ anyhow = "1.0"
 rand = { workspace = true }
 hex = { workspace = true }
 
+# Time handling (for genesis generation)
+chrono = { workspace = true }
+
 # Malachite BFT (for consensus actor refs)
 informalsystems-malachitebft-metrics = { workspace = true }
 informalsystems-malachitebft-network = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# CLI testing (T041-T042)
+assert_cmd = "2.0"
+predicates = "3.0"
