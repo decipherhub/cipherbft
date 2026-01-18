@@ -9,6 +9,7 @@ description = "CipherBFT JSON-RPC Server - Ethereum-compatible RPC interface"
 [dependencies]
 # Internal dependencies
 cipherbft-types = { path = "../types" }
+cipherbft-execution = { path = "../execution" }
 
 # Async runtime
 tokio = { workspace = true, features = ["full", "sync"] }
