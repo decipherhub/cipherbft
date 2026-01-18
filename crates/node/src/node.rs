@@ -552,4 +552,8 @@ impl cipherbft_data_chain::primary::PrimaryNetwork for TcpPrimaryNetworkAdapter 
     async fn broadcast(&self, message: &DclMessage) {
         self.network.broadcast(message).await;
     }
+
+    async fn send_to(&self, peer: ValidatorId, message: &DclMessage) {
+        self.network.send_to(peer, message).await;
+    }
 }
