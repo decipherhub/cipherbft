@@ -31,8 +31,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, BytesMut};
 use cipherbft_data_chain::{
-    primary::runner::PrimaryNetwork, worker::core::WorkerNetwork, Attestation, Car, DclMessage,
-    WorkerMessage,
+    error::MAX_MESSAGE_SIZE, primary::runner::PrimaryNetwork, worker::core::WorkerNetwork,
+    Attestation, Car, DclMessage, WorkerMessage,
 };
 use cipherbft_types::ValidatorId;
 use std::collections::HashMap;
@@ -45,8 +45,6 @@ use tracing::{debug, error, info, warn};
 
 /// Message frame header size (4 bytes for length)
 const HEADER_SIZE: usize = 4;
-/// Maximum message size (10MB)
-const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
 
 /// Network message types
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -142,7 +140,7 @@ impl TcpPrimaryNetwork {
             // Try to parse messages
             while buf.len() >= HEADER_SIZE {
                 let len = (&buf[..HEADER_SIZE]).get_u32() as usize;
-                if len > MAX_MESSAGE_SIZE {
+                if (len as u64) > MAX_MESSAGE_SIZE {
                     anyhow::bail!("Message too large: {}", len);
                 }
 
