@@ -1,11 +1,8 @@
 //! Custom precompile provider for CipherBFT.
 //!
-//! MIGRATION(revm33): Implements PrecompileProvider trait pattern for stateful precompiles.
-//! This replaces the previous adapter pattern which assumed a non-existent Precompile::Standard enum.
-//!
-//! The PrecompileProvider trait allows precompiles to access full transaction and block context,
-//! which is essential for our staking precompile that needs caller address, transaction value,
-//! and block number.
+//! Implements the PrecompileProvider trait for stateful precompiles.
+//! The provider intercepts calls to the staking precompile (0x100) and delegates
+//! all other addresses to the standard Ethereum precompile set.
 
 use crate::precompiles::StakingPrecompile;
 use alloy_primitives::Address;
@@ -56,7 +53,6 @@ impl CipherBftPrecompileProvider {
 
 /// Implement the PrecompileProvider trait for context-aware precompile execution.
 ///
-/// MIGRATION(revm33): This is the correct pattern for stateful precompiles.
 /// The trait provides access to the full execution context via the CTX type parameter,
 /// allowing precompiles to read transaction data and block information.
 impl<CTX> PrecompileProvider<CTX> for CipherBftPrecompileProvider
@@ -115,8 +111,8 @@ where
 
 /// Execute the staking precompile with full context access.
 ///
-/// MIGRATION(revm33): This function bridges between revm's PrecompileProvider API
-/// and our StakingPrecompile::run() method by extracting context from the CTX parameter.
+/// This function bridges between revm's PrecompileProvider API and our
+/// StakingPrecompile::run() method by extracting context from the CTX parameter.
 ///
 /// # Arguments
 /// * `staking` - The staking precompile instance
@@ -134,8 +130,7 @@ where
     CTX: ContextTr,
 {
     // Extract input bytes from CallInputs
-    // MIGRATION(revm33): Input is accessed via the CallInputs enum
-    // We need to copy to owned Bytes due to lifetime constraints
+    // Copy to owned Bytes due to lifetime constraints
     let input_bytes_owned = match &inputs.input {
         revm::interpreter::CallInput::SharedBuffer(range) => {
             // Access shared memory through context.local()
@@ -151,7 +146,6 @@ where
     };
 
     // Extract transaction context
-    // MIGRATION(revm33): Context access via trait methods instead of direct field access
     let caller = context.tx().caller();
     let value = context.tx().value();
     let block_number = context.block().number().to::<u64>();
@@ -168,7 +162,6 @@ where
         .map_err(|e| format!("Staking precompile error: {e:?}"))?;
 
     // Convert PrecompileResult to InterpreterResult
-    // MIGRATION(revm33): Return type changed from PrecompileResult to InterpreterResult
     let mut interpreter_result = InterpreterResult {
         result: if result.reverted {
             InstructionResult::Revert

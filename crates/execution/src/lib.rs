@@ -52,8 +52,10 @@ pub mod engine;
 pub mod error;
 pub mod evm;
 pub mod genesis;
+pub mod mpt;
 pub mod precompiles;
 pub mod receipts;
+pub mod rlp;
 pub mod state;
 pub mod types;
 
@@ -65,7 +67,7 @@ pub use evm::{
     CipherBftEvmConfig, TransactionResult, CIPHERBFT_CHAIN_ID, DEFAULT_BASE_FEE_PER_GAS,
     DEFAULT_BLOCK_GAS_LIMIT, MIN_STAKE_AMOUNT, UNBONDING_PERIOD_SECONDS,
 };
-// MIGRATION(revm33): STAKING_PRECOMPILE_ADDRESS moved from evm to precompiles::provider
+pub use mpt::{compute_state_root, compute_state_root_from_entries, compute_storage_root};
 pub use precompiles::{
     CipherBftPrecompileProvider, StakingPrecompile, StakingState, ValidatorInfo,
     STAKING_PRECOMPILE_ADDRESS,
@@ -74,6 +76,7 @@ pub use receipts::{
     aggregate_bloom, compute_logs_bloom_from_transactions, compute_receipts_root,
     compute_transactions_root, logs_bloom,
 };
+pub use rlp::{rlp_encode_account, rlp_encode_storage_value, RlpAccount, KECCAK_EMPTY};
 pub use state::StateManager;
 pub use types::{
     BlockHeader, BlockInput, Car, ChainConfig, ConsensusBlock, Cut, ExecutionBlock,

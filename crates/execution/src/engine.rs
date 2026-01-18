@@ -20,7 +20,6 @@ use crate::{
 use alloy_consensus::Header as AlloyHeader;
 use alloy_primitives::{Address, Bytes, B256, B64, U256};
 use parking_lot::RwLock;
-// MIGRATION(revm33): SpecId is at revm::primitives::hardfork::SpecId
 use revm::primitives::hardfork::SpecId;
 use std::sync::Arc;
 
@@ -342,14 +341,85 @@ impl<P: Provider + Clone> ExecutionLayer for ExecutionEngine<P> {
     }
 
     fn validate_transaction(&self, tx: &Bytes) -> Result<()> {
-        // Parse transaction to ensure it's valid RLP
-        let _ = self.evm_config.tx_env(tx)?;
+        // 1. Parse and recover sender (includes signature verification)
+        // tx_env() internally performs:
+        //   - RLP decoding of the transaction envelope
+        //   - Signature hash computation
+        //   - ECDSA signature recovery to get sender address
+        // If any of these fail, an error is returned
+        let (tx_env, _tx_hash, sender, _to) = self.evm_config.tx_env(tx)?;
 
-        // TODO: Add additional validation:
-        // - Signature verification
-        // - Nonce validation
-        // - Balance check for gas payment
-        // - Gas limit validation
+        // 2. Validate chain ID (EIP-155 replay protection)
+        if let Some(tx_chain_id) = tx_env.chain_id {
+            if tx_chain_id != self.evm_config.chain_id {
+                return Err(ExecutionError::invalid_transaction(format!(
+                    "Chain ID mismatch: expected {}, got {}",
+                    self.evm_config.chain_id, tx_chain_id
+                )));
+            }
+        }
+
+        // 3. Validate gas limit
+        if tx_env.gas_limit == 0 {
+            return Err(ExecutionError::invalid_transaction(
+                "Gas limit cannot be zero",
+            ));
+        }
+        if tx_env.gas_limit > self.evm_config.block_gas_limit {
+            return Err(ExecutionError::invalid_transaction(format!(
+                "Gas limit exceeds block limit: {} > {}",
+                tx_env.gas_limit, self.evm_config.block_gas_limit
+            )));
+        }
+
+        // 4. Get sender account from database
+        let account = self.database.get_account(sender)?;
+
+        // 5. Validate nonce
+        // For mempool validation, we accept nonce >= account.nonce
+        // (allows for pending transactions with future nonces)
+        if let Some(ref acc) = account {
+            if tx_env.nonce < acc.nonce {
+                return Err(ExecutionError::invalid_transaction(format!(
+                    "Nonce too low: have {}, want >= {}",
+                    tx_env.nonce, acc.nonce
+                )));
+            }
+        }
+
+        // 6. Calculate effective gas price (EIP-1559 compatible)
+        let effective_gas_price = match tx_env.gas_priority_fee {
+            Some(priority_fee) => {
+                // EIP-1559 transaction: effective = min(max_fee, base_fee + priority_fee)
+                let base_fee = self.evm_config.base_fee_per_gas as u128;
+                let max_fee = tx_env.gas_price;
+                std::cmp::min(max_fee, base_fee + priority_fee)
+            }
+            None => {
+                // Legacy transaction: effective = gas_price
+                tx_env.gas_price
+            }
+        };
+
+        // 7. Validate balance covers gas cost + transfer value
+        // gas_cost = gas_limit * effective_gas_price
+        // total_cost = gas_cost + value
+        let gas_cost = U256::from(tx_env.gas_limit) * U256::from(effective_gas_price);
+        let total_cost = gas_cost + tx_env.value;
+
+        if let Some(ref acc) = account {
+            if acc.balance < total_cost {
+                return Err(ExecutionError::invalid_transaction(format!(
+                    "Insufficient balance: have {}, need {}",
+                    acc.balance, total_cost
+                )));
+            }
+        } else if !total_cost.is_zero() {
+            // Account doesn't exist and transaction requires funds
+            return Err(ExecutionError::invalid_transaction(
+                "Sender account not found",
+            ));
+        }
 
         Ok(())
     }
