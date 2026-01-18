@@ -130,13 +130,13 @@ impl EpochConfig {
     /// Check if a height is at an epoch boundary (last block of epoch).
     #[inline]
     pub fn is_epoch_boundary(&self, height: ConsensusHeight) -> bool {
-        height.0 > 0 && height.0 % self.epoch_length == 0
+        height.0 > 0 && height.0.is_multiple_of(self.epoch_length)
     }
 
     /// Check if a height is the first block of an epoch.
     #[inline]
     pub fn is_epoch_start(&self, height: ConsensusHeight) -> bool {
-        height.0 > 0 && (height.0 - 1) % self.epoch_length == 0
+        height.0 > 0 && (height.0 - 1).is_multiple_of(self.epoch_length)
     }
 }
 

@@ -225,17 +225,10 @@ pub struct HostArgs {
 }
 
 /// State maintained by the host actor.
+#[derive(Default)]
 pub struct HostState {
     /// Current height being processed.
     current_height: Option<ConsensusHeight>,
-}
-
-impl Default for HostState {
-    fn default() -> Self {
-        Self {
-            current_height: None,
-        }
-    }
 }
 
 /// Ractor Actor implementation for CipherBftHost.
