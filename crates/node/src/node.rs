@@ -314,6 +314,8 @@ impl Node {
         // Get Ed25519 keypair for Consensus
         let ed25519_keypair = self.config.ed25519_keypair()?;
         let ed25519_pubkey = ed25519_keypair.public_key.clone();
+        // Extract secret key bytes before moving keypair (needed for libp2p Keypair)
+        let ed25519_secret_bytes = ed25519_keypair.secret_key.to_bytes();
         let consensus_signer = ConsensusSigner::new(ed25519_keypair);
         let signing_provider = ConsensusSigningProvider::new(consensus_signer);
 
@@ -348,9 +350,15 @@ impl Node {
         // Create metrics registry for consensus actors
         let metrics = SharedRegistry::global().with_moniker("cipherbft-consensus");
 
-        // Generate libp2p keypair from Ed25519 key for consensus network
-        // TODO: Use the actual Ed25519 key from config when available
-        let consensus_keypair = Keypair::generate_ed25519();
+        // Create libp2p keypair from Ed25519 secret key for consensus network
+        // This ensures deterministic PeerId across node restarts
+        let consensus_keypair = Keypair::ed25519_from_bytes(ed25519_secret_bytes).map_err(|e| {
+            anyhow::anyhow!("Failed to create libp2p keypair from Ed25519 key: {}", e)
+        })?;
+        info!(
+            "Consensus network PeerId: {}",
+            consensus_keypair.public().to_peer_id()
+        );
 
         // Create network config for consensus p2p layer
         // Convert SocketAddr to Multiaddr format
@@ -361,9 +369,35 @@ impl Node {
         )
         .parse()
         .expect("valid multiaddr from config");
+
+        // Convert peer consensus addresses to Multiaddr format for libp2p
+        let persistent_peers: Vec<Multiaddr> = self
+            .config
+            .peers
+            .iter()
+            .filter_map(|peer| {
+                let addr = &peer.consensus_addr;
+                let multiaddr_str = format!("/ip4/{}/tcp/{}", addr.ip(), addr.port());
+                match multiaddr_str.parse::<Multiaddr>() {
+                    Ok(multiaddr) => Some(multiaddr),
+                    Err(e) => {
+                        warn!(
+                            "Failed to parse peer consensus address {} as Multiaddr: {}",
+                            addr, e
+                        );
+                        None
+                    }
+                }
+            })
+            .collect();
+        info!(
+            "Configured {} persistent peers for consensus network",
+            persistent_peers.len()
+        );
+
         let network_config = NetworkConfig {
             listen_addr: listen_addr.clone(),
-            persistent_peers: vec![], // TODO: Configure persistent_peers from NodeConfig.peers
+            persistent_peers,
             discovery: DiscoveryConfig::default(),
             idle_connection_timeout: Duration::from_secs(15 * 60),
             transport: TransportProtocol::Tcp,
