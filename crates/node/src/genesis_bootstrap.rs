@@ -427,15 +427,14 @@ impl GenesisGenerator {
         }
     }
 
-    /// Generate a genesis file from an existing NodeConfig.
+    /// Generate a genesis file from ValidatorKeys.
     ///
-    /// This creates a single-validator genesis using the keys already present
-    /// in the NodeConfig. Useful for `cipherd init` to generate both config
-    /// and genesis in one step.
+    /// This creates a single-validator genesis using the provided ValidatorKeys.
+    /// Useful for `cipherd init` when generating genesis from keystore-derived keys.
     ///
     /// # Arguments
     ///
-    /// * `node_config` - The node configuration containing validator keys
+    /// * `validator_keys` - The validator keys (Ed25519 + BLS)
     /// * `chain_id` - The EVM chain ID (e.g., 85300)
     /// * `network_id` - The network identifier string (e.g., "cipherbft-testnet-1")
     /// * `initial_stake` - Initial stake per validator in wei
@@ -445,49 +444,37 @@ impl GenesisGenerator {
     ///
     /// ```rust,ignore
     /// use cipherd::genesis_bootstrap::GenesisGenerator;
-    /// use cipherd::config::NodeConfig;
+    /// use cipherbft_crypto::{Mnemonic, derive_validator_keys};
     ///
-    /// let config = NodeConfig::for_local_test(0, 1);
-    /// let genesis = GenesisGenerator::generate_from_node_config(
-    ///     &config,
+    /// let mnemonic = Mnemonic::generate().unwrap();
+    /// let keys = derive_validator_keys(&mnemonic, 0, None).unwrap();
+    /// let genesis = GenesisGenerator::generate_from_validator_keys(
+    ///     &keys,
     ///     85300,
     ///     "cipherbft-testnet-1",
     ///     32_000_000_000_000_000_000u128.into(),  // 32 ETH
     ///     100_000_000_000_000_000_000u128.into(), // 100 ETH
     /// )?;
     /// ```
-    pub fn generate_from_node_config(
-        node_config: &crate::config::NodeConfig,
+    pub fn generate_from_validator_keys(
+        validator_keys: &ValidatorKeys,
         chain_id: u64,
         network_id: &str,
         initial_stake: U256,
         initial_balance: U256,
     ) -> Result<Genesis, GenesisError> {
         debug!(
-            "Generating genesis from NodeConfig, chain_id={}, network_id={}",
+            "Generating genesis from ValidatorKeys, chain_id={}, network_id={}",
             chain_id, network_id
         );
 
-        // Extract public keys from the NodeConfig's secret keys
-        let bls_keypair = node_config
-            .keypair()
-            .map_err(|e| GenesisError::InvalidField {
-                field: "bls_secret_key_hex",
-                reason: format!("failed to derive BLS keypair: {}", e),
-            })?;
-        let bls_pubkey_hex = hex::encode(bls_keypair.public_key.to_bytes());
-
-        let ed25519_keypair =
-            node_config
-                .ed25519_keypair()
-                .map_err(|e| GenesisError::InvalidField {
-                    field: "ed25519_secret_key_hex",
-                    reason: format!("failed to derive Ed25519 keypair: {}", e),
-                })?;
-        let ed25519_pubkey_hex = hex::encode(ed25519_keypair.public_key.to_bytes());
+        // Extract public keys from ValidatorKeys
+        let bls_pubkey_hex = hex::encode(validator_keys.data_chain_pubkey().to_bytes());
+        let ed25519_pubkey_hex = hex::encode(validator_keys.consensus_pubkey().to_bytes());
 
         // Derive EVM address from validator ID
-        let address = Address::from_slice(&node_config.validator_id.0);
+        let validator_id = validator_keys.validator_id();
+        let address = Address::from_slice(&validator_id.0);
 
         debug!(
             "Validator: address={}, ed25519={:.16}..., bls={:.16}...",
@@ -535,7 +522,7 @@ impl GenesisGenerator {
         genesis.validate()?;
 
         info!(
-            "Genesis generated from NodeConfig: chain_id={}, validator={}",
+            "Genesis generated from ValidatorKeys: chain_id={}, validator={}",
             chain_id, address
         );
 

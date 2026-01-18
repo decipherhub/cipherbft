@@ -49,6 +49,10 @@ anyhow = "1.0"
 rand = { workspace = true }
 hex = { workspace = true }
 
+# Key management CLI (T030-T038)
+rpassword = { workspace = true }
+zeroize = { workspace = true }
+
 # Time handling (for genesis generation)
 chrono = { workspace = true }
 

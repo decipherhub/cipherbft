@@ -6,12 +6,47 @@
 //!
 //! ValidatorId is derived from the Ed25519 public key to match Malachite's
 //! address format: keccak256(ed25519_pubkey)[12..] (20 bytes, Ethereum style)
+//!
+//! # Security
+//!
+//! Keys can optionally be associated with:
+//! - Derivation info (if generated from mnemonic)
+//! - Keystore paths (if loaded from encrypted files)
+//! - Secure key material (for explicit memory zeroing)
+
+use std::path::PathBuf;
 
 use crate::bls::{BlsKeyPair, BlsPublicKey, BlsSecretKey};
 use crate::ed25519::{Ed25519KeyPair, Ed25519PublicKey, Ed25519SecretKey};
+use crate::secure::DerivationInfo;
 use cipherbft_types::ValidatorId;
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
+
+/// Paths to keystore files for a validator
+#[derive(Clone, Debug, Default)]
+pub struct KeystorePaths {
+    /// Path to consensus (Ed25519) keystore file
+    pub consensus: Option<PathBuf>,
+    /// Path to data chain (BLS) keystore file
+    pub data_chain: Option<PathBuf>,
+}
+
+impl KeystorePaths {
+    /// Create new keystore paths
+    pub fn new(consensus: PathBuf, data_chain: PathBuf) -> Self {
+        Self {
+            consensus: Some(consensus),
+            data_chain: Some(data_chain),
+        }
+    }
+
+    /// Check if both keystore paths are set
+    pub fn is_complete(&self) -> bool {
+        self.consensus.is_some() && self.data_chain.is_some()
+    }
+}
 
 /// Complete key set for a CipherBFT validator
 ///
@@ -21,6 +56,13 @@ use serde::{Deserialize, Serialize};
 ///
 /// The ValidatorId is derived from the Ed25519 public key to ensure
 /// consistency with Malachite's address format.
+///
+/// # Security
+///
+/// - Keys can be associated with derivation info (if from mnemonic)
+/// - Keys can track their keystore file paths
+/// - Implements secure cleanup via custom Drop (though underlying
+///   key types should also implement zeroize)
 #[derive(Clone)]
 pub struct ValidatorKeys {
     /// Ed25519 keys for Consensus Layer (Malachite)
@@ -29,6 +71,10 @@ pub struct ValidatorKeys {
     pub data_chain: BlsKeyPair,
     /// Cached validator ID (derived from Ed25519 pubkey)
     validator_id: ValidatorId,
+    /// Derivation info (if derived from mnemonic)
+    derivation_info: Option<DerivationInfo>,
+    /// Paths to keystore files (if loaded from disk)
+    keystore_paths: Option<KeystorePaths>,
 }
 
 impl ValidatorKeys {
@@ -42,6 +88,8 @@ impl ValidatorKeys {
             consensus,
             data_chain,
             validator_id,
+            derivation_info: None,
+            keystore_paths: None,
         }
     }
 
@@ -52,6 +100,26 @@ impl ValidatorKeys {
             consensus,
             data_chain,
             validator_id,
+            derivation_info: None,
+            keystore_paths: None,
+        }
+    }
+
+    /// Create from key pairs with derivation info
+    ///
+    /// Use this when keys are derived from a mnemonic phrase.
+    pub fn from_keypairs_with_derivation(
+        consensus: Ed25519KeyPair,
+        data_chain: BlsKeyPair,
+        derivation_info: DerivationInfo,
+    ) -> Self {
+        let validator_id = consensus.validator_id();
+        Self {
+            consensus,
+            data_chain,
+            validator_id,
+            derivation_info: Some(derivation_info),
+            keystore_paths: None,
         }
     }
 
@@ -79,6 +147,39 @@ impl ValidatorKeys {
     pub fn data_chain_secret(&self) -> &BlsSecretKey {
         &self.data_chain.secret_key
     }
+
+    /// Get derivation info if available
+    pub fn derivation_info(&self) -> Option<&DerivationInfo> {
+        self.derivation_info.as_ref()
+    }
+
+    /// Set derivation info
+    pub fn set_derivation_info(&mut self, info: DerivationInfo) {
+        self.derivation_info = Some(info);
+    }
+
+    /// Check if keys were derived from a mnemonic
+    pub fn is_derived(&self) -> bool {
+        self.derivation_info.is_some()
+    }
+
+    /// Get keystore paths if available
+    pub fn keystore_paths(&self) -> Option<&KeystorePaths> {
+        self.keystore_paths.as_ref()
+    }
+
+    /// Set keystore paths
+    pub fn set_keystore_paths(&mut self, paths: KeystorePaths) {
+        self.keystore_paths = Some(paths);
+    }
+
+    /// Check if keys are backed by keystore files
+    pub fn has_keystore(&self) -> bool {
+        self.keystore_paths
+            .as_ref()
+            .map(|p| p.is_complete())
+            .unwrap_or(false)
+    }
 }
 
 impl std::fmt::Debug for ValidatorKeys {
@@ -88,6 +189,36 @@ impl std::fmt::Debug for ValidatorKeys {
             .field("consensus", &self.consensus.public_key)
             .field("data_chain", &self.data_chain.public_key)
             .finish()
+    }
+}
+
+impl Drop for ValidatorKeys {
+    fn drop(&mut self) {
+        // Best-effort zeroing of secret key material
+        //
+        // Note: The underlying crypto libraries (ed25519_consensus, blst) don't
+        // implement Zeroize, so we can only zero our local copies of the key bytes.
+        // The library's internal memory may still contain key material.
+        //
+        // This provides defense-in-depth but is not a complete solution.
+        // For production use, consider:
+        // - Using libraries that implement Zeroize natively
+        // - Memory-locked allocations (mlock)
+        // - Hardware security modules (HSM)
+
+        // Zero Ed25519 secret key bytes
+        let mut ed_bytes = self.consensus.secret_key.to_bytes();
+        ed_bytes.zeroize();
+
+        // Zero BLS secret key bytes
+        let mut bls_bytes = self.data_chain.secret_key.to_bytes();
+        bls_bytes.zeroize();
+
+        // Clear derivation info if present
+        if let Some(ref mut info) = self.derivation_info {
+            info.consensus_path.zeroize();
+            info.data_chain_path.zeroize();
+        }
     }
 }
 

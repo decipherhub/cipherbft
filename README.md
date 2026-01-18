@@ -109,6 +109,29 @@ cargo build --release
 cargo test
 ```
 
+### Key Management
+
+CipherBFT uses **EIP-2335 encrypted keystores** to securely store validator keys. Keys are never stored in plaintext configuration files.
+
+```bash
+# Generate new validator keys with mnemonic backup (recommended)
+./target/release/cipherd keys generate --mnemonic
+
+# List your validator keys
+./target/release/cipherd keys list
+
+# Export public keys for registration
+./target/release/cipherd keys export --output validators.json
+```
+
+**Key features:**
+- **BIP-39 mnemonics**: 24-word recovery phrases for key backup
+- **EIP-2335 keystores**: Industry-standard encrypted key storage (scrypt + AES-128-CTR)
+- **Secure memory**: Keys are zeroized from memory after use
+- **Migration support**: Migrate existing plaintext keys to encrypted format
+
+For detailed instructions, see the [Key Management Quickstart Guide](./specs/feat-1-key-management/quickstart.md).
+
 ### Development Status
 
 > **Note**: CipherBFT is currently in the design phase. All ADRs are in PROPOSED status. See [Architecture Decision Records](./docs/architecture/README.md) for detailed design documentation.

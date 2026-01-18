@@ -10,7 +10,7 @@ use cipherbft_consensus::{
     spawn_network, spawn_wal, ConsensusHeight, ConsensusSigner, ConsensusSigningProvider,
     ConsensusValidator, MalachiteEngineBuilder,
 };
-use cipherbft_crypto::{BlsKeyPair, BlsPublicKey, Ed25519PublicKey};
+use cipherbft_crypto::{BlsKeyPair, BlsPublicKey, Ed25519KeyPair, Ed25519PublicKey};
 use cipherbft_data_chain::{
     primary::{Primary, PrimaryConfig, PrimaryEvent},
     Cut, DclMessage,
@@ -68,8 +68,10 @@ impl ValidatorInfo {
 pub struct Node {
     /// Configuration
     config: NodeConfig,
-    /// BLS keypair
-    keypair: BlsKeyPair,
+    /// BLS keypair for DCL layer
+    bls_keypair: BlsKeyPair,
+    /// Ed25519 keypair for consensus layer
+    ed25519_keypair: Ed25519KeyPair,
     /// Our validator ID
     validator_id: ValidatorId,
     /// Known validators with both BLS and Ed25519 public keys
@@ -79,23 +81,36 @@ pub struct Node {
 }
 
 impl Node {
-    /// Create a new node from configuration
-    pub fn new(config: NodeConfig) -> Result<Self> {
-        let keypair = config.keypair()?;
-        let validator_id = validator_id_from_bls(&keypair.public_key);
+    /// Create a new node with provided keypairs
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Node configuration
+    /// * `bls_keypair` - BLS keypair for DCL layer (threshold signatures)
+    /// * `ed25519_keypair` - Ed25519 keypair for consensus layer (Malachite signing)
+    pub fn new(
+        config: NodeConfig,
+        bls_keypair: BlsKeyPair,
+        ed25519_keypair: Ed25519KeyPair,
+    ) -> Result<Self> {
+        let validator_id = validator_id_from_bls(&bls_keypair.public_key);
 
-        // Verify validator ID matches
-        if validator_id != config.validator_id {
-            anyhow::bail!(
-                "Validator ID mismatch: config has {:?}, derived {:?}",
-                config.validator_id,
-                validator_id
-            );
+        // Verify validator ID matches if configured
+        // If not configured, we derive it from the BLS key
+        if let Some(config_vid) = config.validator_id {
+            if validator_id != config_vid {
+                anyhow::bail!(
+                    "Validator ID mismatch: config has {:?}, derived {:?}",
+                    config_vid,
+                    validator_id
+                );
+            }
         }
 
         Ok(Self {
             config,
-            keypair,
+            bls_keypair,
+            ed25519_keypair,
             validator_id,
             validators: HashMap::new(),
             execution_bridge: None,
@@ -286,9 +301,10 @@ impl Node {
         });
 
         // Create Primary configuration
-        let primary_config = PrimaryConfig::new(self.validator_id, self.keypair.secret_key.clone())
-            .with_car_interval(Duration::from_millis(self.config.car_interval_ms))
-            .with_max_empty_cars(3);
+        let primary_config =
+            PrimaryConfig::new(self.validator_id, self.bls_keypair.secret_key.clone())
+                .with_car_interval(Duration::from_millis(self.config.car_interval_ms))
+                .with_max_empty_cars(3);
 
         // Create channel for CutReady events to Consensus Host
         let (cut_tx, cut_rx) = mpsc::channel::<Cut>(100);
@@ -312,11 +328,10 @@ impl Node {
         let (decided_tx, mut decided_rx) = mpsc::channel::<(ConsensusHeight, Cut)>(100);
 
         // Get Ed25519 keypair for Consensus
-        let ed25519_keypair = self.config.ed25519_keypair()?;
-        let ed25519_pubkey = ed25519_keypair.public_key.clone();
+        let ed25519_pubkey = self.ed25519_keypair.public_key.clone();
         // Extract secret key bytes before moving keypair (needed for libp2p Keypair)
-        let ed25519_secret_bytes = ed25519_keypair.secret_key.to_bytes();
-        let consensus_signer = ConsensusSigner::new(ed25519_keypair);
+        let ed25519_secret_bytes = self.ed25519_keypair.secret_key.to_bytes();
+        let consensus_signer = ConsensusSigner::new(self.ed25519_keypair.clone());
         let signing_provider = ConsensusSigningProvider::new(consensus_signer);
 
         // Create Consensus context and validators

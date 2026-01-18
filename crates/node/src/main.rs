@@ -3,10 +3,12 @@
 //! A Cosmos SDK-style CLI for the CipherBFT blockchain node.
 
 use alloy_primitives::U256;
-use anyhow::Result;
+use anyhow::{Context, Result};
+use cipherbft_crypto::{BlsKeyPair, BlsSecretKey, Ed25519KeyPair, Ed25519SecretKey, ExposeSecret};
 use cipherd::{
-    generate_local_configs, GenesisGenerator, GenesisGeneratorConfig, GenesisLoader, Node,
-    NodeConfig, ValidatorKeyFile, CIPHERD_HOME_ENV, DEFAULT_HOME_DIR,
+    execute_keys_command, generate_local_configs, GenesisGenerator, GenesisGeneratorConfig,
+    GenesisLoader, KeysCommand, Node, NodeConfig, ValidatorKeyFile, CIPHERD_HOME_ENV,
+    DEFAULT_HOME_DIR,
 };
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -88,10 +90,10 @@ enum Commands {
         command: TestnetCommands,
     },
 
-    /// Manage your application's keys
+    /// Manage your application's keys (secure EIP-2335 keystores)
     Keys {
         #[command(subcommand)]
-        command: KeysCommands,
+        command: KeysCommand,
     },
 
     /// Utilities for managing application configuration
@@ -134,49 +136,7 @@ enum Commands {
     },
 }
 
-#[derive(Subcommand)]
-enum KeysCommands {
-    /// Add a new key
-    Add {
-        /// Name of the key
-        name: String,
-    },
-
-    /// List all keys
-    List,
-
-    /// Show key details
-    Show {
-        /// Name of the key
-        name: String,
-    },
-
-    /// Delete a key
-    Delete {
-        /// Name of the key
-        name: String,
-
-        /// Skip confirmation prompt
-        #[arg(short = 'y', long)]
-        yes: bool,
-    },
-
-    /// Export a key to a file
-    Export {
-        /// Name of the key
-        name: String,
-    },
-
-    /// Import a key from a file
-    Import {
-        /// Name of the key
-        name: String,
-
-        /// Path to the key file
-        #[arg(long)]
-        file: PathBuf,
-    },
-}
+// Old KeysCommands removed - now using key_cli::KeysCommand with EIP-2335 encrypted storage
 
 #[derive(Subcommand)]
 enum ConfigCommands {
@@ -387,7 +347,7 @@ async fn main() -> Result<()> {
 
         Commands::Testnet { command } => cmd_testnet(command).await,
 
-        Commands::Keys { command } => cmd_keys(&cli.home, command),
+        Commands::Keys { command } => execute_keys_command(&cli.home, command),
 
         Commands::Config { command } => cmd_config(&cli.home, command),
 
@@ -448,11 +408,12 @@ fn cmd_init(
     moniker: Option<String>,
     chain_id: u64,
     network_id: &str,
-    initial_stake_eth: u64,
+    _initial_stake_eth: u64,
     overwrite: bool,
 ) -> Result<()> {
     let config_dir = home.join("config");
     let data_dir = home.join("data");
+    let keys_dir = data_dir.join("keys");
 
     if config_dir.exists() && !overwrite {
         anyhow::bail!(
@@ -461,39 +422,48 @@ fn cmd_init(
         );
     }
 
+    // Create directory structure
     std::fs::create_dir_all(&config_dir)?;
     std::fs::create_dir_all(&data_dir)?;
+    std::fs::create_dir_all(&keys_dir)?;
 
-    // Generate a single node configuration
-    let configs = generate_local_configs(1);
-    let mut config = configs[0].clone();
+    // Generate a random node identifier for the moniker (not validator ID)
+    let node_id: [u8; 4] = rand::random();
+    let node_moniker = moniker.unwrap_or_else(|| format!("node-{}", hex::encode(node_id)));
 
-    // Update paths to use the actual home directory
-    config.home_dir = Some(home.to_path_buf());
-    config.data_dir = data_dir.clone();
+    // Create NodeConfig without validator_id (will be derived at start time from keys)
+    let base_port = 9000u16;
+    let config = NodeConfig {
+        validator_id: None, // Derived at runtime from BLS key
+        keyring_backend: cipherd::DEFAULT_KEYRING_BACKEND.to_string(),
+        key_name: cipherd::DEFAULT_KEY_NAME.to_string(),
+        keystore_dir: Some(keys_dir.clone()),
+        keystore_account: Some(0),
+        primary_listen: format!("127.0.0.1:{}", base_port).parse().unwrap(),
+        consensus_listen: format!("127.0.0.1:{}", base_port + 5).parse().unwrap(),
+        worker_listens: vec![format!("127.0.0.1:{}", base_port + 1).parse().unwrap()],
+        peers: Vec::new(),
+        num_workers: 1,
+        home_dir: Some(home.to_path_buf()),
+        data_dir: data_dir.clone(),
+        genesis_path: None,
+        car_interval_ms: 100,
+        max_batch_txs: 100,
+        max_batch_bytes: 1024 * 1024,
+    };
 
     let config_path = config_dir.join("node.json");
     config.save(&config_path)?;
 
-    let node_moniker =
-        moniker.unwrap_or_else(|| format!("node-{}", hex::encode(&config.validator_id.0[..8])));
-
-    // Generate genesis file
-    let genesis_path = config_dir.join("genesis.json");
-    // Convert ETH to wei (1 ETH = 10^18 wei)
-    let initial_stake = U256::from(initial_stake_eth) * U256::from(1_000_000_000_000_000_000u128);
-    let initial_balance = U256::from(100u64) * U256::from(1_000_000_000_000_000_000u128); // 100 ETH
-
-    let genesis = GenesisGenerator::generate_from_node_config(
-        &config,
-        chain_id,
-        network_id,
-        initial_stake,
-        initial_balance,
-    )?;
-
-    let genesis_json = genesis.to_json()?;
-    std::fs::write(&genesis_path, genesis_json)?;
+    // Write a node info file with basic metadata
+    let node_info_path = config_dir.join("node_info.json");
+    let node_info = serde_json::json!({
+        "moniker": node_moniker,
+        "chain_id": chain_id,
+        "network_id": network_id,
+        "created_at": chrono::Utc::now().to_rfc3339(),
+    });
+    std::fs::write(&node_info_path, serde_json::to_string_pretty(&node_info)?)?;
 
     println!("Successfully initialized node configuration");
     println!();
@@ -502,15 +472,31 @@ fn cmd_init(
     println!("  Chain ID:   {}", chain_id);
     println!("  Network ID: {}", network_id);
     println!("  Config:     {}", config_path.display());
-    println!("  Genesis:    {}", genesis_path.display());
+    println!("  Keys dir:   {}", keys_dir.display());
     println!();
-    println!("To start the node:");
-    println!("  cipherd start --home {}", home.display());
+    println!("Next steps:");
+    println!();
+    println!("  1. Create validator keys:");
+    println!("     cipherd keys add validator --validator");
+    println!();
+    println!("  2. For a new network, generate genesis:");
+    println!(
+        "     cipherd genesis generate --output {}",
+        config_dir.join("genesis.json").display()
+    );
+    println!();
+    println!("  3. For joining an existing network, copy the genesis file to:");
+    println!("     {}", config_dir.join("genesis.json").display());
+    println!();
+    println!("  4. Start the node:");
+    println!("     cipherd start --home {}", home.display());
 
     Ok(())
 }
 
 async fn cmd_start(config_path: PathBuf, genesis_override: Option<PathBuf>) -> Result<()> {
+    use cipherbft_crypto::{Keyring, KeyringBackend};
+
     if !config_path.exists() {
         anyhow::bail!(
             "Configuration file not found: {}\nRun 'cipherd init' first to create configuration.",
@@ -521,6 +507,113 @@ async fn cmd_start(config_path: PathBuf, genesis_override: Option<PathBuf>) -> R
     info!("Loading configuration from {}", config_path.display());
 
     let mut config = NodeConfig::load(&config_path)?;
+
+    // Verify that keystore is configured
+    if !config.has_key_config() {
+        anyhow::bail!(
+            "No keystore configured in {}.\n\
+             Run 'cipherd init' to create a new node,\n\
+             then run 'cipherd keys add' to create keys.",
+            config_path.display()
+        );
+    }
+
+    // Parse keyring backend from config
+    let keyring_backend: KeyringBackend = config
+        .effective_keyring_backend()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid keyring backend: {}", config.keyring_backend))?;
+
+    // Warn if using non-production backend
+    if !keyring_backend.is_production_safe() {
+        eprintln!(
+            "WARNING: Using '{}' backend which is NOT safe for production!",
+            keyring_backend
+        );
+    }
+
+    // Get keys directory
+    let keys_dir = config.effective_keystore_dir();
+    let key_name = config.effective_key_name();
+    let account = config.effective_keystore_account();
+
+    info!(
+        "Loading keys from {} (backend: {}, key: {})",
+        keys_dir.display(),
+        keyring_backend,
+        key_name
+    );
+
+    // Create keyring
+    let keyring = Keyring::new(keyring_backend, &keys_dir)
+        .map_err(|e| anyhow::anyhow!("Failed to initialize keyring: {}", e))?;
+
+    // Key names follow the pattern: {key_name}_{account}_{type}
+    let ed25519_key_name = format!("{}_{}_ed25519", key_name, account);
+    let bls_key_name = format!("{}_{}_bls", key_name, account);
+
+    // Check if keys exist
+    if !keyring.key_exists(&ed25519_key_name) {
+        anyhow::bail!(
+            "Ed25519 key '{}' not found.\n\
+             Run 'cipherd keys add {} --validator' to create keys.",
+            ed25519_key_name,
+            key_name
+        );
+    }
+
+    if !keyring.key_exists(&bls_key_name) {
+        anyhow::bail!(
+            "BLS key '{}' not found.\n\
+             Validators require both Ed25519 and BLS keys.\n\
+             Run 'cipherd keys add {} --validator' to create keys.",
+            bls_key_name,
+            key_name
+        );
+    }
+
+    // Get passphrase if required by the backend
+    let passphrase = if keyring_backend.requires_passphrase() {
+        Some(
+            rpassword::prompt_password("Enter keystore passphrase: ")
+                .context("Failed to read passphrase")?,
+        )
+    } else {
+        None
+    };
+
+    // Load Ed25519 key
+    info!("Loading Ed25519 key: {}", ed25519_key_name);
+    let ed25519_secret_bytes = keyring
+        .get_key(&ed25519_key_name, passphrase.as_deref())
+        .map_err(|e| anyhow::anyhow!("Failed to load Ed25519 key: {}", e))?;
+
+    let ed25519_bytes: [u8; 32] = ed25519_secret_bytes
+        .expose_secret()
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("Invalid Ed25519 key length, expected 32 bytes"))?;
+    let ed25519_secret = Ed25519SecretKey::from_bytes(&ed25519_bytes);
+    let ed25519_keypair = Ed25519KeyPair::from_secret_key(ed25519_secret);
+
+    // Load BLS key
+    info!("Loading BLS key: {}", bls_key_name);
+    let bls_secret_bytes = keyring
+        .get_key(&bls_key_name, passphrase.as_deref())
+        .map_err(|e| anyhow::anyhow!("Failed to load BLS key: {}", e))?;
+
+    let bls_bytes: [u8; 32] = bls_secret_bytes
+        .expose_secret()
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("Invalid BLS key length, expected 32 bytes"))?;
+    let bls_secret = BlsSecretKey::from_bytes(&bls_bytes)
+        .map_err(|e| anyhow::anyhow!("Invalid BLS key: {:?}", e))?;
+    let bls_keypair = BlsKeyPair::from_secret_key(bls_secret);
+
+    // Derive validator ID from BLS public key
+    let validator_id = cipherd::util::validator_id_from_bls(&bls_keypair.public_key);
+    info!("Derived validator ID: {:?}", validator_id);
 
     // Override genesis path if provided via CLI
     if genesis_override.is_some() {
@@ -533,10 +626,10 @@ async fn cmd_start(config_path: PathBuf, genesis_override: Option<PathBuf>) -> R
 
     let genesis = GenesisLoader::load_and_validate(&genesis_path)?;
 
-    info!("Starting node with validator ID: {:?}", config.validator_id);
+    info!("Starting node as validator {:?}", validator_id);
 
-    // Create node and bootstrap validators from genesis
-    let mut node = Node::new(config)?;
+    // Create node with keypairs and bootstrap validators from genesis
+    let mut node = Node::new(config, bls_keypair, ed25519_keypair)?;
     node.bootstrap_validators_from_genesis(&genesis)?;
 
     node.run().await?;
@@ -584,8 +677,8 @@ fn cmd_testnet_init_files(
 
     std::fs::create_dir_all(output)?;
 
-    // Generate node configs
-    let configs = generate_local_configs(num_validators);
+    // Generate node configs with keypairs
+    let test_configs = generate_local_configs(num_validators);
 
     // Generate a shared genesis file with all validators
     let initial_stake = U256::from(initial_stake_eth) * U256::from(1_000_000_000_000_000_000u128);
@@ -607,7 +700,7 @@ fn cmd_testnet_init_files(
     println!("  Created shared genesis: {}", genesis_path.display());
 
     // Create directories and configs for each node
-    for (i, config) in configs.iter().enumerate() {
+    for (i, tc) in test_configs.iter().enumerate() {
         let node_dir = output.join(format!("node{}", i));
         let config_dir = node_dir.join("config");
         let data_dir = node_dir.join("data");
@@ -615,7 +708,7 @@ fn cmd_testnet_init_files(
         std::fs::create_dir_all(&data_dir)?;
 
         // Modify config with unique ports and genesis path
-        let mut node_config = config.clone();
+        let mut node_config = tc.config.clone();
         let port_offset = starting_port + (i as u16 * 10);
         node_config.primary_listen = format!("0.0.0.0:{}", port_offset).parse()?;
         node_config.consensus_listen = format!("0.0.0.0:{}", port_offset + 5).parse()?;
@@ -627,7 +720,9 @@ fn cmd_testnet_init_files(
         println!(
             "  Created node{} (validator {:?}, port {})",
             i,
-            config.validator_id,
+            tc.config
+                .validator_id
+                .expect("test config should have validator_id"),
             starting_port + (i as u16 * 10)
         );
     }
@@ -673,19 +768,20 @@ fn cmd_testnet_init_files(
 async fn cmd_testnet_start(num_validators: usize, duration: u64) -> Result<()> {
     info!("Starting local testnet with {} validators", num_validators);
 
-    // Generate configurations
-    let configs = generate_local_configs(num_validators);
+    // Generate configurations with keypairs
+    let test_configs = generate_local_configs(num_validators);
 
     // Collect validator info for cross-registration (both BLS and Ed25519 keys)
-    let validator_info: Vec<_> = configs
+    // Note: test configs always have validator_id set, so unwrap is safe here
+    let validator_info: Vec<_> = test_configs
         .iter()
-        .map(|c| {
-            let bls_keypair = c.keypair().unwrap();
-            let ed25519_keypair = c.ed25519_keypair().unwrap();
+        .map(|tc| {
             (
-                c.validator_id,
-                bls_keypair.public_key.clone(),
-                ed25519_keypair.public_key.clone(),
+                tc.config
+                    .validator_id
+                    .expect("test config should have validator_id"),
+                tc.bls_keypair.public_key.clone(),
+                tc.ed25519_keypair.public_key.clone(),
             )
         })
         .collect();
@@ -693,9 +789,12 @@ async fn cmd_testnet_start(num_validators: usize, duration: u64) -> Result<()> {
     // Create and start nodes
     let mut handles = Vec::new();
 
-    for config in configs {
-        let validator_id = config.validator_id;
-        let mut node = Node::new(config)?;
+    for tc in test_configs {
+        let validator_id = tc
+            .config
+            .validator_id
+            .expect("test config should have validator_id");
+        let mut node = Node::new(tc.config, tc.bls_keypair, tc.ed25519_keypair)?;
 
         // Register ALL validators (including ourselves - needed for threshold calculation)
         // BLS keys are used for DCL threshold signatures, Ed25519 keys for consensus signing
@@ -734,119 +833,8 @@ async fn cmd_testnet_start(num_validators: usize, duration: u64) -> Result<()> {
     Ok(())
 }
 
-fn cmd_keys(home: &std::path::Path, command: KeysCommands) -> Result<()> {
-    let keys_dir = home.join("keys");
-
-    match command {
-        KeysCommands::Add { name } => {
-            std::fs::create_dir_all(&keys_dir)?;
-            // Generate a new BLS keypair
-            let keypair = cipherd::generate_keypair();
-            let key_path = keys_dir.join(format!("{}.json", name));
-
-            let pubkey_bytes = keypair.public_key.to_bytes();
-            let secret_bytes = keypair.secret_key.to_bytes();
-
-            let key_data = serde_json::json!({
-                "name": name,
-                "type": "bls12-381",
-                "public_key": hex::encode(pubkey_bytes),
-                "secret_key": hex::encode(secret_bytes),
-            });
-
-            std::fs::write(&key_path, serde_json::to_string_pretty(&key_data)?)?;
-
-            println!("Key '{}' created successfully", name);
-            println!();
-            println!("  Name:       {}", name);
-            println!("  Type:       bls12-381");
-            println!("  Public Key: {}", hex::encode(pubkey_bytes));
-            println!();
-            println!("**Important**: Keep your secret key safe and never share it.");
-        }
-
-        KeysCommands::List => {
-            if !keys_dir.exists() {
-                println!("No keys found. Use 'cipherd keys add <name>' to create a key.");
-                return Ok(());
-            }
-
-            println!("Available keys:");
-            println!();
-            for entry in std::fs::read_dir(&keys_dir)? {
-                let entry = entry?;
-                let path = entry.path();
-                if path.extension().is_some_and(|ext| ext == "json") {
-                    if let Some(name) = path.file_stem() {
-                        println!("  - {}", name.to_string_lossy());
-                    }
-                }
-            }
-        }
-
-        KeysCommands::Show { name } => {
-            let key_path = keys_dir.join(format!("{}.json", name));
-            if !key_path.exists() {
-                anyhow::bail!("Key '{}' not found", name);
-            }
-
-            let data: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(&key_path)?)?;
-            println!("Name:       {}", data["name"]);
-            println!("Public Key: {}", data["public_key"]);
-        }
-
-        KeysCommands::Delete { name, yes } => {
-            let key_path = keys_dir.join(format!("{}.json", name));
-            if !key_path.exists() {
-                anyhow::bail!("Key '{}' not found", name);
-            }
-
-            if !yes {
-                println!("Are you sure you want to delete key '{}'? [y/N]", name);
-                let mut input = String::new();
-                std::io::stdin().read_line(&mut input)?;
-                if input.trim().to_lowercase() != "y" {
-                    println!("Aborted.");
-                    return Ok(());
-                }
-            }
-
-            std::fs::remove_file(&key_path)?;
-            println!("Key '{}' deleted", name);
-        }
-
-        KeysCommands::Export { name } => {
-            let key_path = keys_dir.join(format!("{}.json", name));
-            if !key_path.exists() {
-                anyhow::bail!("Key '{}' not found", name);
-            }
-
-            let data = std::fs::read_to_string(&key_path)?;
-            println!("{}", data);
-        }
-
-        KeysCommands::Import { name, file } => {
-            std::fs::create_dir_all(&keys_dir)?;
-            let key_path = keys_dir.join(format!("{}.json", name));
-            if key_path.exists() {
-                anyhow::bail!(
-                    "Key '{}' already exists. Delete it first or choose a different name.",
-                    name
-                );
-            }
-
-            let data = std::fs::read_to_string(&file)?;
-            // Validate JSON
-            let _: serde_json::Value = serde_json::from_str(&data)?;
-            std::fs::write(&key_path, data)?;
-
-            println!("Key '{}' imported successfully", name);
-        }
-    }
-
-    Ok(())
-}
+// Old cmd_keys function removed - now using key_cli::execute_keys_command
+// with secure EIP-2335 encrypted keystores
 
 fn cmd_config(home: &std::path::Path, command: ConfigCommands) -> Result<()> {
     let config_path = home.join("config/node.json");

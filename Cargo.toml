@@ -42,6 +42,27 @@ sha3 = "0.10"
 rand = "0.8"
 blst = "0.3"
 
+# Memory security (T001)
+zeroize = { version = "1.8", features = ["derive", "aarch64"] }
+secrecy = { version = "0.10", features = ["serde"] }
+
+# Encrypted storage - EIP-2335 (T002)
+scrypt = "0.11"
+aes = "0.8"
+ctr = "0.9"
+cipher = "0.4"
+uuid = { version = "1.7", features = ["v4", "serde"] }
+
+# Mnemonic & HD derivation (T003)
+bip39 = "2.1"
+tiny-bip39 = "1.0"
+
+# OS keychain integration - optional (T004)
+keyring = "3.6"
+
+# Password input
+rpassword = "7.3"
+
 # Collections
 bitvec = "1.0"
 
