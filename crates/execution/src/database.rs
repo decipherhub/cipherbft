@@ -7,10 +7,6 @@ use crate::error::{DatabaseError, Result};
 use alloy_primitives::{Address, B256, U256};
 use dashmap::DashMap;
 use parking_lot::RwLock;
-// MIGRATION(revm33): Database traits now in separate crates
-// - DatabaseRef still exported from revm
-// - Account, AccountInfo, Bytecode moved to revm_state
-// - HashMap moved to revm_primitives
 use revm::DatabaseRef;
 use revm_primitives::HashMap as RevmHashMap;
 use revm_state::{Account as RevmAccount, AccountInfo, Bytecode};
@@ -66,6 +62,27 @@ pub trait Provider: Send + Sync {
             .map(|addr| self.get_account(*addr))
             .collect()
     }
+
+    /// Get all accounts in the database.
+    ///
+    /// This method is used for computing Merkle Patricia Trie state roots.
+    /// Returns a BTreeMap to ensure deterministic ordering by address.
+    ///
+    /// # Returns
+    /// A BTreeMap of all accounts indexed by address.
+    fn get_all_accounts(&self) -> Result<BTreeMap<Address, Account>>;
+
+    /// Get all storage slots for a specific account.
+    ///
+    /// This method is used for computing account storage roots in the MPT.
+    /// Returns a BTreeMap to ensure deterministic ordering by slot key.
+    ///
+    /// # Arguments
+    /// * `address` - The account address to get storage for
+    ///
+    /// # Returns
+    /// A BTreeMap of all storage slots (slot -> value) for the account.
+    fn get_all_storage(&self, address: Address) -> Result<BTreeMap<U256, U256>>;
 }
 
 /// In-memory provider for testing and development.
@@ -150,6 +167,25 @@ impl Provider for InMemoryProvider {
     fn set_block_hash(&self, number: u64, hash: B256) -> Result<()> {
         self.block_hashes.insert(number, hash);
         Ok(())
+    }
+
+    fn get_all_accounts(&self) -> Result<BTreeMap<Address, Account>> {
+        let mut result = BTreeMap::new();
+        for entry in self.accounts.iter() {
+            result.insert(*entry.key(), entry.value().clone());
+        }
+        Ok(result)
+    }
+
+    fn get_all_storage(&self, address: Address) -> Result<BTreeMap<U256, U256>> {
+        let mut result = BTreeMap::new();
+        for entry in self.storage.iter() {
+            let (addr, slot) = entry.key();
+            if *addr == address {
+                result.insert(*slot, *entry.value());
+            }
+        }
+        Ok(result)
     }
 }
 
@@ -252,6 +288,20 @@ impl<P: Provider> CipherBftDatabase<P> {
         self.pending_accounts.write().clear();
         self.pending_code.write().clear();
         self.pending_storage.write().clear();
+    }
+
+    /// Get account state for validation purposes.
+    ///
+    /// This method is used during transaction validation to check nonce and balance.
+    /// It checks pending changes first, then cache, then provider.
+    ///
+    /// # Arguments
+    /// * `address` - The account address to lookup
+    ///
+    /// # Returns
+    /// The account state if it exists, or None for new accounts.
+    pub fn get_account(&self, address: Address) -> Result<Option<Account>> {
+        self.get_account_internal(address)
     }
 
     /// Get account, checking pending changes first, then cache, then provider.
@@ -750,6 +800,22 @@ pub mod mdbx_provider {
             self.store
                 .set_block_hash(number, hash_bytes)
                 .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
+        }
+
+        fn get_all_accounts(&self) -> Result<BTreeMap<Address, Account>> {
+            // TODO: Implement iteration over MDBX accounts table
+            // This requires extending MdbxEvmStore with an iterator method
+            Err(crate::error::ExecutionError::Internal(
+                "get_all_accounts not yet implemented for MDBX provider".into(),
+            ))
+        }
+
+        fn get_all_storage(&self, _address: Address) -> Result<BTreeMap<U256, U256>> {
+            // TODO: Implement iteration over MDBX storage table filtered by address
+            // This requires extending MdbxEvmStore with a filtered iterator method
+            Err(crate::error::ExecutionError::Internal(
+                "get_all_storage not yet implemented for MDBX provider".into(),
+            ))
         }
     }
 
