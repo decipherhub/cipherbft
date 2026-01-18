@@ -18,7 +18,9 @@
 //! persisted across restarts and recovered during node initialization.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use parking_lot::RwLock;
 
 use crate::error::ConsensusError;
 use crate::types::ConsensusHeight;
@@ -155,7 +157,8 @@ pub struct EpochValidatorSet {
 
 /// Manages validator sets across epochs.
 ///
-/// Thread-safe implementation using `RwLock` for concurrent access.
+/// Thread-safe implementation using `parking_lot::RwLock` for concurrent access.
+/// This avoids lock poisoning issues that can cascade node failures in BFT systems.
 ///
 /// ## Usage
 ///
@@ -392,7 +395,7 @@ impl ValidatorSetManager {
 
     /// Get the current epoch number.
     pub fn current_epoch(&self) -> u64 {
-        *self.current_epoch.read().expect("lock poisoned")
+        *self.current_epoch.read()
     }
 
     /// Get the validator set for a specific height.
@@ -421,7 +424,7 @@ impl ValidatorSetManager {
         &self,
         epoch: u64,
     ) -> Result<Option<ConsensusValidatorSet>, ConsensusError> {
-        let sets = self.sets.read().expect("lock poisoned");
+        let sets = self.sets.read();
 
         // First try exact match
         if let Some(epoch_set) = sets.get(&epoch) {
@@ -460,7 +463,7 @@ impl ValidatorSetManager {
             return Err(ConsensusError::EmptyValidatorSet);
         }
 
-        let mut pending = self.pending_next_epoch.write().expect("lock poisoned");
+        let mut pending = self.pending_next_epoch.write();
         *pending = Some(new_set);
 
         Ok(())
@@ -478,9 +481,9 @@ impl ValidatorSetManager {
     ///
     /// The validator set for the new epoch.
     pub fn advance_epoch(&self) -> Result<ConsensusValidatorSet, ConsensusError> {
-        let mut current_epoch = self.current_epoch.write().expect("lock poisoned");
-        let mut sets = self.sets.write().expect("lock poisoned");
-        let mut pending = self.pending_next_epoch.write().expect("lock poisoned");
+        let mut current_epoch = self.current_epoch.write();
+        let mut sets = self.sets.write();
+        let mut pending = self.pending_next_epoch.write();
 
         let new_epoch = *current_epoch + 1;
 
@@ -538,29 +541,23 @@ impl ValidatorSetManager {
 
     /// Check if a validator set change is pending.
     pub fn has_pending_change(&self) -> bool {
-        self.pending_next_epoch
-            .read()
-            .expect("lock poisoned")
-            .is_some()
+        self.pending_next_epoch.read().is_some()
     }
 
     /// Get the pending validator set (if any).
     pub fn pending_validator_set(&self) -> Option<ConsensusValidatorSet> {
-        self.pending_next_epoch
-            .read()
-            .expect("lock poisoned")
-            .clone()
+        self.pending_next_epoch.read().clone()
     }
 
     /// Clear any pending validator set change.
     pub fn clear_pending_change(&self) {
-        let mut pending = self.pending_next_epoch.write().expect("lock poisoned");
+        let mut pending = self.pending_next_epoch.write();
         *pending = None;
     }
 
     /// Get the number of stored epochs.
     pub fn stored_epoch_count(&self) -> usize {
-        self.sets.read().expect("lock poisoned").len()
+        self.sets.read().len()
     }
 
     /// Import a validator set for a specific epoch.
@@ -587,7 +584,7 @@ impl ValidatorSetManager {
             storage.persist_epoch_set(&epoch_set)?;
         }
 
-        let mut sets = self.sets.write().expect("lock poisoned");
+        let mut sets = self.sets.write();
         sets.insert(epoch, epoch_set);
 
         Ok(())
@@ -644,8 +641,8 @@ impl std::fmt::Debug for ValidatorSetManager {
 
 /// In-memory implementation of `ValidatorSetStorageProvider` for testing.
 ///
-/// This implementation stores validator sets in memory using `RwLock` for
-/// thread safety. It's suitable for testing and development but should not
+/// This implementation stores validator sets in memory using `parking_lot::RwLock`
+/// for thread safety. It's suitable for testing and development but should not
 /// be used in production.
 #[derive(Debug, Default)]
 pub struct InMemoryValidatorSetStorage {
@@ -661,40 +658,40 @@ impl InMemoryValidatorSetStorage {
 
     /// Get the number of stored epoch sets.
     pub fn epoch_count(&self) -> usize {
-        self.epoch_sets.read().expect("lock poisoned").len()
+        self.epoch_sets.read().len()
     }
 }
 
 impl ValidatorSetStorageProvider for InMemoryValidatorSetStorage {
     fn persist_epoch_set(&self, epoch_set: &EpochValidatorSet) -> Result<(), ConsensusError> {
-        let mut sets = self.epoch_sets.write().expect("lock poisoned");
+        let mut sets = self.epoch_sets.write();
         sets.insert(epoch_set.epoch, epoch_set.clone());
         Ok(())
     }
 
     fn load_epoch_set(&self, epoch: u64) -> Result<Option<EpochValidatorSet>, ConsensusError> {
-        let sets = self.epoch_sets.read().expect("lock poisoned");
+        let sets = self.epoch_sets.read();
         Ok(sets.get(&epoch).cloned())
     }
 
     fn load_all_epoch_sets(&self) -> Result<Vec<EpochValidatorSet>, ConsensusError> {
-        let sets = self.epoch_sets.read().expect("lock poisoned");
+        let sets = self.epoch_sets.read();
         Ok(sets.values().cloned().collect())
     }
 
     fn persist_current_epoch(&self, epoch: u64) -> Result<(), ConsensusError> {
-        let mut current = self.current_epoch.write().expect("lock poisoned");
+        let mut current = self.current_epoch.write();
         *current = Some(epoch);
         Ok(())
     }
 
     fn load_current_epoch(&self) -> Result<Option<u64>, ConsensusError> {
-        let current = self.current_epoch.read().expect("lock poisoned");
+        let current = self.current_epoch.read();
         Ok(*current)
     }
 
     fn delete_epoch_set(&self, epoch: u64) -> Result<(), ConsensusError> {
-        let mut sets = self.epoch_sets.write().expect("lock poisoned");
+        let mut sets = self.epoch_sets.write();
         sets.remove(&epoch);
         Ok(())
     }

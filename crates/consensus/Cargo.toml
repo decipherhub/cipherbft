@@ -35,6 +35,7 @@ bincode = { workspace = true }
 serde = { workspace = true }
 bytes = { workspace = true }
 borsh = { workspace = true }
+parking_lot = "0.12"
 ractor = { workspace = true, optional = true }
 
 cipherbft-types = { path = "../types" }
