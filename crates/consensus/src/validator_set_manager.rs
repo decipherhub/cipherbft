@@ -599,11 +599,19 @@ impl ValidatorSetManager {
     /// `advance_epoch` which already holds the `current_epoch` write lock.
     ///
     /// Also removes pruned epochs from storage if configured.
-    fn prune_old_epochs_locked(&self, sets: &mut BTreeMap<u64, EpochValidatorSet>, current_epoch: u64) {
+    fn prune_old_epochs_locked(
+        &self,
+        sets: &mut BTreeMap<u64, EpochValidatorSet>,
+        current_epoch: u64,
+    ) {
         let min_retained = current_epoch.saturating_sub(self.config.max_retained_epochs);
 
         // Remove epochs older than the retention window
-        let epochs_to_remove: Vec<u64> = sets.keys().filter(|&&e| e < min_retained).copied().collect();
+        let epochs_to_remove: Vec<u64> = sets
+            .keys()
+            .filter(|&&e| e < min_retained)
+            .copied()
+            .collect();
 
         for epoch in epochs_to_remove {
             sets.remove(&epoch);
@@ -708,9 +716,7 @@ mod tests {
     }
 
     fn make_validators(count: usize) -> Vec<ConsensusValidator> {
-        (1..=count as u8)
-            .map(|i| make_validator(i, 100))
-            .collect()
+        (1..=count as u8).map(|i| make_validator(i, 100)).collect()
     }
 
     #[test]
@@ -806,8 +812,7 @@ mod tests {
     fn test_advance_epoch_with_pending() {
         let validators = make_validators(4);
         let config = EpochConfig::new(10);
-        let manager =
-            ValidatorSetManager::new(config.clone(), validators).expect("should create");
+        let manager = ValidatorSetManager::new(config.clone(), validators).expect("should create");
 
         // Register new validators
         let new_validators = make_validators(5);
@@ -918,12 +923,8 @@ mod tests {
         let config = EpochConfig::new(10);
 
         // Create manager with storage
-        let manager = ValidatorSetManager::with_storage(
-            config,
-            validators,
-            Arc::clone(&storage),
-        )
-        .expect("should create");
+        let manager = ValidatorSetManager::with_storage(config, validators, Arc::clone(&storage))
+            .expect("should create");
 
         assert!(manager.has_storage());
 
@@ -934,7 +935,9 @@ mod tests {
 
         // Advance epoch with new validators
         let new_validators = make_validators(5);
-        manager.register_next_epoch_validators(new_validators).unwrap();
+        manager
+            .register_next_epoch_validators(new_validators)
+            .unwrap();
         manager.advance_epoch().unwrap();
 
         // Verify new epoch was persisted
@@ -990,12 +993,8 @@ mod tests {
         let validators = make_validators(4);
         let config = EpochConfig::new(10);
 
-        let manager = ValidatorSetManager::with_storage(
-            config,
-            validators,
-            Arc::clone(&storage),
-        )
-        .unwrap();
+        let manager =
+            ValidatorSetManager::with_storage(config, validators, Arc::clone(&storage)).unwrap();
 
         // Import a historical epoch set
         let historical_validators = make_validators(3);

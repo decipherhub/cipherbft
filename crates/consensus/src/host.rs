@@ -532,7 +532,11 @@ impl Actor for CipherBftHost {
                 // parts directly via the network channel.
                 // The `round` from HostMsg is already a Round type (aliased as ConsensusRound)
                 // value_id is ValueId<Ctx> which is ConsensusValueId
-                if let Err(e) = self.value_builder.restream_value(height, round, value_id).await {
+                if let Err(e) = self
+                    .value_builder
+                    .restream_value(height, round, value_id)
+                    .await
+                {
                     error!(
                         parent: &self.span,
                         height = height.0,
@@ -661,27 +665,30 @@ mod tests {
     }
 
     fn make_validators(count: usize) -> Vec<ConsensusValidator> {
-        (1..=count as u8)
-            .map(|i| make_validator(i, 100))
-            .collect()
+        (1..=count as u8).map(|i| make_validator(i, 100)).collect()
     }
 
     #[test]
     fn test_host_get_validator_set() {
         let validators = make_validators(4);
         let config = EpochConfig::new(10);
-        let manager = Arc::new(
-            ValidatorSetManager::new(config, validators).expect("should create"),
-        );
+        let manager =
+            Arc::new(ValidatorSetManager::new(config, validators).expect("should create"));
 
         // Create a mock host (can't test the full actor without async runtime)
         // Just test the get_validator_set method
 
         // Should get validator set for any height
-        let set = manager.get_validator_set_for_height(ConsensusHeight(1)).unwrap().unwrap();
+        let set = manager
+            .get_validator_set_for_height(ConsensusHeight(1))
+            .unwrap()
+            .unwrap();
         assert_eq!(set.len(), 4);
 
-        let set = manager.get_validator_set_for_height(ConsensusHeight(50)).unwrap().unwrap();
+        let set = manager
+            .get_validator_set_for_height(ConsensusHeight(50))
+            .unwrap()
+            .unwrap();
         assert_eq!(set.len(), 4);
     }
 
@@ -689,9 +696,8 @@ mod tests {
     fn test_host_epoch_transition() {
         let validators = make_validators(4);
         let config = EpochConfig::new(10);
-        let manager = Arc::new(
-            ValidatorSetManager::new(config, validators).expect("should create"),
-        );
+        let manager =
+            Arc::new(ValidatorSetManager::new(config, validators).expect("should create"));
 
         // Non-boundary block
         assert!(!manager.on_block_committed(ConsensusHeight(5)).unwrap());
@@ -706,27 +712,37 @@ mod tests {
     fn test_host_validator_set_across_epochs() {
         let validators = make_validators(4);
         let config = EpochConfig::new(10);
-        let manager = Arc::new(
-            ValidatorSetManager::new(config, validators).expect("should create"),
-        );
+        let manager =
+            Arc::new(ValidatorSetManager::new(config, validators).expect("should create"));
 
         // Register new validators for next epoch
         let new_validators = make_validators(5);
-        manager.register_next_epoch_validators(new_validators).unwrap();
+        manager
+            .register_next_epoch_validators(new_validators)
+            .unwrap();
 
         // Before epoch transition
-        let set = manager.get_validator_set_for_height(ConsensusHeight(1)).unwrap().unwrap();
+        let set = manager
+            .get_validator_set_for_height(ConsensusHeight(1))
+            .unwrap()
+            .unwrap();
         assert_eq!(set.len(), 4);
 
         // Trigger epoch transition
         manager.on_block_committed(ConsensusHeight(10)).unwrap();
 
         // After epoch transition - epoch 1 heights should use new set
-        let set = manager.get_validator_set_for_height(ConsensusHeight(11)).unwrap().unwrap();
+        let set = manager
+            .get_validator_set_for_height(ConsensusHeight(11))
+            .unwrap()
+            .unwrap();
         assert_eq!(set.len(), 5);
 
         // But epoch 0 heights should still return old set
-        let set = manager.get_validator_set_for_height(ConsensusHeight(5)).unwrap().unwrap();
+        let set = manager
+            .get_validator_set_for_height(ConsensusHeight(5))
+            .unwrap()
+            .unwrap();
         assert_eq!(set.len(), 4);
     }
 }
