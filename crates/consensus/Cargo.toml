@@ -29,6 +29,7 @@ async-trait = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 hex = { workspace = true }
+ractor = "0.14"
 serde = { workspace = true }
 bincode = { workspace = true }
 
