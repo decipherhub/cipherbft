@@ -7,6 +7,7 @@ use super::common::{
     display_mnemonic_warning, ensure_keys_dir, get_mnemonic, get_passphrase, resolve_keys_dir,
     validate_passphrase_strength,
 };
+use crate::client_config::ClientConfig;
 use anyhow::{anyhow, bail, Context, Result};
 use cipherbft_crypto::{derive_validator_keys, KeyMetadata, Keyring, KeyringBackend, Mnemonic};
 use std::path::{Path, PathBuf};
@@ -231,6 +232,24 @@ pub fn execute(
 
         let metadata_path = key_dir.join("key_info.json");
         std::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata)?)?;
+    }
+
+    // Persist keyring backend to client.toml for consistency with `cipherd start`
+    // This ensures that keys created with a specific backend will be found by start command
+    let mut client_config = ClientConfig::load(home).unwrap_or_default();
+    if client_config.keyring_backend != keyring_backend.to_string() {
+        client_config.keyring_backend = keyring_backend.to_string();
+        if let Err(e) = client_config.save(home) {
+            eprintln!(
+                "Warning: Failed to update client.toml with keyring backend: {}",
+                e
+            );
+        } else {
+            println!(
+                "Updated client.toml with keyring-backend = \"{}\"",
+                keyring_backend
+            );
+        }
     }
 
     // Print summary

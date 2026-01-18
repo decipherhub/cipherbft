@@ -5,6 +5,7 @@
 use alloy_primitives::U256;
 use anyhow::{Context, Result};
 use cipherbft_crypto::{BlsKeyPair, BlsSecretKey, Ed25519KeyPair, Ed25519SecretKey, ExposeSecret};
+use cipherd::key_cli::KeyringBackendArg;
 use cipherd::{
     execute_keys_command, generate_local_configs, GenesisGenerator, GenesisGeneratorConfig,
     GenesisLoader, KeysCommand, Node, NodeConfig, ValidatorKeyFile, CIPHERD_HOME_ENV,
@@ -82,6 +83,14 @@ enum Commands {
         /// Path to genesis file (overrides config and env var)
         #[arg(long)]
         genesis: Option<PathBuf>,
+
+        /// Keyring backend for key storage (overrides client.toml setting)
+        ///
+        /// - file: EIP-2335 encrypted keystores (default, recommended)
+        /// - os: OS native keyring (macOS Keychain, Windows Credential Manager)
+        /// - test: Unencrypted storage (development only!)
+        #[arg(long, value_enum)]
+        keyring_backend: Option<KeyringBackendArg>,
     },
 
     /// Generate testnet configuration files for local multi-validator testing
@@ -340,9 +349,13 @@ async fn main() -> Result<()> {
             overwrite,
         ),
 
-        Commands::Start { config, genesis } => {
+        Commands::Start {
+            config,
+            genesis,
+            keyring_backend,
+        } => {
             let config_path = config.unwrap_or_else(|| cli.home.join("config/node.json"));
-            cmd_start(config_path, genesis).await
+            cmd_start(config_path, genesis, keyring_backend).await
         }
 
         Commands::Testnet { command } => cmd_testnet(command).await,
@@ -517,7 +530,11 @@ fn cmd_init(
     Ok(())
 }
 
-async fn cmd_start(config_path: PathBuf, genesis_override: Option<PathBuf>) -> Result<()> {
+async fn cmd_start(
+    config_path: PathBuf,
+    genesis_override: Option<PathBuf>,
+    keyring_backend_override: Option<KeyringBackendArg>,
+) -> Result<()> {
     use cipherbft_crypto::{Keyring, KeyringBackend};
 
     if !config_path.exists() {
@@ -540,11 +557,17 @@ async fn cmd_start(config_path: PathBuf, genesis_override: Option<PathBuf>) -> R
     // Load client config (Cosmos SDK style) for keyring settings
     let client_config = cipherd::ClientConfig::load(home)?;
 
-    // Parse keyring backend from client.toml (primary) or node.json (fallback)
-    let keyring_backend_str = client_config.effective_keyring_backend();
-    let keyring_backend: KeyringBackend = keyring_backend_str
-        .parse()
-        .map_err(|_| anyhow::anyhow!("Invalid keyring backend: {}", keyring_backend_str))?;
+    // Determine keyring backend: CLI flag > client.toml > default
+    let keyring_backend: KeyringBackend = if let Some(backend_arg) = keyring_backend_override {
+        // CLI flag takes precedence
+        backend_arg.into()
+    } else {
+        // Fall back to client.toml setting (or its default)
+        let keyring_backend_str = client_config.effective_keyring_backend();
+        keyring_backend_str
+            .parse()
+            .map_err(|_| anyhow::anyhow!("Invalid keyring backend: {}", keyring_backend_str))?
+    };
 
     // Warn if using non-production backend
     if !keyring_backend.is_production_safe() {
