@@ -17,12 +17,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::sync::{mpsc, Notify, RwLock};
 use informalsystems_malachitebft_core_consensus::LocallyProposedValue;
 use informalsystems_malachitebft_core_types::CommitCertificate;
 use informalsystems_malachitebft_engine::host::{HostMsg, HostRef, Next};
 use informalsystems_malachitebft_sync::RawDecidedValue;
 use ractor::{async_trait as ractor_async_trait, Actor, ActorProcessingErr, ActorRef};
+use tokio::sync::{mpsc, Notify, RwLock};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::context::CipherBftContext;
@@ -718,7 +718,10 @@ impl ValueBuilder for ChannelValueBuilder {
                     let value_id = informalsystems_malachitebft_core_types::Value::id(&value);
 
                     // Store by value_id for later lookup
-                    self.cuts_by_value_id.write().await.insert(value_id.clone(), cut);
+                    self.cuts_by_value_id
+                        .write()
+                        .await
+                        .insert(value_id.clone(), cut);
 
                     return Ok(LocallyProposedValue::new(
                         height,
