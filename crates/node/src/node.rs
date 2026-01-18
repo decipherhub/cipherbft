@@ -258,8 +258,10 @@ impl Node {
     ///
     /// Must be called before `run()` to enable Cut execution.
     pub fn with_execution_layer(mut self) -> Result<Self> {
+        use cipherbft_storage::{DclStore, InMemoryStore};
         let chain_config = ChainConfig::default();
-        let bridge = ExecutionBridge::new(chain_config)?;
+        let dcl_store: std::sync::Arc<dyn DclStore> = std::sync::Arc::new(InMemoryStore::new());
+        let bridge = ExecutionBridge::new(chain_config, dcl_store)?;
         self.execution_bridge = Some(Arc::new(bridge));
         Ok(self)
     }
