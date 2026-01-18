@@ -418,6 +418,125 @@ impl PrimaryState {
         // Clear old next-height attestations (anything before new current height)
         self.next_height_attestations
             .retain(|h, _| *h >= self.current_height);
+
+        // Cleanup stale data to prevent memory leaks
+        // Keep equivocation data for last 1000 heights (configurable if needed)
+        self.cleanup_stale_equivocations(1000);
+
+        // Cleanup old pending cars and cars awaiting batches
+        self.cleanup_stale_pending_data();
+    }
+
+    // =========================================================
+    // Memory Management / Garbage Collection
+    // =========================================================
+
+    /// Cleanup equivocation records older than the retention window.
+    ///
+    /// Equivocation data is important for slashing evidence but doesn't need
+    /// to be kept indefinitely. This method removes records for positions
+    /// that are older than `current_height - retention_heights`.
+    ///
+    /// # Arguments
+    /// * `retention_heights` - Number of heights to retain equivocation data for
+    pub fn cleanup_stale_equivocations(&mut self, retention_heights: u64) {
+        let min_position_to_keep = self.current_height.saturating_sub(retention_heights);
+
+        for positions in self.equivocations.values_mut() {
+            positions.retain(|pos, _| *pos >= min_position_to_keep);
+        }
+
+        // Remove validators with no remaining equivocation records
+        self.equivocations.retain(|_, positions| !positions.is_empty());
+    }
+
+    /// Cleanup available batches that are no longer needed.
+    ///
+    /// Removes batch hashes that are not in the provided set of referenced batches.
+    /// This should be called periodically with the set of batches still needed
+    /// for pending/attested Cars.
+    ///
+    /// # Arguments
+    /// * `referenced_batches` - Set of batch hashes that are still referenced
+    pub fn cleanup_available_batches(&mut self, referenced_batches: &std::collections::HashSet<Hash>) {
+        self.available_batches.retain(|hash| referenced_batches.contains(hash));
+    }
+
+    /// Get all batch hashes currently referenced by pending or attested Cars.
+    ///
+    /// Useful for determining which batches can be safely removed.
+    pub fn get_referenced_batch_hashes(&self) -> std::collections::HashSet<Hash> {
+        let mut referenced = std::collections::HashSet::new();
+
+        // Collect from pending Cars
+        for pending in self.pending_cars.values() {
+            for digest in &pending.car.batch_digests {
+                referenced.insert(digest.digest);
+            }
+        }
+
+        // Collect from Cars awaiting batches
+        for awaiting in self.cars_awaiting_batches.values() {
+            for digest in &awaiting.car.batch_digests {
+                referenced.insert(digest.digest);
+            }
+        }
+
+        // Collect from attested Cars
+        for (car, _) in self.attested_cars.values() {
+            for digest in &car.batch_digests {
+                referenced.insert(digest.digest);
+            }
+        }
+
+        // Collect from preserved attested Cars
+        for (car, _) in self.preserved_attested_cars.values() {
+            for digest in &car.batch_digests {
+                referenced.insert(digest.digest);
+            }
+        }
+
+        // Also keep pending digests
+        for digest in &self.pending_digests {
+            referenced.insert(digest.digest);
+        }
+
+        referenced
+    }
+
+    /// Cleanup stale pending data (pending cars, cars awaiting batches).
+    ///
+    /// Removes entries that have been pending for too long (likely orphaned).
+    /// Uses a timeout-based approach: entries older than 5 minutes are removed.
+    fn cleanup_stale_pending_data(&mut self) {
+        use std::time::Duration;
+
+        const STALE_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
+
+        // Cleanup old pending cars
+        self.pending_cars.retain(|_, pending| {
+            pending.created_at.elapsed() < STALE_TIMEOUT
+        });
+
+        // Cleanup old cars awaiting batches
+        self.cars_awaiting_batches.retain(|_, awaiting| {
+            awaiting.requested_at.elapsed() < STALE_TIMEOUT
+        });
+    }
+
+    /// Perform full memory cleanup.
+    ///
+    /// Call this periodically (e.g., every N finalized heights) for comprehensive cleanup.
+    pub fn full_cleanup(&mut self) {
+        // Cleanup equivocations
+        self.cleanup_stale_equivocations(1000);
+
+        // Cleanup available batches - keep only referenced ones
+        let referenced = self.get_referenced_batch_hashes();
+        self.cleanup_available_batches(&referenced);
+
+        // Cleanup stale pending data
+        self.cleanup_stale_pending_data();
     }
 
     /// Get combined attested Cars (current + preserved) for Cut formation

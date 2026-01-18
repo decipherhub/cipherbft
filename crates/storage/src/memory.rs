@@ -389,7 +389,25 @@ impl DclStore for InMemoryStore {
     async fn prune_before(&self, height: u64) -> Result<u64> {
         let mut pruned = 0u64;
 
-        // Prune finalized cuts - single lock acquisition
+        // Step 1: Collect Car hashes referenced by Cuts we're keeping
+        let mut referenced_car_hashes = std::collections::HashSet::new();
+        {
+            let state = self.cut_state.read();
+            // Collect from retained finalized cuts (height >= prune_height)
+            for (_, cut) in state.finalized.range(height..) {
+                for car in cut.cars.values() {
+                    referenced_car_hashes.insert(car.hash());
+                }
+            }
+            // Also keep references from pending cuts
+            for (_, cut) in &state.pending {
+                for car in cut.cars.values() {
+                    referenced_car_hashes.insert(car.hash());
+                }
+            }
+        }
+
+        // Step 2: Prune finalized cuts
         {
             let mut state = self.cut_state.write();
             let keys_to_remove: Vec<u64> =
@@ -401,11 +419,93 @@ impl DclStore for InMemoryStore {
             }
         }
 
-        // Note: In a full implementation, we would also prune:
-        // - Cars not referenced by retained Cuts
-        // - Attestations for pruned Cars
-        // - Batches for pruned Cars
-        // For MVP, we only prune Cuts
+        // Step 3: Collect batch hashes referenced by retained Cars
+        let mut referenced_batch_hashes = std::collections::HashSet::new();
+        {
+            let state = self.car_state.read();
+            for (_, car) in &state.cars {
+                let car_hash = car.hash();
+                if referenced_car_hashes.contains(&car_hash) {
+                    // This car is referenced, keep its batches
+                    for batch_digest in &car.batch_digests {
+                        referenced_batch_hashes.insert(batch_digest.digest);
+                    }
+                }
+            }
+        }
+
+        // Step 4: Prune unreferenced Cars and their indices
+        {
+            let mut state = self.car_state.write();
+            let cars_to_remove: Vec<(ValidatorId, u64)> = state
+                .cars
+                .iter()
+                .filter_map(|(key, car)| {
+                    let car_hash = car.hash();
+                    if !referenced_car_hashes.contains(&car_hash) {
+                        Some(*key)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            for (validator, position) in cars_to_remove {
+                if let Some(car) = state.cars.remove(&(validator, position)) {
+                    state.car_index.remove(&car.hash());
+                    pruned += 1;
+
+                    // Update highest position if necessary
+                    if state.highest_positions.get(&validator) == Some(&position) {
+                        let new_highest = state
+                            .cars
+                            .keys()
+                            .filter(|(vid, _)| *vid == validator)
+                            .map(|(_, pos)| *pos)
+                            .max();
+
+                        match new_highest {
+                            Some(pos) => {
+                                state.highest_positions.insert(validator, pos);
+                            }
+                            None => {
+                                state.highest_positions.remove(&validator);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Step 5: Prune unreferenced attestations
+        {
+            let mut attestations = self.attestations.write();
+            let atts_to_remove: Vec<Hash> = attestations
+                .keys()
+                .filter(|hash| !referenced_car_hashes.contains(hash))
+                .copied()
+                .collect();
+
+            for hash in atts_to_remove {
+                attestations.remove(&hash);
+                pruned += 1;
+            }
+        }
+
+        // Step 6: Prune unreferenced batches
+        {
+            let mut batches = self.batches.write();
+            let batches_to_remove: Vec<Hash> = batches
+                .keys()
+                .filter(|hash| !referenced_batch_hashes.contains(hash))
+                .copied()
+                .collect();
+
+            for hash in batches_to_remove {
+                batches.remove(&hash);
+                pruned += 1;
+            }
+        }
 
         Ok(pruned)
     }
