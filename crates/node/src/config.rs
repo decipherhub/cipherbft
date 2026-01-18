@@ -143,7 +143,9 @@ pub fn generate_local_configs(n: usize) -> Vec<NodeConfig> {
             let bls_pubkey_hex = hex::encode(bls_keypair.public_key.to_bytes());
 
             // Derive Ed25519 public key from secret key
-            let ed25519_keypair = c.ed25519_keypair().expect("valid Ed25519 keypair in config");
+            let ed25519_keypair = c
+                .ed25519_keypair()
+                .expect("valid Ed25519 keypair in config");
             let ed25519_pubkey_hex = hex::encode(ed25519_keypair.public_key.to_bytes());
 
             PeerConfig {

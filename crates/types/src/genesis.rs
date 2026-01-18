@@ -392,28 +392,24 @@ pub struct StorageEntry {
 impl Genesis {
     /// Load genesis from a JSON file.
     pub fn load(path: &std::path::Path) -> Result<Self, GenesisError> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| GenesisError::Io(e.to_string()))?;
+        let content = std::fs::read_to_string(path).map_err(|e| GenesisError::Io(e.to_string()))?;
         Self::from_json(&content)
     }
 
     /// Parse genesis from JSON string.
     pub fn from_json(json: &str) -> Result<Self, GenesisError> {
-        serde_json::from_str(json)
-            .map_err(|e| GenesisError::Parse(e.to_string()))
+        serde_json::from_str(json).map_err(|e| GenesisError::Parse(e.to_string()))
     }
 
     /// Serialize to JSON string.
     pub fn to_json(&self) -> Result<String, GenesisError> {
-        serde_json::to_string_pretty(self)
-            .map_err(|e| GenesisError::Serialize(e.to_string()))
+        serde_json::to_string_pretty(self).map_err(|e| GenesisError::Serialize(e.to_string()))
     }
 
     /// Save genesis to a file.
     pub fn save(&self, path: &std::path::Path) -> Result<(), GenesisError> {
         let json = self.to_json()?;
-        std::fs::write(path, json)
-            .map_err(|e| GenesisError::Io(e.to_string()))
+        std::fs::write(path, json).map_err(|e| GenesisError::Io(e.to_string()))
     }
 
     /// Validate the genesis file for consistency.

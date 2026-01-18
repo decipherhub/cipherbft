@@ -237,8 +237,9 @@ impl Node {
 
         // Create libp2p keypair from Ed25519 secret key for consensus network
         // This ensures deterministic PeerId across node restarts
-        let consensus_keypair = Keypair::ed25519_from_bytes(ed25519_secret_bytes)
-            .map_err(|e| anyhow::anyhow!("Failed to create libp2p keypair from Ed25519 key: {}", e))?;
+        let consensus_keypair = Keypair::ed25519_from_bytes(ed25519_secret_bytes).map_err(|e| {
+            anyhow::anyhow!("Failed to create libp2p keypair from Ed25519 key: {}", e)
+        })?;
         info!(
             "Consensus network PeerId: {}",
             consensus_keypair.public().to_peer_id()
