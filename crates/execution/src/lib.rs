@@ -51,6 +51,7 @@ pub mod database;
 pub mod engine;
 pub mod error;
 pub mod evm;
+pub mod genesis;
 pub mod precompiles;
 pub mod receipts;
 pub mod state;

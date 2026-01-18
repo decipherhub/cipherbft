@@ -2,8 +2,12 @@
 //!
 //! A Cosmos SDK-style CLI for the CipherBFT blockchain node.
 
+use alloy_primitives::U256;
 use anyhow::Result;
-use cipherd::{generate_local_configs, Node, NodeConfig};
+use cipherd::{
+    generate_local_configs, GenesisGenerator, GenesisGeneratorConfig, GenesisLoader, Node,
+    NodeConfig, ValidatorKeyFile,
+};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::{info, Level};
@@ -67,6 +71,10 @@ enum Commands {
         /// Path to configuration file (overrides --home)
         #[arg(long)]
         config: Option<PathBuf>,
+
+        /// Path to genesis file (overrides config and env var)
+        #[arg(long)]
+        genesis: Option<PathBuf>,
     },
 
     /// Generate testnet configuration files for local multi-validator testing
@@ -123,6 +131,12 @@ enum Commands {
         /// Path to genesis file (optional, uses default if not provided)
         #[arg(long)]
         genesis: Option<PathBuf>,
+    },
+
+    /// Genesis file generation and management commands
+    Genesis {
+        #[command(subcommand)]
+        command: GenesisCommands,
     },
 
     /// Tool for helping with debugging your application
@@ -198,6 +212,40 @@ enum ConfigCommands {
 }
 
 #[derive(Subcommand)]
+enum GenesisCommands {
+    /// Generate a new genesis file with auto-generated validator keys
+    Generate {
+        /// Number of validators to generate
+        #[arg(short = 'n', long, default_value = "4")]
+        validators: usize,
+
+        /// Chain ID for the EVM network
+        #[arg(long, default_value = "85300")]
+        chain_id: u64,
+
+        /// Network identifier (e.g., "cipherbft-testnet-1")
+        #[arg(long, default_value = "cipherbft-testnet-1")]
+        network_id: String,
+
+        /// Initial stake per validator in ETH (default: 32 ETH)
+        #[arg(long, default_value = "32")]
+        initial_stake_eth: u64,
+
+        /// Output path for the genesis file
+        #[arg(short, long, default_value = "./genesis.json")]
+        output: PathBuf,
+
+        /// Output directory for validator key files (default: ./keys)
+        #[arg(long, default_value = "./keys")]
+        keys_dir: PathBuf,
+
+        /// Skip writing validator key files
+        #[arg(long, default_value = "false")]
+        no_keys: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum DebugCommands {
     /// Print raw bytes for a block at a given height
     RawBytes {
@@ -232,9 +280,9 @@ async fn main() -> Result<()> {
             overwrite,
         } => cmd_init(&cli.home, moniker, &chain_id, overwrite),
 
-        Commands::Start { config } => {
+        Commands::Start { config, genesis } => {
             let config_path = config.unwrap_or_else(|| cli.home.join("config/node.json"));
-            cmd_start(config_path).await
+            cmd_start(config_path, genesis).await
         }
 
         Commands::Testnet { validators, output } => cmd_testnet(validators, output),
@@ -253,6 +301,8 @@ async fn main() -> Result<()> {
         Commands::Version { output } => cmd_version(&output),
 
         Commands::Validate { genesis } => cmd_validate(&cli.home, genesis),
+
+        Commands::Genesis { command } => cmd_genesis(command),
 
         Commands::Debug { command } => cmd_debug(command),
     };
@@ -340,7 +390,7 @@ fn cmd_init(
     Ok(())
 }
 
-async fn cmd_start(config_path: PathBuf) -> Result<()> {
+async fn cmd_start(config_path: PathBuf, genesis_override: Option<PathBuf>) -> Result<()> {
     if !config_path.exists() {
         anyhow::bail!(
             "Configuration file not found: {}\nRun 'cipherd init' first to create configuration.",
@@ -350,10 +400,25 @@ async fn cmd_start(config_path: PathBuf) -> Result<()> {
 
     info!("Loading configuration from {}", config_path.display());
 
-    let config = NodeConfig::load(&config_path)?;
+    let mut config = NodeConfig::load(&config_path)?;
+
+    // Override genesis path if provided via CLI
+    if genesis_override.is_some() {
+        config.genesis_path = genesis_override;
+    }
+
+    // Resolve and load genesis file
+    let genesis_path = config.effective_genesis_path();
+    info!("Loading genesis from {}", genesis_path.display());
+
+    let genesis = GenesisLoader::load_and_validate(&genesis_path)?;
+
     info!("Starting node with validator ID: {:?}", config.validator_id);
 
-    let node = Node::new(config)?;
+    // Create node and bootstrap validators from genesis
+    let mut node = Node::new(config)?;
+    node.bootstrap_validators_from_genesis(&genesis)?;
+
     node.run().await?;
 
     Ok(())
@@ -685,15 +750,117 @@ fn cmd_validate(home: &std::path::Path, genesis_path: Option<PathBuf>) -> Result
         anyhow::bail!("Genesis file not found at {}", path.display());
     }
 
-    let data = std::fs::read_to_string(&path)?;
-    let genesis: serde_json::Value = serde_json::from_str(&data)?;
-
-    // Basic validation
-    if genesis.get("chain_id").is_none() {
-        anyhow::bail!("Genesis file missing 'chain_id' field");
-    }
+    // Use GenesisLoader for comprehensive validation
+    let genesis = GenesisLoader::load_and_validate(&path)?;
 
     println!("Genesis file at {} is valid", path.display());
+    println!();
+    println!("  Chain ID:    {}", genesis.chain_id());
+    println!("  Network ID:  {}", genesis.cipherbft.network_id);
+    println!("  Validators:  {}", genesis.validator_count());
+    println!("  Total Stake: {} wei", genesis.total_staked());
+
+    Ok(())
+}
+
+fn cmd_genesis(command: GenesisCommands) -> Result<()> {
+    match command {
+        GenesisCommands::Generate {
+            validators,
+            chain_id,
+            network_id,
+            initial_stake_eth,
+            output,
+            keys_dir,
+            no_keys,
+        } => {
+            cmd_genesis_generate(
+                validators,
+                chain_id,
+                &network_id,
+                initial_stake_eth,
+                &output,
+                &keys_dir,
+                no_keys,
+            )
+        }
+    }
+}
+
+fn cmd_genesis_generate(
+    num_validators: usize,
+    chain_id: u64,
+    network_id: &str,
+    initial_stake_eth: u64,
+    output: &std::path::Path,
+    keys_dir: &std::path::Path,
+    no_keys: bool,
+) -> Result<()> {
+    println!("Generating genesis file...");
+    println!();
+
+    // Convert ETH to wei (1 ETH = 10^18 wei)
+    let initial_stake = U256::from(initial_stake_eth) * U256::from(1_000_000_000_000_000_000u128);
+
+    let config = GenesisGeneratorConfig {
+        num_validators,
+        chain_id,
+        network_id: network_id.to_string(),
+        initial_stake,
+        ..Default::default()
+    };
+
+    // Generate using thread_rng
+    let mut rng = rand::thread_rng();
+    let result = GenesisGenerator::generate(&mut rng, config)?;
+
+    // Write genesis file
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
+    let genesis_json = result.genesis.to_json()?;
+    std::fs::write(output, genesis_json)?;
+    println!("  Genesis file: {}", output.display());
+
+    // Write validator key files
+    if !no_keys {
+        std::fs::create_dir_all(keys_dir)?;
+        for (i, validator) in result.validators.iter().enumerate() {
+            let key_file = ValidatorKeyFile::from_generated(i, validator);
+            let key_path = keys_dir.join(format!("validator-{}.json", i));
+            let key_json = key_file.to_json()?;
+            std::fs::write(&key_path, key_json)?;
+        }
+        println!("  Validator keys: {}/validator-*.json", keys_dir.display());
+    }
+
+    println!();
+    println!("Genesis Summary:");
+    println!("  Chain ID:    {}", result.genesis.chain_id());
+    println!("  Network ID:  {}", result.genesis.cipherbft.network_id);
+    println!("  Validators:  {}", result.genesis.validator_count());
+    println!("  Total Stake: {} ETH", initial_stake_eth * num_validators as u64);
+    println!();
+
+    // Print validator info
+    println!("Validators:");
+    for (i, validator) in result.validators.iter().enumerate() {
+        println!(
+            "  [{}] {} (ed25519: {}...)",
+            i,
+            validator.address,
+            &validator.ed25519_pubkey_hex[..16]
+        );
+    }
+
+    println!();
+    println!("Genesis generation complete!");
+    println!();
+    println!("To validate the generated genesis:");
+    println!("  cipherd validate --genesis {}", output.display());
 
     Ok(())
 }
