@@ -56,8 +56,8 @@ impl IpRateLimiter {
                 if let Some(limiter) = limiters.get(&ip) {
                     Arc::clone(limiter)
                 } else {
-                    let quota = Quota::per_second(self.rate_per_second)
-                        .allow_burst(self.burst_size);
+                    let quota =
+                        Quota::per_second(self.rate_per_second).allow_burst(self.burst_size);
                     let limiter = Arc::new(RateLimiter::direct(quota));
                     limiters.insert(ip, Arc::clone(&limiter));
                     limiter

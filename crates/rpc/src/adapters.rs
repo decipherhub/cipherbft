@@ -24,7 +24,9 @@ use async_trait::async_trait;
 use tracing::{debug, trace};
 
 use crate::error::RpcResult;
-use crate::traits::{BlockNumberOrTag, ExecutionApi, MempoolApi, NetworkApi, RpcStorage, SyncStatus};
+use crate::traits::{
+    BlockNumberOrTag, ExecutionApi, MempoolApi, NetworkApi, RpcStorage, SyncStatus,
+};
 
 /// Stub RPC storage adapter.
 ///
@@ -158,7 +160,10 @@ impl Default for StubMempoolApi {
 #[async_trait]
 impl MempoolApi for StubMempoolApi {
     async fn submit_transaction(&self, tx_bytes: Bytes) -> RpcResult<B256> {
-        debug!("StubMempoolApi::submit_transaction({} bytes)", tx_bytes.len());
+        debug!(
+            "StubMempoolApi::submit_transaction({} bytes)",
+            tx_bytes.len()
+        );
         // For stub: compute a hash from the transaction bytes
         // In production, this would submit to actual mempool and return the tx hash
         let hash = alloy_primitives::keccak256(&tx_bytes);
@@ -306,8 +311,17 @@ mod tests {
         let storage = StubRpcStorage::default();
 
         assert_eq!(storage.latest_block_number().await.unwrap(), 0);
-        assert!(matches!(storage.sync_status().await.unwrap(), SyncStatus::NotSyncing));
-        assert_eq!(storage.get_balance(Address::ZERO, BlockNumberOrTag::Latest).await.unwrap(), U256::ZERO);
+        assert!(matches!(
+            storage.sync_status().await.unwrap(),
+            SyncStatus::NotSyncing
+        ));
+        assert_eq!(
+            storage
+                .get_balance(Address::ZERO, BlockNumberOrTag::Latest)
+                .await
+                .unwrap(),
+            U256::ZERO
+        );
     }
 
     #[tokio::test]
@@ -329,11 +343,17 @@ mod tests {
         let executor = StubExecutionApi::new();
 
         // Call should return empty bytes
-        let result = executor.call(None, None, None, None, None, None, BlockNumberOrTag::Latest).await.unwrap();
+        let result = executor
+            .call(None, None, None, None, None, None, BlockNumberOrTag::Latest)
+            .await
+            .unwrap();
         assert!(result.is_empty());
 
         // Estimate gas should return reasonable value
-        let gas = executor.estimate_gas(None, None, None, None, None, None, BlockNumberOrTag::Latest).await.unwrap();
+        let gas = executor
+            .estimate_gas(None, None, None, None, None, None, BlockNumberOrTag::Latest)
+            .await
+            .unwrap();
         assert_eq!(gas, 21_000);
     }
 

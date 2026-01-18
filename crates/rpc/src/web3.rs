@@ -32,7 +32,9 @@ impl Web3Api {
         // Format: CipherBFT/v{version}/{os}
         let os = std::env::consts::OS;
         let version_str = format!("CipherBFT/v{}/{}", version, os);
-        Self { version: version_str }
+        Self {
+            version: version_str,
+        }
     }
 
     /// Create a new Web3Api instance with default version.

@@ -219,10 +219,7 @@ async fn test_block_queries() {
     assert!(block.is_none());
 
     // Query by hash
-    let block = storage
-        .get_block_by_hash(B256::ZERO, false)
-        .await
-        .unwrap();
+    let block = storage.get_block_by_hash(B256::ZERO, false).await.unwrap();
     assert!(block.is_none());
 
     // Query specific number

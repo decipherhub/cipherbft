@@ -111,30 +111,30 @@ where
             Arc::clone(&self.executor),
             Arc::clone(&self.config),
         );
-        module
-            .merge(eth_api.into_rpc())
-            .map_err(|e| crate::error::RpcError::Internal(format!("Failed to merge eth module: {}", e)))?;
+        module.merge(eth_api.into_rpc()).map_err(|e| {
+            crate::error::RpcError::Internal(format!("Failed to merge eth module: {}", e))
+        })?;
         info!("Registered eth_* namespace");
 
         // Register net_* namespace
         let net_api = NetApi::new(Arc::clone(&self.network), self.config.chain_id);
-        module
-            .merge(net_api.into_rpc())
-            .map_err(|e| crate::error::RpcError::Internal(format!("Failed to merge net module: {}", e)))?;
+        module.merge(net_api.into_rpc()).map_err(|e| {
+            crate::error::RpcError::Internal(format!("Failed to merge net module: {}", e))
+        })?;
         info!("Registered net_* namespace");
 
         // Register web3_* namespace
         let web3_api = Web3Api::new();
-        module
-            .merge(web3_api.into_rpc())
-            .map_err(|e| crate::error::RpcError::Internal(format!("Failed to merge web3 module: {}", e)))?;
+        module.merge(web3_api.into_rpc()).map_err(|e| {
+            crate::error::RpcError::Internal(format!("Failed to merge web3 module: {}", e))
+        })?;
         info!("Registered web3_* namespace");
 
         // Register eth pubsub (WebSocket subscriptions)
         let pubsub_api = EthPubSubApi::new(Arc::clone(&self.subscription_manager));
-        module
-            .merge(pubsub_api.into_rpc())
-            .map_err(|e| crate::error::RpcError::Internal(format!("Failed to merge pubsub module: {}", e)))?;
+        module.merge(pubsub_api.into_rpc()).map_err(|e| {
+            crate::error::RpcError::Internal(format!("Failed to merge pubsub module: {}", e))
+        })?;
         info!("Registered eth pubsub (eth_subscribe, eth_unsubscribe)");
 
         Ok(module)

@@ -5,7 +5,9 @@ use std::sync::Arc;
 use alloy_consensus::transaction::SignerRecoverable;
 use alloy_consensus::{Transaction as TxTrait, TxEnvelope};
 use alloy_primitives::{Address, Bytes, B256, U256, U64};
-use alloy_rpc_types_eth::{Block, Filter, Log, SyncInfo, SyncStatus as EthSyncStatus, Transaction, TransactionReceipt};
+use alloy_rpc_types_eth::{
+    Block, Filter, Log, SyncInfo, SyncStatus as EthSyncStatus, Transaction, TransactionReceipt,
+};
 use jsonrpsee::core::RpcResult as JsonRpcResult;
 use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::ErrorObjectOwned;
@@ -52,7 +54,11 @@ pub trait EthRpc {
 
     /// Returns the number of transactions sent from an address.
     #[method(name = "getTransactionCount")]
-    async fn get_transaction_count(&self, address: Address, block: Option<String>) -> JsonRpcResult<U64>;
+    async fn get_transaction_count(
+        &self,
+        address: Address,
+        block: Option<String>,
+    ) -> JsonRpcResult<U64>;
 
     /// Returns information about a block by hash.
     #[method(name = "getBlockByHash")]
@@ -76,7 +82,10 @@ pub trait EthRpc {
 
     /// Returns the receipt of a transaction by transaction hash.
     #[method(name = "getTransactionReceipt")]
-    async fn get_transaction_receipt(&self, hash: B256) -> JsonRpcResult<Option<TransactionReceipt>>;
+    async fn get_transaction_receipt(
+        &self,
+        hash: B256,
+    ) -> JsonRpcResult<Option<TransactionReceipt>>;
 
     /// Returns an array of all logs matching a given filter object.
     #[method(name = "getLogs")]
@@ -88,11 +97,7 @@ pub trait EthRpc {
 
     /// Executes a new message call immediately without creating a transaction.
     #[method(name = "call")]
-    async fn call(
-        &self,
-        call_request: CallRequest,
-        block: Option<String>,
-    ) -> JsonRpcResult<Bytes>;
+    async fn call(&self, call_request: CallRequest, block: Option<String>) -> JsonRpcResult<Bytes>;
 
     /// Generates and returns an estimate of how much gas is necessary.
     #[method(name = "estimateGas")]
@@ -164,7 +169,10 @@ where
     }
 
     /// Parse a block number or tag from a string.
-    fn parse_block_number(&self, block: Option<String>) -> Result<BlockNumberOrTag, ErrorObjectOwned> {
+    fn parse_block_number(
+        &self,
+        block: Option<String>,
+    ) -> Result<BlockNumberOrTag, ErrorObjectOwned> {
         match block.as_deref() {
             None | Some("latest") => Ok(BlockNumberOrTag::Latest),
             Some("earliest") => Ok(BlockNumberOrTag::Earliest),
@@ -174,11 +182,13 @@ where
             Some(s) => {
                 // Parse hex number (0x prefix) or decimal
                 let num = if let Some(hex_str) = s.strip_prefix("0x") {
-                    u64::from_str_radix(hex_str, 16)
-                        .map_err(|_| RpcError::InvalidParams(format!("Invalid block number: {}", s)))?
+                    u64::from_str_radix(hex_str, 16).map_err(|_| {
+                        RpcError::InvalidParams(format!("Invalid block number: {}", s))
+                    })?
                 } else {
-                    s.parse::<u64>()
-                        .map_err(|_| RpcError::InvalidParams(format!("Invalid block number: {}", s)))?
+                    s.parse::<u64>().map_err(|_| {
+                        RpcError::InvalidParams(format!("Invalid block number: {}", s))
+                    })?
                 };
                 Ok(BlockNumberOrTag::Number(num))
             }
@@ -199,12 +209,14 @@ where
     /// - Basic sanity checks
     fn validate_transaction(&self, tx_bytes: &[u8]) -> Result<(TxEnvelope, Address), RpcError> {
         // Decode the transaction
-        let tx: TxEnvelope = alloy_rlp::Decodable::decode(&mut &tx_bytes[..])
-            .map_err(|e| RpcError::InvalidParams(format!("Invalid transaction RLP encoding: {}", e)))?;
+        let tx: TxEnvelope = alloy_rlp::Decodable::decode(&mut &tx_bytes[..]).map_err(|e| {
+            RpcError::InvalidParams(format!("Invalid transaction RLP encoding: {}", e))
+        })?;
 
         // Recover the sender address (this validates the signature)
-        let sender = tx.recover_signer()
-            .map_err(|e| RpcError::InvalidParams(format!("Invalid transaction signature: {}", e)))?;
+        let sender = tx.recover_signer().map_err(|e| {
+            RpcError::InvalidParams(format!("Invalid transaction signature: {}", e))
+        })?;
 
         // Validate chain ID for EIP-155 transactions
         if let Some(tx_chain_id) = tx.chain_id() {
@@ -218,7 +230,9 @@ where
 
         // Basic sanity checks
         if tx.gas_limit() == 0 {
-            return Err(RpcError::InvalidParams("Gas limit cannot be zero".to_string()));
+            return Err(RpcError::InvalidParams(
+                "Gas limit cannot be zero".to_string(),
+            ));
         }
 
         // Maximum gas limit sanity check (30 million - typical block gas limit)
@@ -328,7 +342,11 @@ where
             .map_err(Self::to_json_rpc_error)
     }
 
-    async fn get_transaction_count(&self, address: Address, block: Option<String>) -> JsonRpcResult<U64> {
+    async fn get_transaction_count(
+        &self,
+        address: Address,
+        block: Option<String>,
+    ) -> JsonRpcResult<U64> {
         trace!(
             "eth_getTransactionCount: address={}, block={:?}",
             address,
@@ -384,7 +402,10 @@ where
             .map_err(Self::to_json_rpc_error)
     }
 
-    async fn get_transaction_receipt(&self, hash: B256) -> JsonRpcResult<Option<TransactionReceipt>> {
+    async fn get_transaction_receipt(
+        &self,
+        hash: B256,
+    ) -> JsonRpcResult<Option<TransactionReceipt>> {
         trace!("eth_getTransactionReceipt: hash={}", hash);
         self.storage
             .get_transaction_receipt(hash)
@@ -397,8 +418,14 @@ where
 
         // Validate block range doesn't exceed max
         if let (Some(from_num), Some(to_num)) = (
-            filter.block_option.get_from_block().and_then(|b| b.as_number()),
-            filter.block_option.get_to_block().and_then(|b| b.as_number()),
+            filter
+                .block_option
+                .get_from_block()
+                .and_then(|b| b.as_number()),
+            filter
+                .block_option
+                .get_to_block()
+                .and_then(|b| b.as_number()),
         ) {
             let range = to_num.saturating_sub(from_num);
             if range > self.config.max_logs_block_range {
@@ -437,11 +464,7 @@ where
             .map_err(Self::to_json_rpc_error)
     }
 
-    async fn call(
-        &self,
-        call_request: CallRequest,
-        block: Option<String>,
-    ) -> JsonRpcResult<Bytes> {
+    async fn call(&self, call_request: CallRequest, block: Option<String>) -> JsonRpcResult<Bytes> {
         trace!("eth_call: {:?}, block={:?}", call_request, block);
         let block_num = self.parse_block_number(block)?;
         self.executor

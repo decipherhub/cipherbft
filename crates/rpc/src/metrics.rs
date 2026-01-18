@@ -79,16 +79,12 @@ pub fn record_request_error(method: &str, duration_secs: f64) {
 
 /// Increment active connections for a transport.
 pub fn inc_active_connections(transport: &str) {
-    RPC_ACTIVE_CONNECTIONS
-        .with_label_values(&[transport])
-        .inc();
+    RPC_ACTIVE_CONNECTIONS.with_label_values(&[transport]).inc();
 }
 
 /// Decrement active connections for a transport.
 pub fn dec_active_connections(transport: &str) {
-    RPC_ACTIVE_CONNECTIONS
-        .with_label_values(&[transport])
-        .dec();
+    RPC_ACTIVE_CONNECTIONS.with_label_values(&[transport]).dec();
 }
 
 /// Set the number of active subscriptions for a kind.

@@ -929,16 +929,14 @@ async fn cmd_status(node: &str) -> Result<()> {
         .request("eth_chainId", rpc_params![])
         .await
         .context("Failed to query chain ID")?;
-    let chain_id_num = u64::from_str_radix(chain_id.trim_start_matches("0x"), 16)
-        .unwrap_or(0);
+    let chain_id_num = u64::from_str_radix(chain_id.trim_start_matches("0x"), 16).unwrap_or(0);
 
     // Query block number
     let block_number: String = client
         .request("eth_blockNumber", rpc_params![])
         .await
         .context("Failed to query block number")?;
-    let block_num = u64::from_str_radix(block_number.trim_start_matches("0x"), 16)
-        .unwrap_or(0);
+    let block_num = u64::from_str_radix(block_number.trim_start_matches("0x"), 16).unwrap_or(0);
 
     // Query sync status
     let syncing: serde_json::Value = client
@@ -951,8 +949,7 @@ async fn cmd_status(node: &str) -> Result<()> {
         .request("net_peerCount", rpc_params![])
         .await
         .context("Failed to query peer count")?;
-    let peer_count_num = u64::from_str_radix(peer_count.trim_start_matches("0x"), 16)
-        .unwrap_or(0);
+    let peer_count_num = u64::from_str_radix(peer_count.trim_start_matches("0x"), 16).unwrap_or(0);
 
     // Query client version
     let client_version: String = client
@@ -985,7 +982,11 @@ async fn cmd_status(node: &str) -> Result<()> {
             .and_then(|v| v.as_str())
             .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
             .unwrap_or(0);
-        println!("  Syncing:    true ({}/{} blocks)", current - starting, highest - starting);
+        println!(
+            "  Syncing:    true ({}/{} blocks)",
+            current - starting,
+            highest - starting
+        );
     } else {
         println!("  Syncing:    false");
     }

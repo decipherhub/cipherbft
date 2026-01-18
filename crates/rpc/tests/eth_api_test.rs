@@ -66,10 +66,7 @@ async fn test_stub_storage_missing_block() {
         .unwrap();
     assert!(block.is_none());
 
-    let block = storage
-        .get_block_by_hash(B256::ZERO, false)
-        .await
-        .unwrap();
+    let block = storage.get_block_by_hash(B256::ZERO, false).await.unwrap();
     assert!(block.is_none());
 }
 
