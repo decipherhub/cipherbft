@@ -5,9 +5,10 @@ use cipherbft_crypto::{
     Ed25519Signature as CryptoSignature,
 };
 use informalsystems_malachitebft_core_types::SigningScheme;
+use serde::{Deserialize, Serialize};
 
 /// Wrapper around Ed25519 public key for Malachite.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsensusPublicKey(pub CryptoPublicKey);
 
 impl Debug for ConsensusPublicKey {

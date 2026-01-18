@@ -5,17 +5,26 @@
 
 use cipherbft_data_chain::worker::TransactionValidator;
 use cipherbft_execution::{
-    Bytes, Car as ExecutionCar, ChainConfig, Cut as ExecutionCut, ExecutionLayer, ExecutionResult,
-    B256, U256,
+    keccak256, Bytes, Car as ExecutionCar, ChainConfig, Cut as ExecutionCut, ExecutionLayer,
+    ExecutionResult, B256, U256,
 };
 use std::sync::Arc;
+use std::sync::RwLock as StdRwLock;
 use tokio::sync::RwLock;
 use tracing::info;
 
 /// Bridge between consensus and execution layers
+///
+/// Maintains the connection between the consensus layer and the execution layer,
+/// tracking block hashes to ensure proper chain connectivity.
 pub struct ExecutionBridge {
     /// Execution layer instance
     execution: Arc<RwLock<ExecutionLayer>>,
+    /// Hash of the last executed block (used as parent hash for the next block)
+    ///
+    /// Initialized to B256::ZERO for the genesis block.
+    /// Updated after each successful block execution.
+    last_block_hash: StdRwLock<B256>,
 }
 
 impl ExecutionBridge {
@@ -29,6 +38,8 @@ impl ExecutionBridge {
 
         Ok(Self {
             execution: Arc::new(RwLock::new(execution)),
+            // Genesis block has no parent, so initialize to zero
+            last_block_hash: StdRwLock::new(B256::ZERO),
         })
     }
 
@@ -55,6 +66,7 @@ impl ExecutionBridge {
     /// Execute a finalized Cut from consensus
     ///
     /// This is called when the Primary produces a CutReady event.
+    /// After successful execution, updates the `last_block_hash` for chain connectivity.
     ///
     /// # Arguments
     ///
@@ -76,16 +88,46 @@ impl ExecutionBridge {
         // Convert consensus Cut to execution Cut
         let execution_cut = self.convert_cut(consensus_cut)?;
 
+        // Store block metadata for hash computation after execution
+        let block_number = execution_cut.block_number;
+        let timestamp = execution_cut.timestamp;
+        let parent_hash = execution_cut.parent_hash;
+
         let mut execution = self.execution.write().await;
 
-        execution
+        let result = execution
             .execute_cut(execution_cut)
-            .map_err(|e| anyhow::anyhow!("Cut execution failed: {}", e))
+            .map_err(|e| anyhow::anyhow!("Cut execution failed: {}", e))?;
+
+        // Compute and store the new block hash for the next block's parent_hash
+        let new_block_hash = compute_block_hash(
+            block_number,
+            timestamp,
+            parent_hash,
+            result.state_root,
+            result.transactions_root,
+            result.receipts_root,
+        );
+
+        // Update the last block hash for the next execution
+        if let Ok(mut guard) = self.last_block_hash.write() {
+            *guard = new_block_hash;
+        }
+
+        info!(
+            height = block_number,
+            block_hash = %new_block_hash,
+            parent_hash = %parent_hash,
+            "Block hash updated"
+        );
+
+        Ok(result)
     }
 
     /// Convert a consensus Cut to an execution Cut
     ///
     /// This converts the data-chain Cut format to the execution layer format.
+    /// Uses the tracked `last_block_hash` as the parent hash to maintain chain connectivity.
     fn convert_cut(
         &self,
         consensus_cut: cipherbft_data_chain::Cut,
@@ -110,13 +152,20 @@ impl ExecutionBridge {
             execution_cars.push(execution_car);
         }
 
+        // Read the parent hash from the last executed block
+        let parent_hash = self
+            .last_block_hash
+            .read()
+            .map(|guard| *guard)
+            .unwrap_or(B256::ZERO);
+
         Ok(ExecutionCut {
             block_number: consensus_cut.height,
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
-            parent_hash: B256::ZERO, // TODO: Track parent hash properly
+            parent_hash,
             cars: execution_cars,
             gas_limit: 30_000_000,                 // Default gas limit
             base_fee_per_gas: Some(1_000_000_000), // Default base fee
@@ -127,6 +176,45 @@ impl ExecutionBridge {
     pub fn shared(self) -> Arc<Self> {
         Arc::new(self)
     }
+}
+
+/// Compute a deterministic block hash from block components.
+///
+/// This hash is used to link blocks together, ensuring chain connectivity.
+/// The hash is computed by concatenating key block fields and hashing with keccak256.
+///
+/// # Arguments
+///
+/// * `block_number` - The block height
+/// * `timestamp` - Block timestamp in seconds
+/// * `parent_hash` - Hash of the parent block
+/// * `state_root` - State root after execution
+/// * `transactions_root` - Merkle root of transactions
+/// * `receipts_root` - Merkle root of receipts
+///
+/// # Returns
+///
+/// A 32-byte block hash
+fn compute_block_hash(
+    block_number: u64,
+    timestamp: u64,
+    parent_hash: B256,
+    state_root: B256,
+    transactions_root: B256,
+    receipts_root: B256,
+) -> B256 {
+    // Concatenate block fields into a single buffer for hashing
+    // Layout: block_number (8) + timestamp (8) + parent_hash (32) + state_root (32)
+    //         + transactions_root (32) + receipts_root (32) = 144 bytes
+    let mut data = Vec::with_capacity(144);
+    data.extend_from_slice(&block_number.to_be_bytes());
+    data.extend_from_slice(&timestamp.to_be_bytes());
+    data.extend_from_slice(parent_hash.as_slice());
+    data.extend_from_slice(state_root.as_slice());
+    data.extend_from_slice(transactions_root.as_slice());
+    data.extend_from_slice(receipts_root.as_slice());
+
+    keccak256(&data)
 }
 
 /// Create a default execution bridge for testing/development
@@ -175,5 +263,108 @@ mod tests {
         // Test TransactionValidator trait implementation
         let result = bridge.validate_transaction(&[0x01, 0x02, 0x03]).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_compute_block_hash_deterministic() {
+        // Same inputs should produce the same hash
+        let block_number = 1u64;
+        let timestamp = 1234567890u64;
+        let parent_hash = B256::ZERO;
+        let state_root = B256::from([1u8; 32]);
+        let transactions_root = B256::from([2u8; 32]);
+        let receipts_root = B256::from([3u8; 32]);
+
+        let hash1 = compute_block_hash(
+            block_number,
+            timestamp,
+            parent_hash,
+            state_root,
+            transactions_root,
+            receipts_root,
+        );
+
+        let hash2 = compute_block_hash(
+            block_number,
+            timestamp,
+            parent_hash,
+            state_root,
+            transactions_root,
+            receipts_root,
+        );
+
+        assert_eq!(hash1, hash2, "Block hash should be deterministic");
+    }
+
+    #[test]
+    fn test_compute_block_hash_different_inputs() {
+        // Different inputs should produce different hashes
+        let hash1 = compute_block_hash(
+            1,
+            1234567890,
+            B256::ZERO,
+            B256::from([1u8; 32]),
+            B256::from([2u8; 32]),
+            B256::from([3u8; 32]),
+        );
+
+        let hash2 = compute_block_hash(
+            2, // Different block number
+            1234567890,
+            B256::ZERO,
+            B256::from([1u8; 32]),
+            B256::from([2u8; 32]),
+            B256::from([3u8; 32]),
+        );
+
+        assert_ne!(
+            hash1, hash2,
+            "Different inputs should produce different hashes"
+        );
+    }
+
+    #[test]
+    fn test_compute_block_hash_parent_hash_matters() {
+        // Changing parent hash should change the block hash
+        let hash1 = compute_block_hash(
+            1,
+            1234567890,
+            B256::ZERO,
+            B256::from([1u8; 32]),
+            B256::from([2u8; 32]),
+            B256::from([3u8; 32]),
+        );
+
+        let hash2 = compute_block_hash(
+            1,
+            1234567890,
+            B256::from([99u8; 32]), // Different parent hash
+            B256::from([1u8; 32]),
+            B256::from([2u8; 32]),
+            B256::from([3u8; 32]),
+        );
+
+        assert_ne!(
+            hash1, hash2,
+            "Different parent hash should produce different block hash"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_last_block_hash_initialized_to_zero() {
+        let bridge = create_default_bridge().unwrap();
+
+        // The last_block_hash should be initialized to B256::ZERO
+        let last_hash = bridge
+            .last_block_hash
+            .read()
+            .map(|guard| *guard)
+            .unwrap_or(B256::from([0xffu8; 32])); // Use non-zero as fallback to detect errors
+
+        assert_eq!(
+            last_hash,
+            B256::ZERO,
+            "Initial last_block_hash should be B256::ZERO"
+        );
     }
 }

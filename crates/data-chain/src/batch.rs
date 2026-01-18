@@ -1,7 +1,15 @@
 //! Transaction batch types for DCL Workers
+//!
+//! # Security
+//!
+//! The [`Batch`] type implements bounded deserialization to prevent OOM attacks.
+//! Transaction count and individual transaction sizes are limited to prevent
+//! malicious peers from causing memory exhaustion.
 
+use crate::error::{MAX_TRANSACTIONS_PER_BATCH, MAX_TRANSACTION_SIZE};
 use cipherbft_types::Hash;
-use serde::{Deserialize, Serialize};
+use serde::de::{SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Raw transaction data
 pub type Transaction = Vec<u8>;
@@ -42,12 +50,78 @@ impl BatchDigest {
     }
 }
 
+/// Deserialize a Vec<Transaction> with bounds checking to prevent OOM attacks.
+fn deserialize_bounded_transactions<'de, D>(deserializer: D) -> Result<Vec<Transaction>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct BoundedTransactionVecVisitor;
+
+    impl<'de> Visitor<'de> for BoundedTransactionVecVisitor {
+        type Value = Vec<Transaction>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(
+                formatter,
+                "a sequence of at most {} transactions, each at most {} bytes",
+                MAX_TRANSACTIONS_PER_BATCH, MAX_TRANSACTION_SIZE
+            )
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            // Check size hint to reject early
+            if let Some(size) = seq.size_hint() {
+                if size > MAX_TRANSACTIONS_PER_BATCH {
+                    return Err(serde::de::Error::custom(format!(
+                        "transaction count {} exceeds maximum of {}",
+                        size, MAX_TRANSACTIONS_PER_BATCH
+                    )));
+                }
+            }
+
+            let capacity = seq.size_hint().unwrap_or(0).min(MAX_TRANSACTIONS_PER_BATCH);
+            let mut transactions = Vec::with_capacity(capacity);
+
+            while let Some(tx) = seq.next_element::<Transaction>()? {
+                if transactions.len() >= MAX_TRANSACTIONS_PER_BATCH {
+                    return Err(serde::de::Error::custom(format!(
+                        "transaction count exceeds maximum of {}",
+                        MAX_TRANSACTIONS_PER_BATCH
+                    )));
+                }
+                if tx.len() > MAX_TRANSACTION_SIZE {
+                    return Err(serde::de::Error::custom(format!(
+                        "transaction size {} exceeds maximum of {}",
+                        tx.len(),
+                        MAX_TRANSACTION_SIZE
+                    )));
+                }
+                transactions.push(tx);
+            }
+
+            Ok(transactions)
+        }
+    }
+
+    deserializer.deserialize_seq(BoundedTransactionVecVisitor)
+}
+
 /// Full transaction batch (stored by Workers)
+///
+/// # Security
+///
+/// This type implements bounded deserialization. When deserializing:
+/// - Transaction count is limited to [`MAX_TRANSACTIONS_PER_BATCH`]
+/// - Individual transaction size is limited to [`MAX_TRANSACTION_SIZE`]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Batch {
     /// Worker that created this batch
     pub worker_id: u8,
-    /// Raw transaction data
+    /// Raw transaction data (bounded by MAX_TRANSACTIONS_PER_BATCH)
+    #[serde(deserialize_with = "deserialize_bounded_transactions")]
     pub transactions: Vec<Transaction>,
     /// Creation timestamp (unix millis)
     pub timestamp: u64,
