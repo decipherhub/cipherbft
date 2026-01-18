@@ -35,6 +35,17 @@ pub enum ConsensusError {
     #[error("invalid configuration: {0}")]
     InvalidConfig(String),
 
+    /// Validator set not found for the specified height.
+    #[error("validator set not found for height {height}")]
+    ValidatorSetNotFound {
+        /// The height for which no validator set was found.
+        height: u64,
+    },
+
+    /// Failed to spawn the host actor.
+    #[error("failed to spawn host actor: {0}")]
+    HostSpawnError(String),
+
     /// Validator set size exceeds maximum allowed.
     #[error(
         "invalid validator set size: {0} exceeds maximum of {}",
@@ -50,6 +61,10 @@ pub enum ConsensusError {
         /// Maximum allowed size
         limit: usize,
     },
+
+    /// Generic error for other consensus failures.
+    #[error("{0}")]
+    Other(String),
 }
 
 #[cfg(test)]
