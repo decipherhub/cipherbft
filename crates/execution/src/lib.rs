@@ -67,6 +67,10 @@ pub use evm::{
     CipherBftEvmConfig, TransactionResult, CIPHERBFT_CHAIN_ID, DEFAULT_BASE_FEE_PER_GAS,
     DEFAULT_BLOCK_GAS_LIMIT, MIN_STAKE_AMOUNT, UNBONDING_PERIOD_SECONDS,
 };
+pub use genesis::{
+    read_total_staked, read_validator_address, read_validator_count, read_validator_stake,
+    GenesisInitializer,
+};
 pub use mpt::{compute_state_root, compute_state_root_from_entries, compute_storage_root};
 pub use precompiles::{
     CipherBftPrecompileProvider, StakingPrecompile, StakingState, ValidatorInfo,
@@ -75,10 +79,6 @@ pub use precompiles::{
 pub use receipts::{
     aggregate_bloom, compute_logs_bloom_from_transactions, compute_receipts_root,
     compute_transactions_root, logs_bloom,
-};
-pub use genesis::{
-    read_total_staked, read_validator_address, read_validator_count, read_validator_stake,
-    GenesisInitializer,
 };
 pub use rlp::{rlp_encode_account, rlp_encode_storage_value, RlpAccount, KECCAK_EMPTY};
 pub use state::StateManager;

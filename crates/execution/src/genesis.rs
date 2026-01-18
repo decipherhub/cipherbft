@@ -491,10 +491,8 @@ mod tests {
 
         // Verify validator account was created
         let account = provider.get_account(validator.address).unwrap().unwrap();
-        assert_eq!(
-            account.balance,
-            U256::from(64_000_000_000_000_000_000u128)
-        ); // 2x stake
+        assert_eq!(account.balance, U256::from(64_000_000_000_000_000_000u128));
+        // 2x stake
     }
 
     #[test]
@@ -521,8 +519,14 @@ mod tests {
 
         // Verify each validator
         for (i, validator) in validators.iter().enumerate() {
-            assert_eq!(read_validator_address(&*provider, i).unwrap(), validator.address);
-            assert_eq!(read_validator_stake(&*provider, i).unwrap(), validator.staked_amount);
+            assert_eq!(
+                read_validator_address(&*provider, i).unwrap(),
+                validator.address
+            );
+            assert_eq!(
+                read_validator_stake(&*provider, i).unwrap(),
+                validator.staked_amount
+            );
         }
     }
 
@@ -559,9 +563,7 @@ mod tests {
         assert!(stored_code.is_some());
 
         // Verify storage was set
-        let storage_value = provider
-            .get_storage(contract_addr, U256::ZERO)
-            .unwrap();
+        let storage_value = provider.get_storage(contract_addr, U256::ZERO).unwrap();
         assert_eq!(storage_value, U256::from(42));
     }
 
@@ -593,13 +595,22 @@ mod tests {
 
         // Read voting powers (should be in basis points: 2500, 5000, 2500)
         let power_0 = provider
-            .get_storage(STAKING_PRECOMPILE_ADDRESS, staking_slots::VALIDATORS_START + U256::from(2))
+            .get_storage(
+                STAKING_PRECOMPILE_ADDRESS,
+                staking_slots::VALIDATORS_START + U256::from(2),
+            )
             .unwrap();
         let power_1 = provider
-            .get_storage(STAKING_PRECOMPILE_ADDRESS, staking_slots::VALIDATORS_START + U256::from(5))
+            .get_storage(
+                STAKING_PRECOMPILE_ADDRESS,
+                staking_slots::VALIDATORS_START + U256::from(5),
+            )
             .unwrap();
         let power_2 = provider
-            .get_storage(STAKING_PRECOMPILE_ADDRESS, staking_slots::VALIDATORS_START + U256::from(8))
+            .get_storage(
+                STAKING_PRECOMPILE_ADDRESS,
+                staking_slots::VALIDATORS_START + U256::from(8),
+            )
             .unwrap();
 
         assert_eq!(power_0, U256::from(2500)); // 25%
