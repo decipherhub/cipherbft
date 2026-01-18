@@ -2,12 +2,14 @@
 
 use std::sync::Arc;
 
+use alloy_consensus::transaction::SignerRecoverable;
+use alloy_consensus::{Transaction as TxTrait, TxEnvelope};
 use alloy_primitives::{Address, Bytes, B256, U256, U64};
 use alloy_rpc_types_eth::{Block, Filter, Log, SyncInfo, SyncStatus as EthSyncStatus, Transaction, TransactionReceipt};
 use jsonrpsee::core::RpcResult as JsonRpcResult;
 use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::ErrorObjectOwned;
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 use crate::config::RpcConfig;
 use crate::error::RpcError;
@@ -187,6 +189,58 @@ where
     fn to_json_rpc_error(err: RpcError) -> ErrorObjectOwned {
         err.into()
     }
+
+    /// Validate a raw transaction before submission to the mempool.
+    ///
+    /// This performs:
+    /// - RLP decoding validation
+    /// - Signature recovery (validates signature is well-formed)
+    /// - Chain ID validation (for EIP-155 transactions)
+    /// - Basic sanity checks
+    fn validate_transaction(&self, tx_bytes: &[u8]) -> Result<(TxEnvelope, Address), RpcError> {
+        // Decode the transaction
+        let tx: TxEnvelope = alloy_rlp::Decodable::decode(&mut &tx_bytes[..])
+            .map_err(|e| RpcError::InvalidParams(format!("Invalid transaction RLP encoding: {}", e)))?;
+
+        // Recover the sender address (this validates the signature)
+        let sender = tx.recover_signer()
+            .map_err(|e| RpcError::InvalidParams(format!("Invalid transaction signature: {}", e)))?;
+
+        // Validate chain ID for EIP-155 transactions
+        if let Some(tx_chain_id) = tx.chain_id() {
+            if tx_chain_id != self.config.chain_id {
+                return Err(RpcError::InvalidParams(format!(
+                    "Transaction chain ID {} does not match node chain ID {}",
+                    tx_chain_id, self.config.chain_id
+                )));
+            }
+        }
+
+        // Basic sanity checks
+        if tx.gas_limit() == 0 {
+            return Err(RpcError::InvalidParams("Gas limit cannot be zero".to_string()));
+        }
+
+        // Maximum gas limit sanity check (30 million - typical block gas limit)
+        const MAX_GAS_LIMIT: u64 = 30_000_000;
+        if tx.gas_limit() > MAX_GAS_LIMIT {
+            return Err(RpcError::InvalidParams(format!(
+                "Gas limit {} exceeds maximum of {}",
+                tx.gas_limit(),
+                MAX_GAS_LIMIT
+            )));
+        }
+
+        debug!(
+            "Transaction validated: hash={}, sender={}, gas_limit={}, nonce={}",
+            tx.tx_hash(),
+            sender,
+            tx.gas_limit(),
+            tx.nonce()
+        );
+
+        Ok((tx, sender))
+    }
 }
 
 #[async_trait::async_trait]
@@ -364,6 +418,19 @@ where
 
     async fn send_raw_transaction(&self, tx_bytes: Bytes) -> JsonRpcResult<B256> {
         debug!("eth_sendRawTransaction: {} bytes", tx_bytes.len());
+
+        // Validate the transaction before submission
+        let (tx, sender) = self.validate_transaction(&tx_bytes).map_err(|e| {
+            warn!("Transaction validation failed: {}", e);
+            Self::to_json_rpc_error(e)
+        })?;
+
+        trace!(
+            "Submitting transaction to mempool: hash={}, sender={}",
+            tx.tx_hash(),
+            sender
+        );
+
         self.mempool
             .submit_transaction(tx_bytes)
             .await
