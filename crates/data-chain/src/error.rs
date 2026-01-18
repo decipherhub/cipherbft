@@ -3,6 +3,38 @@
 use cipherbft_types::{Hash, ValidatorId};
 use thiserror::Error;
 
+// ============================================================================
+// Security Constants - Bounds for deserialization to prevent OOM attacks
+// ============================================================================
+
+/// Maximum number of batch digests allowed in a single Car.
+/// Each worker can produce at most one batch per Car, and we support up to 256 workers.
+pub const MAX_BATCH_DIGESTS: usize = 256;
+
+/// Maximum number of transactions allowed in a single batch.
+/// This prevents OOM from maliciously large batch claims.
+pub const MAX_TRANSACTIONS_PER_BATCH: usize = 100_000;
+
+/// Maximum size of a single transaction in bytes (10 MB).
+pub const MAX_TRANSACTION_SIZE: usize = 10 * 1024 * 1024;
+
+/// Maximum total size of a batch in bytes (100 MB).
+pub const MAX_BATCH_SIZE: usize = 100 * 1024 * 1024;
+
+/// Maximum number of hash digests in a sync request.
+pub const MAX_SYNC_DIGESTS: usize = 10_000;
+
+/// Maximum size of any network message in bytes (150 MB).
+/// This is the global bincode deserialization limit.
+pub const MAX_MESSAGE_SIZE: u64 = 150 * 1024 * 1024;
+
+/// Maximum size of response data in bytes (100 MB).
+pub const MAX_RESPONSE_DATA_SIZE: usize = 100 * 1024 * 1024;
+
+// ============================================================================
+// Error Types
+// ============================================================================
+
 /// DCL errors
 #[derive(Debug, Error, Clone)]
 pub enum DclError {
@@ -115,6 +147,19 @@ pub enum DclError {
     /// Timeout error
     #[error("timeout: {0}")]
     Timeout(String),
+
+    /// Deserialization size limit exceeded (potential DoS attack)
+    #[error("deserialization size limit exceeded: {actual} exceeds maximum of {limit}")]
+    DeserializationSizeExceeded {
+        /// Actual size from the serialized data
+        actual: usize,
+        /// Maximum allowed size
+        limit: usize,
+    },
+
+    /// Message size limit exceeded
+    #[error("message size {size} exceeds maximum of {}", MAX_MESSAGE_SIZE)]
+    MessageTooLarge { size: u64 },
 }
 
 impl DclError {
