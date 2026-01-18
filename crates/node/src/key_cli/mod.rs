@@ -6,7 +6,6 @@
 //! - `import`: Import validator keys from an existing mnemonic
 //! - `export`: Export public key information (never exports private keys)
 //! - `list`: List all keystores in a directory
-//! - `migrate`: Migrate plaintext keys to encrypted keystores
 //!
 //! # Security Features
 //!
@@ -20,7 +19,6 @@ pub mod export;
 pub mod generate;
 pub mod import;
 pub mod list;
-pub mod migrate;
 
 use anyhow::Result;
 use clap::Subcommand;
@@ -119,31 +117,6 @@ pub enum KeysCommand {
         #[arg(long, default_value = "text")]
         format: String,
     },
-
-    /// Migrate plaintext keys to encrypted keystores
-    ///
-    /// Reads old-style plaintext keys from a config file and converts them
-    /// to EIP-2335 encrypted keystores. The original config is NOT modified.
-    ///
-    /// After migration, update your config to use `keystore_dir` instead of
-    /// the plaintext key fields, then securely delete the old config.
-    Migrate {
-        /// Output directory for keystore files
-        #[arg(long)]
-        output_dir: Option<PathBuf>,
-
-        /// Read passphrase from file instead of prompting
-        #[arg(long)]
-        passphrase_file: Option<PathBuf>,
-
-        /// Dry run: show what would be migrated without writing files
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Write updated config with keystore_dir to this path
-        #[arg(long)]
-        output_config: Option<PathBuf>,
-    },
 }
 
 /// Execute a keys command
@@ -172,12 +145,5 @@ pub fn execute_keys_command(home: &std::path::Path, command: KeysCommand) -> Res
         } => export::execute(home, &format, keys_dir, output),
 
         KeysCommand::List { keys_dir, format } => list::execute(home, keys_dir, &format),
-
-        KeysCommand::Migrate {
-            output_dir,
-            passphrase_file,
-            dry_run,
-            output_config,
-        } => migrate::execute(home, output_dir, passphrase_file, dry_run, output_config),
     }
 }

@@ -42,10 +42,10 @@ pub const CIPHERD_HOME_ENV: &str = "CIPHERD_HOME";
 /// The full default path is `~/.cipherd`.
 pub const DEFAULT_HOME_DIR: &str = ".cipherd";
 
-/// Default genesis file path relative to the data directory.
+/// Default genesis filename.
 ///
-/// The full default path is `~/.cipherd/config/genesis.json`.
-pub const DEFAULT_GENESIS_FILENAME: &str = "config/genesis.json";
+/// The full default path is `{home_dir}/config/genesis.json`.
+pub const DEFAULT_GENESIS_FILENAME: &str = "genesis.json";
 
 /// Default keys directory relative to the home directory.
 ///
@@ -137,11 +137,16 @@ pub struct NodeConfig {
     pub peers: Vec<PeerConfig>,
     /// Number of workers
     pub num_workers: usize,
+    /// Home directory (e.g., ~/.cipherd)
+    ///
+    /// This is the root directory containing `config/` and `data/` subdirectories.
+    #[serde(default)]
+    pub home_dir: Option<PathBuf>,
     /// Data directory
     pub data_dir: PathBuf,
     /// Path to the genesis file.
     ///
-    /// Defaults to `{data_dir}/config/genesis.json`. Can be overridden by
+    /// Defaults to `{home_dir}/config/genesis.json`. Can be overridden by
     /// the `CIPHERD_GENESIS_PATH` environment variable.
     #[serde(default)]
     pub genesis_path: Option<PathBuf>,
@@ -165,6 +170,7 @@ impl NodeConfig {
 
         let base_port = 9000 + (index * 10) as u16;
 
+        let home_dir = PathBuf::from(format!("/tmp/cipherd-{}", index));
         Self {
             validator_id,
             keystore_dir: None,
@@ -177,8 +183,9 @@ impl NodeConfig {
             worker_listens: vec![format!("127.0.0.1:{}", base_port + 1).parse().unwrap()],
             peers: Vec::new(), // Will be populated after all nodes are created
             num_workers: 1,
-            data_dir: PathBuf::from(format!("/tmp/cipherd-{}", index)),
-            genesis_path: None, // Uses default: {data_dir}/config/genesis.json
+            home_dir: Some(home_dir.clone()),
+            data_dir: home_dir.join("data"),
+            genesis_path: None, // Uses default: {home_dir}/config/genesis.json
             car_interval_ms: 100,
             max_batch_txs: 100,
             max_batch_bytes: 1024 * 1024, // 1MB
@@ -190,7 +197,7 @@ impl NodeConfig {
     /// Resolution order (highest priority first):
     /// 1. `CIPHERD_GENESIS_PATH` environment variable
     /// 2. `genesis_path` field in config (if set)
-    /// 3. Default: `{data_dir}/config/genesis.json`
+    /// 3. Default: `{home_dir}/config/genesis.json`
     ///
     /// # Example
     ///
@@ -210,8 +217,15 @@ impl NodeConfig {
             return configured_path.clone();
         }
 
-        // 3. Fall back to default: {data_dir}/config/genesis.json
-        self.data_dir.join(DEFAULT_GENESIS_FILENAME)
+        // 3. Fall back to default: {home_dir}/config/genesis.json
+        //    If home_dir is not set, derive it from data_dir's parent
+        let home = self.home_dir.clone().unwrap_or_else(|| {
+            self.data_dir
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| self.data_dir.clone())
+        });
+        home.join("config").join(DEFAULT_GENESIS_FILENAME)
     }
 
     /// Check if plaintext keys are present in the configuration.
@@ -380,7 +394,13 @@ mod tests {
         env::remove_var(CIPHERD_GENESIS_PATH_ENV);
 
         let config = NodeConfig::for_local_test(0, 1);
-        let expected = config.data_dir.join(DEFAULT_GENESIS_FILENAME);
+        // Default path is {home_dir}/config/genesis.json
+        let expected = config
+            .home_dir
+            .as_ref()
+            .unwrap()
+            .join("config")
+            .join(DEFAULT_GENESIS_FILENAME);
         assert_eq!(config.effective_genesis_path(), expected);
     }
 

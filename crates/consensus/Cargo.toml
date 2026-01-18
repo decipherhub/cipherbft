@@ -54,3 +54,7 @@ informalsystems-malachitebft-sync = { workspace = true, optional = true }
 informalsystems-malachitebft-signing-ed25519 = { workspace = true, optional = true }
 informalsystems-malachitebft-codec = { workspace = true, optional = true }
 informalsystems-malachitebft-metrics = { workspace = true, optional = true }
+
+[dev-dependencies]
+rand = { workspace = true }
+serde_json = { workspace = true }

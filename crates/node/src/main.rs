@@ -425,7 +425,11 @@ fn cmd_init(
 
     // Generate a single node configuration
     let configs = generate_local_configs(1);
-    let config = &configs[0];
+    let mut config = configs[0].clone();
+
+    // Update paths to use the actual home directory
+    config.home_dir = Some(home.to_path_buf());
+    config.data_dir = data_dir.clone();
 
     let config_path = config_dir.join("node.json");
     config.save(&config_path)?;
@@ -440,7 +444,7 @@ fn cmd_init(
     let initial_balance = U256::from(100u64) * U256::from(1_000_000_000_000_000_000u128); // 100 ETH
 
     let genesis = GenesisGenerator::generate_from_node_config(
-        config,
+        &config,
         chain_id,
         network_id,
         initial_stake,
@@ -545,11 +549,18 @@ async fn cmd_testnet(command: TestnetCommands) -> Result<()> {
         TestnetCommands::InitFiles {
             validators,
             output,
-            chain_id: _,
-            network_id: _,
-            initial_stake_eth: _,
-            starting_port: _,
-        } => cmd_testnet_init_files(validators, output),
+            chain_id,
+            network_id,
+            initial_stake_eth,
+            starting_port,
+        } => cmd_testnet_init_files(
+            validators,
+            &output,
+            chain_id,
+            &network_id,
+            initial_stake_eth,
+            starting_port,
+        ),
         TestnetCommands::Start {
             validators,
             duration,
@@ -557,41 +568,104 @@ async fn cmd_testnet(command: TestnetCommands) -> Result<()> {
     }
 }
 
-fn cmd_testnet_init_files(num_validators: usize, output: PathBuf) -> Result<()> {
+fn cmd_testnet_init_files(
+    num_validators: usize,
+    output: &std::path::Path,
+    chain_id: u64,
+    network_id: &str,
+    initial_stake_eth: u64,
+    starting_port: u16,
+) -> Result<()> {
     println!(
         "Generating testnet configuration for {} validators...",
         num_validators
     );
     println!();
 
-    std::fs::create_dir_all(&output)?;
+    std::fs::create_dir_all(output)?;
 
+    // Generate node configs
     let configs = generate_local_configs(num_validators);
 
+    // Generate a shared genesis file with all validators
+    let initial_stake = U256::from(initial_stake_eth) * U256::from(1_000_000_000_000_000_000u128);
+    let genesis_config = GenesisGeneratorConfig {
+        num_validators,
+        chain_id,
+        network_id: network_id.to_string(),
+        initial_stake,
+        ..Default::default()
+    };
+
+    let mut rng = rand::thread_rng();
+    let genesis_result = GenesisGenerator::generate(&mut rng, genesis_config)?;
+
+    // Write shared genesis file
+    let genesis_path = output.join("genesis.json");
+    let genesis_json = genesis_result.genesis.to_json()?;
+    std::fs::write(&genesis_path, genesis_json)?;
+    println!("  Created shared genesis: {}", genesis_path.display());
+
+    // Create directories and configs for each node
     for (i, config) in configs.iter().enumerate() {
         let node_dir = output.join(format!("node{}", i));
-        std::fs::create_dir_all(&node_dir)?;
+        let config_dir = node_dir.join("config");
+        let data_dir = node_dir.join("data");
+        std::fs::create_dir_all(&config_dir)?;
+        std::fs::create_dir_all(&data_dir)?;
 
-        let config_path = node_dir.join("config.json");
-        config.save(&config_path)?;
+        // Modify config with unique ports and genesis path
+        let mut node_config = config.clone();
+        let port_offset = starting_port + (i as u16 * 10);
+        node_config.primary_listen = format!("0.0.0.0:{}", port_offset).parse()?;
+        node_config.consensus_listen = format!("0.0.0.0:{}", port_offset + 5).parse()?;
+        node_config.genesis_path = Some(genesis_path.clone());
 
-        println!("  Created node{} (validator {:?})", i, config.validator_id);
+        let config_path = config_dir.join("node.json");
+        node_config.save(&config_path)?;
+
+        println!(
+            "  Created node{} (validator {:?}, port {})",
+            i,
+            config.validator_id,
+            starting_port + (i as u16 * 10)
+        );
     }
+
+    // Write validator key files
+    let keys_dir = output.join("keys");
+    std::fs::create_dir_all(&keys_dir)?;
+    for (i, validator) in genesis_result.validators.iter().enumerate() {
+        let key_file = ValidatorKeyFile::from_generated(i, validator);
+        let key_path = keys_dir.join(format!("validator-{}.json", i));
+        let key_json = key_file.to_json()?;
+        std::fs::write(&key_path, key_json)?;
+    }
+    println!(
+        "  Created validator keys: {}/validator-*.json",
+        keys_dir.display()
+    );
 
     println!();
     println!("Testnet configuration created in: {}", output.display());
     println!();
+    println!("Genesis Summary:");
+    println!("  Chain ID:    {}", chain_id);
+    println!("  Network ID:  {}", network_id);
+    println!("  Validators:  {}", num_validators);
+    println!("  Stake/Node:  {} ETH", initial_stake_eth);
+    println!();
     println!("To start individual nodes:");
     for i in 0..num_validators {
         println!(
-            "  cipherd start --config {}/node{}/config.json",
+            "  cipherd start --config {}/node{}/config/node.json",
             output.display(),
             i
         );
     }
     println!();
     println!("Or run all nodes locally with:");
-    println!("  cipherd testnet-start --validators {}", num_validators);
+    println!("  cipherd testnet start --validators {}", num_validators);
 
     Ok(())
 }
@@ -907,19 +981,69 @@ fn cmd_genesis_generate(
     Ok(())
 }
 
+/// Add a genesis account to an existing genesis file (similar to Cosmos SDK add-genesis-account)
 fn cmd_genesis_add_account(
     address: &str,
     balance_eth: u64,
     genesis_path: &std::path::Path,
 ) -> Result<()> {
-    println!("Adding genesis account...");
-    println!("  Address:      {}", address);
-    println!("  Balance:      {} ETH", balance_eth);
-    println!("  Genesis file: {}", genesis_path.display());
+    use alloy_primitives::Address;
+
+    if !genesis_path.exists() {
+        anyhow::bail!(
+            "Genesis file not found at {}. Run 'cipherd init' or 'cipherd genesis generate' first.",
+            genesis_path.display()
+        );
+    }
+
+    // Parse and validate address
+    let address: Address = address
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid address format: {}", address))?;
+
+    // Load existing genesis
+    let genesis_json = std::fs::read_to_string(genesis_path)?;
+    let mut genesis: serde_json::Value = serde_json::from_str(&genesis_json)?;
+
+    // Convert ETH to wei
+    let balance_wei = U256::from(balance_eth) * U256::from(1_000_000_000_000_000_000u128);
+
+    // Add to alloc section
+    let alloc = genesis
+        .get_mut("alloc")
+        .and_then(|a| a.as_object_mut())
+        .ok_or_else(|| anyhow::anyhow!("Invalid genesis: missing 'alloc' section"))?;
+
+    let address_str = format!("{:?}", address);
+    let address_key = address_str.strip_prefix("0x").unwrap_or(&address_str);
+
+    // Check if account already exists
+    if alloc.contains_key(address_key) {
+        anyhow::bail!("Account {} already exists in genesis", address_str);
+    }
+
+    // Add account entry
+    alloc.insert(
+        address_key.to_string(),
+        serde_json::json!({
+            "balance": format!("{:#x}", balance_wei),
+        }),
+    );
+
+    // Write updated genesis
+    let updated_json = serde_json::to_string_pretty(&genesis)?;
+    std::fs::write(genesis_path, updated_json)?;
+
+    println!("Added genesis account:");
+    println!("  Address: {}", address_str);
+    println!("  Balance: {} ETH ({} wei)", balance_eth, balance_wei);
     println!();
-    anyhow::bail!("add-genesis-account is not yet implemented")
+    println!("Genesis updated: {}", genesis_path.display());
+
+    Ok(())
 }
 
+/// Generate a genesis transaction (gentx) for a validator (similar to Cosmos SDK gentx)
 fn cmd_genesis_gentx(
     key_file: &std::path::Path,
     stake_eth: u64,
@@ -927,25 +1051,267 @@ fn cmd_genesis_gentx(
     commission_rate: u8,
     output_dir: &std::path::Path,
 ) -> Result<()> {
-    println!("Generating genesis transaction...");
-    println!("  Key file:        {}", key_file.display());
-    println!("  Stake:           {} ETH", stake_eth);
-    println!("  Moniker:         {}", moniker.as_deref().unwrap_or("(default)"));
-    println!("  Commission rate: {}%", commission_rate);
-    println!("  Output dir:      {}", output_dir.display());
+    if !key_file.exists() {
+        anyhow::bail!("Key file not found: {}", key_file.display());
+    }
+
+    // Load validator key file
+    let key_json = std::fs::read_to_string(key_file)?;
+    let key_data: serde_json::Value = serde_json::from_str(&key_json)?;
+
+    // Support both naming conventions: bls_pubkey (ValidatorKeyFile) and bls_public_key
+    let bls_pubkey = key_data
+        .get("bls_pubkey")
+        .or_else(|| key_data.get("bls_public_key"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Missing 'bls_pubkey' or 'bls_public_key' in key file"))?;
+
+    // Support both naming conventions: ed25519_pubkey (ValidatorKeyFile) and ed25519_public_key
+    let ed25519_pubkey = key_data
+        .get("ed25519_pubkey")
+        .or_else(|| key_data.get("ed25519_public_key"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            anyhow::anyhow!("Missing 'ed25519_pubkey' or 'ed25519_public_key' in key file")
+        })?;
+
+    let address = key_data
+        .get("address")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Missing 'address' in key file"))?;
+
+    let validator_index = key_data.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    // Derive moniker from key file name if not provided
+    let validator_moniker = moniker.unwrap_or_else(|| {
+        key_file
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("validator-{}", validator_index))
+    });
+
+    // Convert stake to wei
+    let stake_wei = U256::from(stake_eth) * U256::from(1_000_000_000_000_000_000u128);
+
+    // Create gentx structure
+    let gentx = serde_json::json!({
+        "type": "cipherbft/MsgCreateValidator",
+        "value": {
+            "moniker": validator_moniker,
+            "commission_rate": commission_rate,
+            "validator_address": address,
+            "bls_public_key": bls_pubkey,
+            "ed25519_public_key": ed25519_pubkey,
+            "stake": format!("{:#x}", stake_wei),
+            "stake_eth": stake_eth,
+        }
+    });
+
+    // Write gentx file
+    std::fs::create_dir_all(output_dir)?;
+    let gentx_filename = format!("gentx-{}.json", validator_moniker);
+    let gentx_path = output_dir.join(&gentx_filename);
+    let gentx_json = serde_json::to_string_pretty(&gentx)?;
+    std::fs::write(&gentx_path, gentx_json)?;
+
+    println!("Generated genesis transaction:");
+    println!("  Moniker:    {}", validator_moniker);
+    println!("  Address:    {}", address);
+    println!("  Stake:      {} ETH", stake_eth);
+    println!("  Commission: {}%", commission_rate);
     println!();
-    anyhow::bail!("gentx is not yet implemented")
+    println!("Gentx file: {}", gentx_path.display());
+    println!();
+    println!("Share this file with the genesis coordinator to be included in genesis.");
+    println!("Or run 'cipherd genesis collect-gentxs' to add to genesis.");
+
+    Ok(())
 }
 
+/// Collect genesis transactions and add validators to genesis (similar to Cosmos SDK collect-gentxs)
 fn cmd_genesis_collect_gentxs(
     gentx_dir: &std::path::Path,
     genesis_path: &std::path::Path,
 ) -> Result<()> {
-    println!("Collecting genesis transactions...");
-    println!("  Gentx directory: {}", gentx_dir.display());
-    println!("  Genesis file:    {}", genesis_path.display());
+    use alloy_primitives::Address;
+
+    if !gentx_dir.exists() {
+        anyhow::bail!("Gentx directory not found: {}", gentx_dir.display());
+    }
+
+    if !genesis_path.exists() {
+        anyhow::bail!(
+            "Genesis file not found at {}. Run 'cipherd init' or 'cipherd genesis generate' first.",
+            genesis_path.display()
+        );
+    }
+
+    // Load existing genesis
+    let genesis_json = std::fs::read_to_string(genesis_path)?;
+    let mut genesis: serde_json::Value = serde_json::from_str(&genesis_json)?;
+
+    // First pass: collect existing validator addresses and gather gentx data
+    let existing_validators: Vec<String> = genesis
+        .get("cipherbft")
+        .and_then(|c| c.get("validators"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.get("address").and_then(|a| a.as_str()))
+                .map(|s| s.to_lowercase())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Collect all gentx data first
+    struct GentxData {
+        address: String,
+        bls_pubkey: String,
+        ed25519_pubkey: String,
+        stake: String,
+        moniker: String,
+        addr_key: String,
+    }
+
+    let mut gentx_entries: Vec<GentxData> = Vec::new();
+
+    for entry in std::fs::read_dir(gentx_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().is_none_or(|ext| ext != "json") {
+            continue;
+        }
+
+        if path
+            .file_name()
+            .is_none_or(|n| !n.to_string_lossy().starts_with("gentx-"))
+        {
+            continue;
+        }
+
+        // Parse gentx file
+        let gentx_json = std::fs::read_to_string(&path)?;
+        let gentx: serde_json::Value = serde_json::from_str(&gentx_json)?;
+
+        let value = gentx
+            .get("value")
+            .ok_or_else(|| anyhow::anyhow!("Invalid gentx: missing 'value' in {:?}", path))?;
+
+        let address = value
+            .get("validator_address")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Invalid gentx: missing 'validator_address'"))?
+            .to_string();
+
+        let bls_pubkey = value
+            .get("bls_public_key")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Invalid gentx: missing 'bls_public_key'"))?
+            .to_string();
+
+        let ed25519_pubkey = value
+            .get("ed25519_public_key")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Invalid gentx: missing 'ed25519_public_key'"))?
+            .to_string();
+
+        let stake = value
+            .get("stake")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Invalid gentx: missing 'stake'"))?
+            .to_string();
+
+        let moniker = value
+            .get("moniker")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        // Parse and validate address
+        let addr_parsed: Address = address
+            .parse()
+            .map_err(|_| anyhow::anyhow!("Invalid validator address in gentx: {}", address))?;
+        let addr_key = format!("{:?}", addr_parsed)
+            .strip_prefix("0x")
+            .unwrap_or(&format!("{:?}", addr_parsed))
+            .to_lowercase();
+
+        // Check for duplicate
+        if existing_validators.iter().any(|a| a.contains(&addr_key)) {
+            println!("  Skipping duplicate validator: {} ({})", moniker, address);
+            continue;
+        }
+
+        gentx_entries.push(GentxData {
+            address,
+            bls_pubkey,
+            ed25519_pubkey,
+            stake,
+            moniker,
+            addr_key,
+        });
+    }
+
+    if gentx_entries.is_empty() {
+        anyhow::bail!("No valid gentx files found in {}", gentx_dir.display());
+    }
+
+    // Now apply all changes to genesis
+    // Get or create validators array in cipherbft section
+    let cipherbft = genesis
+        .get_mut("cipherbft")
+        .and_then(|c| c.as_object_mut())
+        .ok_or_else(|| anyhow::anyhow!("Invalid genesis: missing 'cipherbft' section"))?;
+
+    let validators = cipherbft
+        .entry("validators")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .ok_or_else(|| anyhow::anyhow!("Invalid genesis: 'validators' is not an array"))?;
+
+    // Add validators
+    for gentx in &gentx_entries {
+        let validator_entry = serde_json::json!({
+            "address": gentx.address,
+            "bls_public_key": gentx.bls_pubkey,
+            "ed25519_public_key": gentx.ed25519_pubkey,
+            "stake": gentx.stake,
+        });
+        validators.push(validator_entry);
+        println!("  Added validator: {} ({})", gentx.moniker, gentx.address);
+    }
+
+    // Get alloc section and add entries
+    let alloc = genesis
+        .get_mut("alloc")
+        .and_then(|a| a.as_object_mut())
+        .ok_or_else(|| anyhow::anyhow!("Invalid genesis: missing 'alloc' section"))?;
+
+    for gentx in &gentx_entries {
+        if !alloc.contains_key(&gentx.addr_key) {
+            alloc.insert(
+                gentx.addr_key.clone(),
+                serde_json::json!({
+                    "balance": gentx.stake,
+                }),
+            );
+        }
+    }
+
+    // Write updated genesis
+    let updated_json = serde_json::to_string_pretty(&genesis)?;
+    std::fs::write(genesis_path, updated_json)?;
+
     println!();
-    anyhow::bail!("collect-gentxs is not yet implemented")
+    println!("Collected {} genesis transactions", gentx_entries.len());
+    println!("Genesis updated: {}", genesis_path.display());
+    println!();
+    println!("To validate the genesis:");
+    println!("  cipherd validate --genesis {}", genesis_path.display());
+
+    Ok(())
 }
 
 fn cmd_debug(command: DebugCommands) -> Result<()> {
