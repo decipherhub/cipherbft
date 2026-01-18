@@ -291,7 +291,7 @@ impl PrimaryNetwork for TcpPrimaryNetwork {
     async fn send_attestation(&self, proposer: ValidatorId, attestation: &Attestation) {
         debug!("Sending attestation to {:?}", proposer);
         let msg = NetworkMessage::Dcl(Box::new(DclMessage::Attestation(attestation.clone())));
-        if let Err(e) = self.send_to(proposer, &msg).await {
+        if let Err(e) = TcpPrimaryNetwork::send_to(self, proposer, &msg).await {
             warn!("Failed to send attestation: {}", e);
         }
     }
@@ -299,6 +299,14 @@ impl PrimaryNetwork for TcpPrimaryNetwork {
     async fn broadcast(&self, message: &DclMessage) {
         let msg = NetworkMessage::Dcl(Box::new(message.clone()));
         TcpPrimaryNetwork::broadcast(self, &msg).await;
+    }
+
+    async fn send_to(&self, peer: ValidatorId, message: &DclMessage) {
+        debug!("Sending message to peer {:?}", peer);
+        let msg = NetworkMessage::Dcl(Box::new(message.clone()));
+        if let Err(e) = TcpPrimaryNetwork::send_to(self, peer, &msg).await {
+            warn!("Failed to send message to peer {:?}: {}", peer, e);
+        }
     }
 }
 

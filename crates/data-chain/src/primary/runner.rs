@@ -58,6 +58,11 @@ pub trait PrimaryNetwork: Send + Sync {
 
     /// Broadcast message to all peers
     async fn broadcast(&self, message: &DclMessage);
+
+    /// Send a message to a specific peer
+    ///
+    /// Used for point-to-point communication, such as responding to CarRequest.
+    async fn send_to(&self, peer: ValidatorId, message: &DclMessage);
 }
 
 /// Handle for a spawned Primary task
@@ -397,12 +402,47 @@ impl Primary {
                 validator,
                 position,
             } => {
-                // TODO: Respond with Car if we have it
                 debug!(
                     from = %peer,
                     validator = %validator,
                     position,
                     "Car request received"
+                );
+
+                // Lookup the CAR in storage and respond
+                let car_opt = if let Some(ref storage) = self.storage {
+                    match storage.get_car(&validator, position).await {
+                        Ok(car) => car,
+                        Err(e) => {
+                            warn!(
+                                validator = %validator,
+                                position,
+                                error = %e,
+                                "Failed to lookup Car from storage"
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    // No storage configured - cannot respond with CAR data
+                    debug!(
+                        validator = %validator,
+                        position,
+                        "No storage configured, cannot lookup Car"
+                    );
+                    None
+                };
+
+                // Send CarResponse back to the requester
+                let response = DclMessage::CarResponse(car_opt.clone());
+                self.network.send_to(peer, &response).await;
+
+                debug!(
+                    to = %peer,
+                    validator = %validator,
+                    position,
+                    has_car = car_opt.is_some(),
+                    "Car response sent"
                 );
             }
 
@@ -790,6 +830,10 @@ mod tests {
         }
 
         async fn broadcast(&self, _message: &DclMessage) {}
+
+        async fn send_to(&self, _peer: ValidatorId, _message: &DclMessage) {
+            // MockNetwork doesn't track direct sends in current tests
+        }
     }
 
     fn make_test_setup(
