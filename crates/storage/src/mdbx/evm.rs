@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use reth_db::Database;
+use reth_db_api::cursor::DbCursorRO;
 use reth_db_api::transaction::{DbTx, DbTxMut};
 
 use super::database::DatabaseEnv;
@@ -36,6 +37,83 @@ impl MdbxEvmStore {
     /// * `db` - Shared reference to the MDBX database environment
     pub fn new(db: Arc<DatabaseEnv>) -> Self {
         Self { db }
+    }
+
+    /// Get all accounts from the database using cursor iteration.
+    ///
+    /// Returns all accounts stored in the EvmAccounts table.
+    /// This is useful for debugging, state export, and migration purposes.
+    ///
+    /// # Returns
+    /// A vector of (address, account) tuples ordered by address.
+    pub fn get_all_accounts(&self) -> EvmStoreResult<Vec<([u8; 20], EvmAccount)>> {
+        let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
+
+        let mut cursor = tx
+            .cursor_read::<EvmAccounts>()
+            .map_err(|e| db_err(e.to_string()))?;
+
+        let mut accounts = Vec::new();
+
+        // Iterate through all accounts using cursor
+        let mut entry = cursor.first().map_err(|e| db_err(e.to_string()))?;
+
+        while let Some((key, stored)) = entry {
+            let account = EvmAccount {
+                nonce: stored.0.nonce,
+                balance: stored.0.balance,
+                code_hash: stored.0.code_hash,
+                storage_root: stored.0.storage_root,
+            };
+            accounts.push((key.0, account));
+
+            entry = cursor.next().map_err(|e| db_err(e.to_string()))?;
+        }
+
+        Ok(accounts)
+    }
+
+    /// Get all storage slots for a specific address using cursor iteration.
+    ///
+    /// Returns all storage slots stored for the given address in the EvmStorage table.
+    /// This is useful for debugging, state export, and contract inspection.
+    ///
+    /// # Arguments
+    /// * `address` - The 20-byte Ethereum address to get storage for
+    ///
+    /// # Returns
+    /// A vector of (slot, value) tuples ordered by slot.
+    pub fn get_all_storage(&self, address: &[u8; 20]) -> EvmStoreResult<Vec<([u8; 32], [u8; 32])>> {
+        let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
+
+        let mut cursor = tx
+            .cursor_read::<EvmStorage>()
+            .map_err(|e| db_err(e.to_string()))?;
+
+        let mut storage = Vec::new();
+
+        // Start at the first possible key for this address
+        let start_key = StorageSlotKey {
+            address: *address,
+            slot: [0u8; 32],
+        };
+
+        // Seek to the first entry for this address
+        let mut entry = cursor.seek(start_key).map_err(|e| db_err(e.to_string()))?;
+
+        // Iterate through all storage slots for this address
+        while let Some((key, stored)) = entry {
+            // Check if we've moved past this address
+            if key.address != *address {
+                break;
+            }
+
+            storage.push((key.slot, stored.0.value));
+
+            entry = cursor.next().map_err(|e| db_err(e.to_string()))?;
+        }
+
+        Ok(storage)
     }
 }
 
@@ -287,5 +365,114 @@ mod tests {
 
         // Test non-existent block
         assert!(store.get_block_hash(99999).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_get_all_accounts() {
+        let (db, _temp_dir) = create_test_db();
+        let store = MdbxEvmStore::new(db);
+
+        // Initially no accounts
+        let accounts = store.get_all_accounts().unwrap();
+        assert!(accounts.is_empty());
+
+        // Add some accounts
+        let addr1 = [1u8; 20];
+        let addr2 = [2u8; 20];
+        let addr3 = [3u8; 20];
+
+        let account1 = EvmAccount {
+            nonce: 1,
+            balance: [0u8; 32],
+            code_hash: [0u8; 32],
+            storage_root: [0u8; 32],
+        };
+        let account2 = EvmAccount {
+            nonce: 2,
+            balance: [0u8; 32],
+            code_hash: [0u8; 32],
+            storage_root: [0u8; 32],
+        };
+        let account3 = EvmAccount {
+            nonce: 3,
+            balance: [0u8; 32],
+            code_hash: [0u8; 32],
+            storage_root: [0u8; 32],
+        };
+
+        store.set_account(&addr1, account1).unwrap();
+        store.set_account(&addr2, account2).unwrap();
+        store.set_account(&addr3, account3).unwrap();
+
+        // Get all accounts
+        let accounts = store.get_all_accounts().unwrap();
+        assert_eq!(accounts.len(), 3);
+
+        // Verify the accounts are returned (they should be ordered by address)
+        let nonces: Vec<u64> = accounts.iter().map(|(_, acc)| acc.nonce).collect();
+        assert_eq!(nonces, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_get_all_storage() {
+        let (db, _temp_dir) = create_test_db();
+        let store = MdbxEvmStore::new(db);
+
+        let addr1 = [1u8; 20];
+        let addr2 = [2u8; 20];
+
+        // Initially no storage
+        let storage = store.get_all_storage(&addr1).unwrap();
+        assert!(storage.is_empty());
+
+        // Add storage for addr1
+        let slot1 = [0u8; 32];
+        let slot2 = {
+            let mut s = [0u8; 32];
+            s[31] = 1;
+            s
+        };
+        let slot3 = {
+            let mut s = [0u8; 32];
+            s[31] = 2;
+            s
+        };
+
+        let value1 = {
+            let mut v = [0u8; 32];
+            v[31] = 100;
+            v
+        };
+        let value2 = {
+            let mut v = [0u8; 32];
+            v[31] = 200;
+            v
+        };
+        let value3 = {
+            let mut v = [0u8; 32];
+            v[31] = 42;
+            v
+        };
+
+        store.set_storage(&addr1, &slot1, value1).unwrap();
+        store.set_storage(&addr1, &slot2, value2).unwrap();
+        // Add some storage for addr2 to ensure filtering works
+        store.set_storage(&addr2, &slot3, value3).unwrap();
+
+        // Get storage for addr1 only
+        let storage = store.get_all_storage(&addr1).unwrap();
+        assert_eq!(storage.len(), 2);
+
+        // Verify the values
+        assert!(storage.iter().any(|(_, v)| *v == value1));
+        assert!(storage.iter().any(|(_, v)| *v == value2));
+
+        // Verify addr2's storage is not included
+        assert!(!storage.iter().any(|(_, v)| *v == value3));
+
+        // Get storage for addr2
+        let storage2 = store.get_all_storage(&addr2).unwrap();
+        assert_eq!(storage2.len(), 1);
+        assert_eq!(storage2[0].1, value3);
     }
 }

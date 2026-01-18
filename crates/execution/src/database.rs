@@ -803,19 +803,41 @@ pub mod mdbx_provider {
         }
 
         fn get_all_accounts(&self) -> Result<BTreeMap<Address, Account>> {
-            // TODO: Implement iteration over MDBX accounts table
-            // This requires extending MdbxEvmStore with an iterator method
-            Err(crate::error::ExecutionError::Internal(
-                "get_all_accounts not yet implemented for MDBX provider".into(),
-            ))
+            self.store
+                .get_all_accounts()
+                .map(|accounts| {
+                    accounts
+                        .into_iter()
+                        .map(|(addr_bytes, evm_acc)| {
+                            let address = Address::from(addr_bytes);
+                            let account = Account {
+                                nonce: evm_acc.nonce,
+                                balance: U256::from_be_bytes(evm_acc.balance),
+                                code_hash: B256::from(evm_acc.code_hash),
+                                storage_root: B256::from(evm_acc.storage_root),
+                            };
+                            (address, account)
+                        })
+                        .collect()
+                })
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
         }
 
-        fn get_all_storage(&self, _address: Address) -> Result<BTreeMap<U256, U256>> {
-            // TODO: Implement iteration over MDBX storage table filtered by address
-            // This requires extending MdbxEvmStore with a filtered iterator method
-            Err(crate::error::ExecutionError::Internal(
-                "get_all_storage not yet implemented for MDBX provider".into(),
-            ))
+        fn get_all_storage(&self, address: Address) -> Result<BTreeMap<U256, U256>> {
+            let addr_bytes: [u8; 20] = address.into();
+            self.store
+                .get_all_storage(&addr_bytes)
+                .map(|storage| {
+                    storage
+                        .into_iter()
+                        .map(|(slot_bytes, value_bytes)| {
+                            let slot = U256::from_be_bytes(slot_bytes);
+                            let value = U256::from_be_bytes(value_bytes);
+                            (slot, value)
+                        })
+                        .collect()
+                })
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
         }
     }
 
@@ -969,6 +991,99 @@ pub mod mdbx_provider {
                 assert_eq!(retrieved.nonce, 100);
                 assert_eq!(retrieved.balance, U256::from(999999));
             }
+        }
+
+        #[test]
+        fn test_mdbx_provider_get_all_accounts() {
+            let (provider, _temp_dir) = create_test_mdbx_provider();
+
+            // Initially no accounts
+            let accounts = provider.get_all_accounts().unwrap();
+            assert!(accounts.is_empty());
+
+            // Add some accounts
+            let addr1 = Address::from([1u8; 20]);
+            let addr2 = Address::from([2u8; 20]);
+            let addr3 = Address::from([3u8; 20]);
+
+            let account1 = Account {
+                nonce: 1,
+                balance: U256::from(100),
+                code_hash: B256::ZERO,
+                storage_root: B256::ZERO,
+            };
+            let account2 = Account {
+                nonce: 2,
+                balance: U256::from(200),
+                code_hash: B256::ZERO,
+                storage_root: B256::ZERO,
+            };
+            let account3 = Account {
+                nonce: 3,
+                balance: U256::from(300),
+                code_hash: B256::ZERO,
+                storage_root: B256::ZERO,
+            };
+
+            provider.set_account(addr1, account1).unwrap();
+            provider.set_account(addr2, account2).unwrap();
+            provider.set_account(addr3, account3).unwrap();
+
+            // Get all accounts
+            let accounts = provider.get_all_accounts().unwrap();
+            assert_eq!(accounts.len(), 3);
+
+            // Verify we can find all accounts
+            assert!(accounts.contains_key(&addr1));
+            assert!(accounts.contains_key(&addr2));
+            assert!(accounts.contains_key(&addr3));
+
+            // Verify account details
+            assert_eq!(accounts.get(&addr1).unwrap().nonce, 1);
+            assert_eq!(accounts.get(&addr2).unwrap().balance, U256::from(200));
+            assert_eq!(accounts.get(&addr3).unwrap().nonce, 3);
+        }
+
+        #[test]
+        fn test_mdbx_provider_get_all_storage() {
+            let (provider, _temp_dir) = create_test_mdbx_provider();
+
+            let addr1 = Address::from([1u8; 20]);
+            let addr2 = Address::from([2u8; 20]);
+
+            // Initially no storage
+            let storage = provider.get_all_storage(addr1).unwrap();
+            assert!(storage.is_empty());
+
+            // Add storage for addr1
+            let slot1 = U256::from(0);
+            let slot2 = U256::from(1);
+            let slot3 = U256::from(100);
+
+            let value1 = U256::from(1000);
+            let value2 = U256::from(2000);
+            let value3 = U256::from(42);
+
+            provider.set_storage(addr1, slot1, value1).unwrap();
+            provider.set_storage(addr1, slot2, value2).unwrap();
+            // Add storage for addr2 to ensure filtering works
+            provider.set_storage(addr2, slot3, value3).unwrap();
+
+            // Get storage for addr1 only
+            let storage = provider.get_all_storage(addr1).unwrap();
+            assert_eq!(storage.len(), 2);
+
+            // Verify the values
+            assert_eq!(storage.get(&slot1).copied(), Some(value1));
+            assert_eq!(storage.get(&slot2).copied(), Some(value2));
+
+            // Verify addr2's storage is not included
+            assert!(!storage.contains_key(&slot3));
+
+            // Get storage for addr2
+            let storage2 = provider.get_all_storage(addr2).unwrap();
+            assert_eq!(storage2.len(), 1);
+            assert_eq!(storage2.get(&slot3).copied(), Some(value3));
         }
     }
 }
