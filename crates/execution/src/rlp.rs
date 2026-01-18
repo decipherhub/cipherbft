@@ -82,7 +82,12 @@ impl RlpAccount {
 /// // Encode an EOA with nonce=5, balance=1000 wei
 /// let encoded = rlp_encode_account(5, U256::from(1000), EMPTY_ROOT_HASH, KECCAK_EMPTY);
 /// ```
-pub fn rlp_encode_account(nonce: u64, balance: U256, storage_root: B256, code_hash: B256) -> Vec<u8> {
+pub fn rlp_encode_account(
+    nonce: u64,
+    balance: U256,
+    storage_root: B256,
+    code_hash: B256,
+) -> Vec<u8> {
     RlpAccount::new(nonce, balance, storage_root, code_hash).encode_to_vec()
 }
 
@@ -118,10 +123,10 @@ mod tests {
     fn test_rlp_encode_eoa() {
         // Encode an externally owned account (no code, no storage)
         let encoded = rlp_encode_account(
-            0,                // nonce
-            U256::ZERO,       // balance
-            EMPTY_ROOT_HASH,  // storage_root
-            KECCAK_EMPTY,     // code_hash
+            0,               // nonce
+            U256::ZERO,      // balance
+            EMPTY_ROOT_HASH, // storage_root
+            KECCAK_EMPTY,    // code_hash
         );
 
         // Result should be non-empty RLP
@@ -136,10 +141,10 @@ mod tests {
     fn test_rlp_encode_account_with_balance() {
         let balance = U256::from(1_000_000_000_000_000_000u128); // 1 ETH
         let encoded = rlp_encode_account(
-            5,                // nonce
-            balance,          // balance
-            EMPTY_ROOT_HASH,  // storage_root
-            KECCAK_EMPTY,     // code_hash
+            5,               // nonce
+            balance,         // balance
+            EMPTY_ROOT_HASH, // storage_root
+            KECCAK_EMPTY,    // code_hash
         );
 
         assert!(!encoded.is_empty());
@@ -152,10 +157,10 @@ mod tests {
         let code_hash = keccak256(b"contract code");
 
         let encoded = rlp_encode_account(
-            100,           // nonce
+            100,             // nonce
             U256::from(500), // balance
-            storage_root,  // storage_root
-            code_hash,     // code_hash
+            storage_root,    // storage_root
+            code_hash,       // code_hash
         );
 
         assert!(!encoded.is_empty());

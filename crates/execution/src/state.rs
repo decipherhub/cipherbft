@@ -146,9 +146,9 @@ impl<P: Provider> StateManager<P> {
 
         // Create a closure to get storage for each account
         let provider = Arc::clone(&self.provider);
-        let storage_getter = move |address: Address| -> Result<BTreeMap<alloy_primitives::U256, alloy_primitives::U256>> {
-            provider.get_all_storage(address)
-        };
+        let storage_getter = move |address: Address| -> Result<
+            BTreeMap<alloy_primitives::U256, alloy_primitives::U256>,
+        > { provider.get_all_storage(address) };
 
         // Compute the MPT-based state root
         compute_state_root(&accounts, storage_getter)
@@ -206,11 +206,7 @@ impl<P: Provider> StateManager<P> {
         // Prune old snapshots
         self.prune_old_snapshots();
 
-        tracing::debug!(
-            block_number,
-            accounts_count,
-            "State snapshot stored"
-        );
+        tracing::debug!(block_number, accounts_count, "State snapshot stored");
 
         Ok(())
     }

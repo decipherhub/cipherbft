@@ -86,7 +86,8 @@ where
         };
 
         // RLP encode the account
-        let account_rlp = rlp_encode_account(account.nonce, account.balance, storage_root, code_hash);
+        let account_rlp =
+            rlp_encode_account(account.nonce, account.balance, storage_root, code_hash);
 
         // Key is keccak256(address)
         let key = keccak256(address);
@@ -115,10 +116,7 @@ where
 /// 4. Build trie and return root
 pub fn compute_storage_root(storage: &BTreeMap<U256, U256>) -> B256 {
     // Filter out zero values and prepare entries
-    let non_zero_storage: Vec<_> = storage
-        .iter()
-        .filter(|(_, v)| !v.is_zero())
-        .collect();
+    let non_zero_storage: Vec<_> = storage.iter().filter(|(_, v)| !v.is_zero()).collect();
 
     if non_zero_storage.is_empty() {
         return EMPTY_ROOT_HASH;
