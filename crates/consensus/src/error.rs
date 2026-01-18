@@ -12,6 +12,21 @@ pub enum ConsensusError {
     /// Invalid configuration provided.
     #[error("invalid configuration: {0}")]
     InvalidConfig(String),
+
+    /// Validator set not found for the specified height.
+    #[error("validator set not found for height {height}")]
+    ValidatorSetNotFound {
+        /// The height for which no validator set was found.
+        height: u64,
+    },
+
+    /// Failed to spawn the host actor.
+    #[error("failed to spawn host actor: {0}")]
+    HostSpawnError(String),
+
+    /// Generic error for other consensus failures.
+    #[error("{0}")]
+    Other(String),
 }
 
 #[cfg(test)]
