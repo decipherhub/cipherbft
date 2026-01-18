@@ -26,3 +26,6 @@ mod secret;
 
 pub use material::{DerivationInfo, SecureKeyMaterial};
 pub use secret::{IntoSecret, SecretArray, SecretBytes, SecretString};
+
+// Re-export ExposeSecret for easy access
+pub use secrecy::ExposeSecret;

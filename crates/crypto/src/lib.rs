@@ -31,7 +31,8 @@ pub use error::{BlsError, CryptoError};
 
 // Secure memory exports
 pub use secure::{
-    DerivationInfo, IntoSecret, SecretArray, SecretBytes, SecretString, SecureKeyMaterial,
+    DerivationInfo, ExposeSecret, IntoSecret, SecretArray, SecretBytes, SecretString,
+    SecureKeyMaterial,
 };
 
 // Keystore exports
