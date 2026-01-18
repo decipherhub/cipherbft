@@ -9,12 +9,7 @@
 use crate::{error::ExecutionError, types::Log, Result};
 use alloy_eips::eip2718::Decodable2718;
 use alloy_primitives::{Address, Bytes, B256};
-// MIGRATION(revm33): Complete API restructuring
-// - Use Context::mainnet() to build EVM (not Evm::builder())
-// - No Env/BlockEnv/CfgEnv - configuration handled differently
-// - TxEnv is in revm::context
-// - ExecutionResult in revm::context_interface::result
-// - Primitives like TxKind in revm::primitives
+// revm 33.x uses Context-based API
 use revm::{
     context::TxEnv,
     context_interface::{
@@ -28,9 +23,6 @@ use revm::{
 ///
 /// This can be configured for different networks but defaults to 31337.
 pub const CIPHERBFT_CHAIN_ID: u64 = 31337;
-
-// MIGRATION(revm33): STAKING_PRECOMPILE_ADDRESS moved to precompiles::provider module
-// It's re-exported from precompiles::STAKING_PRECOMPILE_ADDRESS
 
 /// Default block gas limit (30 million gas).
 pub const DEFAULT_BLOCK_GAS_LIMIT: u64 = 30_000_000;
@@ -46,17 +38,7 @@ pub const UNBONDING_PERIOD_SECONDS: u64 = 259_200; // 3 days = 3 * 24 * 60 * 60
 
 /// EVM configuration for CipherBFT.
 ///
-/// MIGRATION(revm33): This struct is partially broken due to removed types.
-/// Revm 33 eliminated Env, BlockEnv, CfgEnv in favor of Context-based API.
-/// Most methods are stubbed/commented out pending comprehensive refactor.
-///
-/// TODO: Comprehensive refactor (~500-1000 LOC changes):
-/// - Replace Env-based methods with Context builders
-/// - Update all transaction execution to use Context::mainnet()
-/// - Rewrite tests to use new API
-/// - See examples/uniswap_v2_usdc_swap for reference pattern
-///
-/// Provides methods to create EVM environments and execute transactions.
+/// Provides methods to configure and execute transactions using revm 33's Context API.
 #[derive(Debug, Clone)]
 pub struct CipherBftEvmConfig {
     /// Chain ID for transaction signing and replay protection.
@@ -100,8 +82,6 @@ impl CipherBftEvmConfig {
     }
 
     /// Build an EVM instance with custom precompiles (including staking precompile).
-    ///
-    /// MIGRATION(revm33): Uses Context-based API instead of Evm::builder().
     ///
     /// # Arguments
     /// * `database` - Database implementation
@@ -182,8 +162,6 @@ impl CipherBftEvmConfig {
 
     /// Execute a transaction using the EVM.
     ///
-    /// MIGRATION(revm33): Uses Context.transact() instead of manual EVM execution.
-    ///
     /// # Arguments
     /// * `evm` - EVM instance created with build_evm_with_precompiles()
     /// * `tx_bytes` - Raw transaction bytes
@@ -211,22 +189,6 @@ impl CipherBftEvmConfig {
         // Use the existing helper to process the result
         self.process_execution_result(result, tx_hash, sender, to)
     }
-
-    // MIGRATION(revm33): These methods are commented out as they use removed types.
-    // Revm 33 eliminated CfgEnv, BlockEnv, BlobExcessGasAndPrice.
-    // Configuration is now done via Context builders.
-    // TODO: Replace with Context-based configuration methods.
-
-    /*
-    /// Create configuration environment for the EVM.
-    pub fn cfg_env(&self) -> CfgEnv { ... }
-
-    /// Create block environment for the EVM.
-    pub fn block_env(&self, ...) -> BlockEnv { ... }
-
-    /// Create block environment from a finalized Cut.
-    pub fn block_env_from_cut(&self, cut: &Cut) -> BlockEnv { ... }
-    */
 
     /// Create transaction environment from raw transaction bytes.
     ///
@@ -447,55 +409,6 @@ impl CipherBftEvmConfig {
         Ok((tx_env, *tx_hash, sender, to_addr))
     }
 
-    // Build an EVM instance with the given database.
-    //
-    // This creates a configured EVM ready for transaction execution.
-    //
-    // MIGRATION(revm33): build_evm method removed - uses old Evm::builder() API
-    // TODO: Replace with Context::mainnet().with_db(database).build_mainnet()
-    /*
-    pub fn build_evm<DB: Database>(
-        &self,
-        database: DB,
-        block_number: u64,
-        timestamp: u64,
-        parent_hash: B256,
-    ) -> Evm<'static, (), DB> { ... }
-    */
-
-    // Build a configured EVM instance with custom precompiles.
-    //
-    // MIGRATION(revm33): Precompile provider is now a type parameter on Evm.
-    // This method has been removed in favor of manual EVM construction with CipherBftPrecompileProvider.
-    //
-    // Example:
-    // ```rust,ignore
-    // use crate::precompiles::{CipherBftPrecompileProvider, StakingPrecompile};
-    // use revm::Evm;
-    // use std::sync::Arc;
-    //
-    // let staking = Arc::new(StakingPrecompile::new());
-    // let provider = CipherBftPrecompileProvider::new(staking, SpecId::CANCUN);
-    //
-    // // Note: Full EVM construction requires Context type with proper trait bounds
-    // // See integration tests for complete examples
-    // ```
-    //
-    // Note: The PrecompileProvider trait allows precompiles to access full transaction context
-    // (caller, value, block number) which is essential for the staking precompile.
-    // See `precompiles::provider` module for implementation details.
-    //
-    // MIGRATION(revm33): execute_transaction method removed - uses old Evm API
-    // TODO: Replace with Context-based transaction execution
-    // Use: evm.transact_one(TxEnv::builder()...build()?)
-    /*
-    pub fn execute_transaction<DB: Database + revm::DatabaseCommit>(
-        &self,
-        evm: &mut Evm<'_, (), DB>,
-        tx_bytes: &Bytes,
-    ) -> Result<TransactionResult> { ... }
-    */
-
     /// Process the execution result from revm.
     fn process_execution_result(
         &self,
@@ -661,9 +574,4 @@ mod tests {
         assert_eq!(config.block_gas_limit, DEFAULT_BLOCK_GAS_LIMIT);
         assert_eq!(config.base_fee_per_gas, DEFAULT_BASE_FEE_PER_GAS);
     }
-
-    // NOTE: Tests for cfg_env(), block_env(), build_evm(), and block_env_from_cut()
-    // were removed during revm 33 migration as these methods no longer exist.
-    // Revm 33 uses Context-based API instead of Env-based API.
-    // See build_evm_with_precompiles() for the new pattern.
 }

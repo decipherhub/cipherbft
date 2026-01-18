@@ -6,8 +6,9 @@
 
 use crate::database::{Account, Provider};
 use crate::error::{ExecutionError, Result};
+use crate::mpt::compute_state_root;
 use crate::types::STATE_ROOT_SNAPSHOT_INTERVAL;
-use alloy_primitives::{keccak256, Address, B256};
+use alloy_primitives::{Address, B256};
 use parking_lot::RwLock;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -105,10 +106,8 @@ impl<P: Provider> StateManager<P> {
             STATE_ROOT_SNAPSHOT_INTERVAL
         );
 
-        // Collect all accounts from provider
-        // In a full implementation, this would use Merkle Patricia Trie
-        // For now, we use a simplified hash-based approach
-        let state_root = self.compute_state_root_simple()?;
+        // Compute state root using Merkle Patricia Trie
+        let state_root = self.compute_state_root_mpt()?;
 
         // Update current state root
         *self.current_state_root.write() = state_root;
@@ -129,25 +128,30 @@ impl<P: Provider> StateManager<P> {
         Ok(state_root)
     }
 
-    /// Simplified state root computation (hash-based).
+    /// Compute the state root using Merkle Patricia Trie.
     ///
-    /// In a full implementation, this would build a Merkle Patricia Trie.
-    /// For initial development, we use a simple hash of all account data.
-    fn compute_state_root_simple(&self) -> Result<B256> {
-        // In a real implementation, we would:
-        // 1. Iterate all modified accounts since last checkpoint
-        // 2. Build Merkle Patricia Trie using reth-trie
-        // 3. Compute root hash
-        //
-        // For now, return a placeholder that changes with state
-        // TODO: Implement proper MPT-based state root computation
+    /// This method iterates all accounts and their storage slots to build
+    /// a cryptographically verifiable state root, compatible with Ethereum's
+    /// state trie specification.
+    ///
+    /// # Algorithm
+    /// 1. Get all accounts from the provider
+    /// 2. For each account, compute its storage root
+    /// 3. RLP encode each account as [nonce, balance, storage_root, code_hash]
+    /// 4. Build MPT with keccak256(address) as keys
+    /// 5. Return the trie root hash
+    fn compute_state_root_mpt(&self) -> Result<B256> {
+        // Get all accounts from the provider
+        let accounts = self.provider.get_all_accounts()?;
 
-        // Create a deterministic hash based on some state
-        let mut hasher_input = Vec::new();
-        hasher_input.extend_from_slice(b"state_root");
+        // Create a closure to get storage for each account
+        let provider = Arc::clone(&self.provider);
+        let storage_getter = move |address: Address| -> Result<
+            BTreeMap<alloy_primitives::U256, alloy_primitives::U256>,
+        > { provider.get_all_storage(address) };
 
-        // Hash to create deterministic but changing root
-        Ok(keccak256(&hasher_input))
+        // Compute the MPT-based state root
+        compute_state_root(&accounts, storage_getter)
     }
 
     /// Get the current state root (from last checkpoint).
@@ -182,21 +186,27 @@ impl<P: Provider> StateManager<P> {
     }
 
     /// Store a snapshot at the given block number.
+    ///
+    /// Captures the full account state from the provider for rollback capability.
     fn store_snapshot(&self, block_number: u64, state_root: B256) -> Result<()> {
         tracing::debug!(block_number, "Storing state snapshot");
 
-        // In a full implementation, we would serialize the entire state
-        // For now, we store minimal snapshot data
+        // Get all accounts from the provider for the snapshot
+        let accounts = self.provider.get_all_accounts()?;
+        let accounts_count = accounts.len();
+
         let snapshot = StateSnapshot {
             block_number,
             state_root,
-            accounts: BTreeMap::new(), // TODO: Store actual account state
+            accounts,
         };
 
         self.snapshots.write().insert(block_number, snapshot);
 
         // Prune old snapshots
         self.prune_old_snapshots();
+
+        tracing::debug!(block_number, accounts_count, "State snapshot stored");
 
         Ok(())
     }

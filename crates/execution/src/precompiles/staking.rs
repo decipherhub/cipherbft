@@ -12,7 +12,6 @@
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_sol_types::sol;
 use parking_lot::RwLock;
-// MIGRATION(revm33): Precompile types moved to revm::precompile module
 use revm::precompile::{PrecompileError, PrecompileOutput, PrecompileResult};
 use std::{collections::HashMap, sync::Arc};
 
