@@ -503,7 +503,10 @@ async fn cmd_start(config_path: PathBuf, genesis_override: Option<PathBuf>) -> R
         eprintln!();
         eprintln!("  After migration, update your config to use:");
         eprintln!();
-        eprintln!("    keystore_dir = \"{}\"", config.effective_keystore_dir().display());
+        eprintln!(
+            "    keystore_dir = \"{}\"",
+            config.effective_keystore_dir().display()
+        );
         eprintln!();
         eprintln!("  And remove the 'bls_secret_key_hex' and 'ed25519_secret_key_hex' fields.");
         eprintln!();

@@ -66,7 +66,11 @@ pub fn execute(
     if let Some(output_path) = output {
         fs::write(&output_path, &output_content)
             .with_context(|| format!("Failed to write to {}", output_path.display()))?;
-        println!("Exported {} validator(s) to {}", validators.len(), output_path.display());
+        println!(
+            "Exported {} validator(s) to {}",
+            validators.len(),
+            output_path.display()
+        );
     } else {
         print!("{}", output_content);
     }

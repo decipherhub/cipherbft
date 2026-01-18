@@ -55,8 +55,8 @@ impl KdfModule {
                 p,
                 salt,
             } => {
-                let salt_bytes = hex::decode(salt)
-                    .map_err(|e| KeystoreError::HexError(e.to_string()))?;
+                let salt_bytes =
+                    hex::decode(salt).map_err(|e| KeystoreError::HexError(e.to_string()))?;
                 scrypt_derive_key(passphrase, &salt_bytes, *n, *r, *p, *dklen as usize)
             }
         }
@@ -86,7 +86,13 @@ impl KdfParams {
     /// Validate the parameters
     pub fn validate(&self) -> KeystoreResult<()> {
         match self {
-            KdfParams::Scrypt { dklen, n, r, p, salt } => {
+            KdfParams::Scrypt {
+                dklen,
+                n,
+                r,
+                p,
+                salt,
+            } => {
                 // dklen must be at least 32 bytes
                 if *dklen < 32 {
                     return Err(KeystoreError::InvalidKdfParams(
@@ -112,8 +118,9 @@ impl KdfParams {
                     ));
                 }
                 // salt must be valid hex
-                hex::decode(salt)
-                    .map_err(|e| KeystoreError::InvalidKdfParams(format!("invalid salt hex: {}", e)))?;
+                hex::decode(salt).map_err(|e| {
+                    KeystoreError::InvalidKdfParams(format!("invalid salt hex: {}", e))
+                })?;
                 Ok(())
             }
         }

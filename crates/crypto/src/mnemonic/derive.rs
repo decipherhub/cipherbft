@@ -37,7 +37,6 @@ pub struct DerivationConfig {
     pub passphrase: Option<String>,
 }
 
-
 impl DerivationConfig {
     /// Create a new derivation config for the given account
     pub fn new(account: u32) -> Self {
@@ -55,12 +54,18 @@ impl DerivationConfig {
 
     /// Get the Ed25519 derivation path
     pub fn ed25519_path(&self) -> String {
-        format!("m/{}/{}/{}/0", BLS_CURVE_ID, CIPHERBFT_COIN_TYPE, self.account)
+        format!(
+            "m/{}/{}/{}/0",
+            BLS_CURVE_ID, CIPHERBFT_COIN_TYPE, self.account
+        )
     }
 
     /// Get the BLS derivation path
     pub fn bls_path(&self) -> String {
-        format!("m/{}/{}/{}/1", BLS_CURVE_ID, CIPHERBFT_COIN_TYPE, self.account)
+        format!(
+            "m/{}/{}/{}/1",
+            BLS_CURVE_ID, CIPHERBFT_COIN_TYPE, self.account
+        )
     }
 }
 
@@ -128,7 +133,10 @@ pub fn derive_validator_keys(
 /// # Returns
 ///
 /// `Ed25519KeyPair` derived from the mnemonic
-pub fn derive_ed25519_key(mnemonic: &Mnemonic, config: &DerivationConfig) -> MnemonicResult<Ed25519KeyPair> {
+pub fn derive_ed25519_key(
+    mnemonic: &Mnemonic,
+    config: &DerivationConfig,
+) -> MnemonicResult<Ed25519KeyPair> {
     let seed = mnemonic.to_seed(config.passphrase.as_deref());
     let path = config.ed25519_path();
 
@@ -156,7 +164,10 @@ pub fn derive_ed25519_key(mnemonic: &Mnemonic, config: &DerivationConfig) -> Mne
 /// # Returns
 ///
 /// `BlsKeyPair` derived from the mnemonic
-pub fn derive_bls_key(mnemonic: &Mnemonic, config: &DerivationConfig) -> MnemonicResult<BlsKeyPair> {
+pub fn derive_bls_key(
+    mnemonic: &Mnemonic,
+    config: &DerivationConfig,
+) -> MnemonicResult<BlsKeyPair> {
     let seed = mnemonic.to_seed(config.passphrase.as_deref());
     let path = config.bls_path();
 
@@ -220,16 +231,16 @@ fn parse_derivation_path(path: &str) -> MnemonicResult<Vec<u32>> {
         }
 
         // Handle hardened notation (')
-        let (num_str, _hardened) = if part.ends_with('\'') || part.ends_with('h') || part.ends_with('H')
-        {
-            (&part[..part.len() - 1], true)
-        } else {
-            (part, false)
-        };
+        let (num_str, _hardened) =
+            if part.ends_with('\'') || part.ends_with('h') || part.ends_with('H') {
+                (&part[..part.len() - 1], true)
+            } else {
+                (part, false)
+            };
 
-        let index: u32 = num_str.parse().map_err(|_| {
-            MnemonicError::InvalidPath(format!("invalid path component: {}", part))
-        })?;
+        let index: u32 = num_str
+            .parse()
+            .map_err(|_| MnemonicError::InvalidPath(format!("invalid path component: {}", part)))?;
 
         components.push(index);
     }

@@ -128,7 +128,14 @@ pub fn execute_keys_command(home: &std::path::Path, command: KeysCommand) -> Res
             mnemonic,
             passphrase_file,
             dry_run,
-        } => generate::execute(home, account, output_dir, mnemonic, passphrase_file, dry_run),
+        } => generate::execute(
+            home,
+            account,
+            output_dir,
+            mnemonic,
+            passphrase_file,
+            dry_run,
+        ),
 
         KeysCommand::Import {
             account,
@@ -136,7 +143,14 @@ pub fn execute_keys_command(home: &std::path::Path, command: KeysCommand) -> Res
             mnemonic_file,
             passphrase_file,
             force,
-        } => import::execute(home, account, output_dir, mnemonic_file, passphrase_file, force),
+        } => import::execute(
+            home,
+            account,
+            output_dir,
+            mnemonic_file,
+            passphrase_file,
+            force,
+        ),
 
         KeysCommand::Export {
             format,

@@ -36,7 +36,9 @@ impl CipherModule {
     pub fn new(iv: Vec<u8>, ciphertext: Vec<u8>) -> Self {
         Self {
             function: "aes-128-ctr".to_string(),
-            params: CipherParams { iv: hex::encode(&iv) },
+            params: CipherParams {
+                iv: hex::encode(&iv),
+            },
             message: hex::encode(&ciphertext),
         }
     }
@@ -97,11 +99,7 @@ impl CipherParams {
 /// # Returns
 ///
 /// Ciphertext bytes
-pub fn encrypt_secret(
-    secret: &[u8],
-    encryption_key: &[u8],
-    iv: &[u8],
-) -> KeystoreResult<Vec<u8>> {
+pub fn encrypt_secret(secret: &[u8], encryption_key: &[u8], iv: &[u8]) -> KeystoreResult<Vec<u8>> {
     if encryption_key.len() < AES_KEY_LENGTH {
         return Err(KeystoreError::InvalidCipherParams(format!(
             "encryption key must be at least {} bytes, got {}",

@@ -64,11 +64,7 @@ impl EncryptedKeystore {
     /// # Returns
     ///
     /// New EncryptedKeystore ready to be saved
-    pub fn encrypt(
-        secret: &[u8],
-        passphrase: &str,
-        pubkey: &str,
-    ) -> KeystoreResult<Self> {
+    pub fn encrypt(secret: &[u8], passphrase: &str, pubkey: &str) -> KeystoreResult<Self> {
         KeystoreBuilder::new()
             .secret(secret)
             .passphrase(passphrase)
@@ -233,9 +229,9 @@ impl KeystoreBuilder {
             actual: 0,
         })?;
 
-        let passphrase = self.passphrase.ok_or_else(|| {
-            KeystoreError::WeakPassphrase("passphrase is required".to_string())
-        })?;
+        let passphrase = self
+            .passphrase
+            .ok_or_else(|| KeystoreError::WeakPassphrase("passphrase is required".to_string()))?;
 
         let pubkey = self.pubkey.unwrap_or_default();
 

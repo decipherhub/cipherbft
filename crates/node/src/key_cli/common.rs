@@ -67,8 +67,7 @@ pub fn read_passphrase_from_file(path: &Path) -> Result<String> {
 
 /// Prompt for passphrase with optional confirmation
 pub fn prompt_passphrase(prompt: &str, confirm: bool) -> Result<String> {
-    let passphrase = rpassword::prompt_password(prompt)
-        .context("Failed to read passphrase")?;
+    let passphrase = rpassword::prompt_password(prompt).context("Failed to read passphrase")?;
 
     if passphrase.len() < MIN_PASSPHRASE_LENGTH {
         return Err(anyhow!(

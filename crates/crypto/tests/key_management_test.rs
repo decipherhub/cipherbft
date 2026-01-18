@@ -35,7 +35,9 @@ fn test_full_key_workflow() {
         EncryptedKeystore::encrypt(&ed_secret_bytes, passphrase, &ed_pubkey_hex).unwrap();
 
     let ed_path = temp_dir.path().join("consensus.json");
-    ed_keystore.save(&ed_path).expect("failed to save ed keystore");
+    ed_keystore
+        .save(&ed_path)
+        .expect("failed to save ed keystore");
 
     // Store BLS key
     let bls_pubkey_hex = hex::encode(keys.data_chain_pubkey().to_bytes());
@@ -60,18 +62,10 @@ fn test_full_key_workflow() {
 
     // Step 6: Reconstruct keys and verify signing still works
     let ed_secret = cipherbft_crypto::Ed25519SecretKey::from_bytes(
-        decrypted_ed
-            .expose_secret()
-            .as_slice()
-            .try_into()
-            .unwrap(),
+        decrypted_ed.expose_secret().as_slice().try_into().unwrap(),
     );
     let bls_secret = cipherbft_crypto::BlsSecretKey::from_bytes(
-        decrypted_bls
-            .expose_secret()
-            .as_slice()
-            .try_into()
-            .unwrap(),
+        decrypted_bls.expose_secret().as_slice().try_into().unwrap(),
     )
     .unwrap();
 
@@ -163,17 +157,19 @@ fn test_keystore_passphrase_handling() {
 
     // Test with various passphrase lengths
     let passphrases = [
-        "short",                      // Very short (weak)
-        "medium_length_phrase",       // Medium
+        "short",                                                  // Very short (weak)
+        "medium_length_phrase",                                   // Medium
         "this-is-a-very-long-passphrase-with-special-chars!@#$%", // Long with special
-        "🔐 unicode passphrase 密码", // Unicode
+        "🔐 unicode passphrase 密码",                             // Unicode
     ];
 
     for passphrase in &passphrases {
         let keystore = EncryptedKeystore::encrypt(&secret, passphrase, pubkey)
             .expect("encryption should succeed");
 
-        let decrypted = keystore.decrypt(passphrase).expect("decryption should succeed");
+        let decrypted = keystore
+            .decrypt(passphrase)
+            .expect("decryption should succeed");
 
         assert_eq!(
             decrypted.expose_secret().as_slice(),
@@ -184,10 +180,7 @@ fn test_keystore_passphrase_handling() {
 
         // Wrong passphrase should fail
         let wrong_result = keystore.decrypt("wrong_passphrase");
-        assert!(
-            wrong_result.is_err(),
-            "should fail with wrong passphrase"
-        );
+        assert!(wrong_result.is_err(), "should fail with wrong passphrase");
     }
 }
 

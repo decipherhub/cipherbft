@@ -190,11 +190,11 @@ impl Zeroize for Mnemonic {
 /// Convert word count to entropy bytes
 fn word_count_to_entropy_bytes(word_count: usize) -> MnemonicResult<usize> {
     match word_count {
-        12 => Ok(16),  // 128 bits = 16 bytes
-        15 => Ok(20),  // 160 bits = 20 bytes
-        18 => Ok(24),  // 192 bits = 24 bytes
-        21 => Ok(28),  // 224 bits = 28 bytes
-        24 => Ok(32),  // 256 bits = 32 bytes
+        12 => Ok(16), // 128 bits = 16 bytes
+        15 => Ok(20), // 160 bits = 20 bytes
+        18 => Ok(24), // 192 bits = 24 bytes
+        21 => Ok(28), // 224 bits = 28 bytes
+        24 => Ok(32), // 256 bits = 32 bytes
         _ => Err(MnemonicError::InvalidPhrase(format!(
             "invalid word count: {} (must be 12, 15, 18, 21, or 24)",
             word_count
