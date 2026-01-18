@@ -400,7 +400,7 @@ impl DclStore for InMemoryStore {
                 }
             }
             // Also keep references from pending cuts
-            for (_, cut) in &state.pending {
+            for cut in state.pending.values() {
                 for car in cut.cars.values() {
                     referenced_car_hashes.insert(car.hash());
                 }
@@ -423,7 +423,7 @@ impl DclStore for InMemoryStore {
         let mut referenced_batch_hashes = std::collections::HashSet::new();
         {
             let state = self.car_state.read();
-            for (_, car) in &state.cars {
+            for car in state.cars.values() {
                 let car_hash = car.hash();
                 if referenced_car_hashes.contains(&car_hash) {
                     // This car is referenced, keep its batches

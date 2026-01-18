@@ -447,7 +447,8 @@ impl PrimaryState {
         }
 
         // Remove validators with no remaining equivocation records
-        self.equivocations.retain(|_, positions| !positions.is_empty());
+        self.equivocations
+            .retain(|_, positions| !positions.is_empty());
     }
 
     /// Cleanup available batches that are no longer needed.
@@ -458,8 +459,12 @@ impl PrimaryState {
     ///
     /// # Arguments
     /// * `referenced_batches` - Set of batch hashes that are still referenced
-    pub fn cleanup_available_batches(&mut self, referenced_batches: &std::collections::HashSet<Hash>) {
-        self.available_batches.retain(|hash| referenced_batches.contains(hash));
+    pub fn cleanup_available_batches(
+        &mut self,
+        referenced_batches: &std::collections::HashSet<Hash>,
+    ) {
+        self.available_batches
+            .retain(|hash| referenced_batches.contains(hash));
     }
 
     /// Get all batch hashes currently referenced by pending or attested Cars.
@@ -514,14 +519,12 @@ impl PrimaryState {
         const STALE_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
 
         // Cleanup old pending cars
-        self.pending_cars.retain(|_, pending| {
-            pending.created_at.elapsed() < STALE_TIMEOUT
-        });
+        self.pending_cars
+            .retain(|_, pending| pending.created_at.elapsed() < STALE_TIMEOUT);
 
         // Cleanup old cars awaiting batches
-        self.cars_awaiting_batches.retain(|_, awaiting| {
-            awaiting.requested_at.elapsed() < STALE_TIMEOUT
-        });
+        self.cars_awaiting_batches
+            .retain(|_, awaiting| awaiting.requested_at.elapsed() < STALE_TIMEOUT);
     }
 
     /// Perform full memory cleanup.
