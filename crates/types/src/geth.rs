@@ -313,7 +313,7 @@ impl AllocEntry {
 
     /// Check if this is a contract account (has code).
     pub fn is_contract(&self) -> bool {
-        self.code.is_some() && !self.code.as_ref().unwrap().is_empty()
+        self.code.as_ref().is_some_and(|c| !c.is_empty())
     }
 }
 

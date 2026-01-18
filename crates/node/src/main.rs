@@ -453,9 +453,15 @@ fn cmd_init(
         key_name: cipherd::DEFAULT_KEY_NAME.to_string(),
         keystore_dir: None, // Use client.toml settings
         keystore_account: Some(0),
-        primary_listen: format!("127.0.0.1:{}", base_port).parse().unwrap(),
-        consensus_listen: format!("127.0.0.1:{}", base_port + 5).parse().unwrap(),
-        worker_listens: vec![format!("127.0.0.1:{}", base_port + 1).parse().unwrap()],
+        primary_listen: format!("127.0.0.1:{}", base_port)
+            .parse()
+            .expect("default address format is always valid"),
+        consensus_listen: format!("127.0.0.1:{}", base_port + 5)
+            .parse()
+            .expect("default address format is always valid"),
+        worker_listens: vec![format!("127.0.0.1:{}", base_port + 1)
+            .parse()
+            .expect("default address format is always valid")],
         peers: Vec::new(),
         num_workers: 1,
         home_dir: Some(home.to_path_buf()),

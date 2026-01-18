@@ -11,7 +11,20 @@ use revm::DatabaseRef;
 use revm_primitives::HashMap as RevmHashMap;
 use revm_state::{Account as RevmAccount, AccountInfo, Bytecode};
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
+
+/// Default account cache size (compile-time verified non-zero).
+const ACCOUNT_CACHE_SIZE: NonZeroUsize = match NonZeroUsize::new(1000) {
+    Some(n) => n,
+    None => panic!("account cache size must be non-zero"),
+};
+
+/// Default code cache size (compile-time verified non-zero).
+const CODE_CACHE_SIZE: NonZeroUsize = match NonZeroUsize::new(500) {
+    Some(n) => n,
+    None => panic!("code cache size must be non-zero"),
+};
 
 /// Account state information.
 #[derive(Debug, Clone, Default)]
@@ -218,12 +231,8 @@ impl<P: Provider> CipherBftDatabase<P> {
             pending_accounts: Arc::new(RwLock::new(BTreeMap::new())),
             pending_code: Arc::new(RwLock::new(BTreeMap::new())),
             pending_storage: Arc::new(RwLock::new(BTreeMap::new())),
-            cache_accounts: Arc::new(RwLock::new(lru::LruCache::new(
-                std::num::NonZeroUsize::new(1000).unwrap(),
-            ))),
-            cache_code: Arc::new(RwLock::new(lru::LruCache::new(
-                std::num::NonZeroUsize::new(500).unwrap(),
-            ))),
+            cache_accounts: Arc::new(RwLock::new(lru::LruCache::new(ACCOUNT_CACHE_SIZE))),
+            cache_code: Arc::new(RwLock::new(lru::LruCache::new(CODE_CACHE_SIZE))),
         }
     }
 

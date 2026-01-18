@@ -21,10 +21,14 @@ use alloy_consensus::Header as AlloyHeader;
 use alloy_primitives::{Address, Bytes, B256, B64, U256};
 use parking_lot::RwLock;
 use revm::primitives::hardfork::SpecId;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-/// Number of block hashes to cache for BLOCKHASH opcode (256 per EIP-210).
-const BLOCK_HASH_CACHE_SIZE: usize = 256;
+/// Number of block hashes to cache for BLOCKHASH opcode (256 per EIP-210, compile-time verified).
+const BLOCK_HASH_CACHE_SIZE: NonZeroUsize = match NonZeroUsize::new(256) {
+    Some(n) => n,
+    None => panic!("block hash cache size must be non-zero"),
+};
 
 /// ExecutionLayer trait defines the interface for block execution.
 ///
@@ -151,9 +155,7 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
             state_manager,
             evm_config,
             staking_precompile,
-            block_hashes: RwLock::new(lru::LruCache::new(
-                std::num::NonZeroUsize::new(BLOCK_HASH_CACHE_SIZE).unwrap(),
-            )),
+            block_hashes: RwLock::new(lru::LruCache::new(BLOCK_HASH_CACHE_SIZE)),
             current_block: 0,
         }
     }
