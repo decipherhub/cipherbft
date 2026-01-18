@@ -143,7 +143,7 @@ async fn test_primary_state_restoration() {
     let recovered = recovery.recover().await.unwrap();
 
     // Restore to PrimaryState
-    let mut state = PrimaryState::new(our_id);
+    let mut state = PrimaryState::new(our_id, 1000);
     state.current_height = recovered.pipeline_height.unwrap_or(0);
 
     // Convert WAL pipeline stage to state pipeline stage
@@ -226,7 +226,7 @@ async fn test_timeout_preservation_recovery() {
     assert_eq!(recovered_car.position, 5);
 
     // Restore to PrimaryState
-    let mut state = PrimaryState::new(our_id);
+    let mut state = PrimaryState::new(our_id, 1000);
 
     for (vid, car, att) in recovered.preserved_attested_cars {
         state.preserved_attested_cars.insert(vid, (car, att));

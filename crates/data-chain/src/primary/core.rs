@@ -259,7 +259,7 @@ mod tests {
 
         let our_id = validator_id_from_bls_pubkey(&keypairs[0].public_key);
         let core = Core::new(our_id, keypairs[0].clone(), validator_pubkeys);
-        let state = PrimaryState::new(our_id);
+        let state = PrimaryState::new(our_id, 1000);
 
         (core, keypairs, state)
     }

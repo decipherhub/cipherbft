@@ -41,6 +41,18 @@ pub struct HostConfig {
 
     /// Whether to enable strict validator set validation.
     pub strict_validator_checks: bool,
+
+    /// Number of heights to retain pending cuts (default: 10).
+    ///
+    /// Higher values allow more buffer for slow consensus rounds,
+    /// at the cost of increased memory usage.
+    pub pending_cuts_retention: usize,
+
+    /// Number of decisions to retain for history queries (default: 100).
+    ///
+    /// Higher values support longer sync windows for lagging nodes,
+    /// at the cost of increased memory usage.
+    pub decided_retention: usize,
 }
 
 impl Default for HostConfig {
@@ -48,6 +60,8 @@ impl Default for HostConfig {
         Self {
             max_proposal_parts: 100,
             strict_validator_checks: true,
+            pending_cuts_retention: 10,
+            decided_retention: 100,
         }
     }
 }
@@ -659,21 +673,27 @@ pub struct ChannelValueBuilder {
     cuts_by_value_id: Arc<RwLock<HashMap<ConsensusValueId, Cut>>>,
     /// Notifier for when new cuts are stored
     cut_notify: Arc<Notify>,
+    /// Number of heights to retain pending cuts
+    pending_cuts_retention: usize,
 }
 
 impl Default for ChannelValueBuilder {
     fn default() -> Self {
-        Self::new()
+        Self::new(10) // Default retention of 10 heights
     }
 }
 
 impl ChannelValueBuilder {
     /// Create a new channel-based value builder.
-    pub fn new() -> Self {
+    ///
+    /// # Arguments
+    /// * `pending_cuts_retention` - Number of heights to retain pending cuts
+    pub fn new(pending_cuts_retention: usize) -> Self {
         Self {
             pending_cuts: Arc::new(RwLock::new(HashMap::new())),
             cuts_by_value_id: Arc::new(RwLock::new(HashMap::new())),
             cut_notify: Arc::new(Notify::new()),
+            pending_cuts_retention,
         }
     }
 
@@ -690,12 +710,13 @@ impl ChannelValueBuilder {
             pending.insert(height, cut.clone());
         }
 
-        // Clean up old pending cuts (keep only last 10 heights)
+        // Clean up old pending cuts (keep only last N heights based on config)
+        let retention = self.pending_cuts_retention;
         let mut pending = self.pending_cuts.write().await;
-        if pending.len() > 10 {
+        if pending.len() > retention {
             let heights: Vec<_> = pending.keys().cloned().collect();
             let max_height = heights.iter().max().copied().unwrap_or(height);
-            let cutoff = max_height.0.saturating_sub(10);
+            let cutoff = max_height.0.saturating_sub(retention as u64);
             pending.retain(|h, _| h.0 >= cutoff);
         }
 
@@ -776,14 +797,30 @@ pub struct ChannelDecisionHandler {
     decided_tx: Option<mpsc::Sender<(ConsensusHeight, Cut)>>,
     /// Decided cuts by height (for history queries)
     decided_cuts: DecidedCutsMap,
+    /// Number of decisions to retain for history queries
+    decided_retention: usize,
+}
+
+impl Default for ChannelDecisionHandler {
+    fn default() -> Self {
+        Self::new(None, 100) // Default retention of 100 decisions
+    }
 }
 
 impl ChannelDecisionHandler {
     /// Create a new channel-based decision handler.
-    pub fn new(decided_tx: Option<mpsc::Sender<(ConsensusHeight, Cut)>>) -> Self {
+    ///
+    /// # Arguments
+    /// * `decided_tx` - Optional channel to send decided events
+    /// * `decided_retention` - Number of decisions to retain for history queries
+    pub fn new(
+        decided_tx: Option<mpsc::Sender<(ConsensusHeight, Cut)>>,
+        decided_retention: usize,
+    ) -> Self {
         Self {
             decided_tx,
             decided_cuts: Arc::new(RwLock::new(HashMap::new())),
+            decided_retention,
         }
     }
 }
@@ -804,11 +841,12 @@ impl DecisionHandler for ChannelDecisionHandler {
             let mut decided = self.decided_cuts.write().await;
             decided.insert(height, (cut.clone(), certificate));
 
-            // Clean up old decisions (keep last 100)
-            if decided.len() > 100 {
+            // Clean up old decisions (keep only configured retention)
+            let retention = self.decided_retention;
+            if decided.len() > retention {
                 let heights: Vec<_> = decided.keys().cloned().collect();
                 let max_height = heights.iter().max().copied().unwrap_or(height);
-                let cutoff = max_height.0.saturating_sub(100);
+                let cutoff = max_height.0.saturating_sub(retention as u64);
                 decided.retain(|h, _| h.0 >= cutoff);
             }
         }
@@ -875,9 +913,15 @@ pub async fn spawn_host(
             .map_err(|e| anyhow::anyhow!("Failed to create validator set manager: {}", e))?,
     );
 
-    // Create channel-based handlers
-    let value_builder = Arc::new(ChannelValueBuilder::new());
-    let decision_handler = Arc::new(ChannelDecisionHandler::new(decided_tx));
+    // Create config with default retention values
+    let config = HostConfig::default();
+
+    // Create channel-based handlers with config values
+    let value_builder = Arc::new(ChannelValueBuilder::new(config.pending_cuts_retention));
+    let decision_handler = Arc::new(ChannelDecisionHandler::new(
+        decided_tx,
+        config.decided_retention,
+    ));
 
     // Spawn background task to process DCL cuts
     let value_builder_for_cuts = Arc::clone(&value_builder);
@@ -895,7 +939,7 @@ pub async fn spawn_host(
         validator_set_manager,
         value_builder as Arc<dyn ValueBuilder>,
         decision_handler as Arc<dyn DecisionHandler>,
-        HostConfig::default(),
+        config,
         span,
     )
     .await
