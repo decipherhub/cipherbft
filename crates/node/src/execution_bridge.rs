@@ -5,8 +5,8 @@
 
 use cipherbft_data_chain::worker::TransactionValidator;
 use cipherbft_execution::{
-    keccak256, Bytes, Car as ExecutionCar, ChainConfig, Cut as ExecutionCut, ExecutionLayer,
-    ExecutionResult, B256, U256,
+    keccak256, BlockInput, Bytes, Car as ExecutionCar, ChainConfig, Cut as ExecutionCut,
+    ExecutionEngine, ExecutionLayerTrait, ExecutionResult, InMemoryProvider, B256, U256,
 };
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
@@ -19,7 +19,7 @@ use tracing::info;
 /// tracking block hashes to ensure proper chain connectivity.
 pub struct ExecutionBridge {
     /// Execution layer instance
-    execution: Arc<RwLock<ExecutionLayer>>,
+    execution: Arc<RwLock<ExecutionEngine<InMemoryProvider>>>,
     /// Hash of the last executed block (used as parent hash for the next block)
     ///
     /// Initialized to B256::ZERO for the genesis block.
@@ -34,7 +34,8 @@ impl ExecutionBridge {
     ///
     /// * `config` - Chain configuration for the execution layer
     pub fn new(config: ChainConfig) -> anyhow::Result<Self> {
-        let execution = ExecutionLayer::new(config)?;
+        let provider = InMemoryProvider::new();
+        let execution = ExecutionEngine::new(config, provider);
 
         Ok(Self {
             execution: Arc::new(RwLock::new(execution)),
@@ -93,11 +94,25 @@ impl ExecutionBridge {
         let timestamp = execution_cut.timestamp;
         let parent_hash = execution_cut.parent_hash;
 
+        // Convert Cut to BlockInput by flattening transactions from all Cars
+        let block_input = BlockInput {
+            block_number: execution_cut.block_number,
+            timestamp: execution_cut.timestamp,
+            transactions: execution_cut
+                .cars
+                .iter()
+                .flat_map(|car| car.transactions.iter().cloned())
+                .collect(),
+            parent_hash: execution_cut.parent_hash,
+            gas_limit: execution_cut.gas_limit,
+            base_fee_per_gas: execution_cut.base_fee_per_gas,
+        };
+
         let mut execution = self.execution.write().await;
 
         let result = execution
-            .execute_cut(execution_cut)
-            .map_err(|e| anyhow::anyhow!("Cut execution failed: {}", e))?;
+            .execute_block(block_input)
+            .map_err(|e| anyhow::anyhow!("Block execution failed: {}", e))?;
 
         // Compute and store the new block hash for the next block's parent_hash
         let new_block_hash = compute_block_hash(
