@@ -6,15 +6,12 @@ use alloy_primitives::U256;
 use anyhow::Result;
 use cipherd::{
     generate_local_configs, GenesisGenerator, GenesisGeneratorConfig, GenesisLoader, Node,
-    NodeConfig, ValidatorKeyFile,
+    NodeConfig, ValidatorKeyFile, CIPHERD_HOME_ENV, DEFAULT_HOME_DIR,
 };
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::{info, Level};
 use tracing_subscriber::EnvFilter;
-
-/// Default home directory name
-const DEFAULT_HOME_DIR: &str = ".cipherd";
 
 /// CipherBFT Daemon
 #[derive(Parser)]
@@ -57,9 +54,17 @@ enum Commands {
         #[arg(long)]
         moniker: Option<String>,
 
-        /// Chain ID for the network
-        #[arg(long, default_value = "cipherbft-1")]
-        chain_id: String,
+        /// EVM Chain ID for the network (default: 85300)
+        #[arg(long, default_value = "85300")]
+        chain_id: u64,
+
+        /// Network identifier (e.g., "cipherbft-testnet-1")
+        #[arg(long, default_value = "cipherbft-testnet-1")]
+        network_id: String,
+
+        /// Initial stake per validator in ETH (default: 32)
+        #[arg(long, default_value = "32")]
+        initial_stake_eth: u64,
 
         /// Overwrite existing configuration
         #[arg(long, default_value = "false")]
@@ -79,25 +84,8 @@ enum Commands {
 
     /// Generate testnet configuration files for local multi-validator testing
     Testnet {
-        /// Number of validators to generate
-        #[arg(short = 'n', long, default_value = "4")]
-        validators: usize,
-
-        /// Output directory for config files
-        #[arg(short, long, default_value = "./testnet")]
-        output: PathBuf,
-    },
-
-    /// Run a local testnet with multiple validators (for development)
-    #[command(name = "testnet-start")]
-    TestnetStart {
-        /// Number of validators
-        #[arg(short = 'n', long, default_value = "4")]
-        validators: usize,
-
-        /// Duration to run in seconds (0 = run until Ctrl+C)
-        #[arg(short, long, default_value = "0")]
-        duration: u64,
+        #[command(subcommand)]
+        command: TestnetCommands,
     },
 
     /// Manage your application's keys
@@ -243,6 +231,56 @@ enum GenesisCommands {
         #[arg(long, default_value = "false")]
         no_keys: bool,
     },
+
+    /// Add a genesis account to an existing genesis file
+    #[command(name = "add-genesis-account")]
+    AddGenesisAccount {
+        /// Account address (0x... format)
+        address: String,
+
+        /// Initial balance in ETH
+        #[arg(long, default_value = "100")]
+        balance_eth: u64,
+
+        /// Path to genesis file
+        #[arg(long)]
+        genesis: Option<PathBuf>,
+    },
+
+    /// Generate a genesis transaction (gentx) for a validator
+    Gentx {
+        /// Path to validator key file (validator-N.json)
+        #[arg(long)]
+        key_file: PathBuf,
+
+        /// Stake amount in ETH
+        #[arg(long, default_value = "32")]
+        stake_eth: u64,
+
+        /// Validator moniker/name
+        #[arg(long)]
+        moniker: Option<String>,
+
+        /// Commission rate percentage (0-100)
+        #[arg(long, default_value = "10")]
+        commission_rate: u8,
+
+        /// Output directory for gentx file
+        #[arg(long, default_value = "./gentx")]
+        output_dir: PathBuf,
+    },
+
+    /// Collect genesis transactions and add them to genesis file
+    #[command(name = "collect-gentxs")]
+    CollectGentxs {
+        /// Directory containing gentx files
+        #[arg(long, default_value = "./gentx")]
+        gentx_dir: PathBuf,
+
+        /// Path to genesis file
+        #[arg(long)]
+        genesis: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -260,7 +298,60 @@ enum DebugCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum TestnetCommands {
+    /// Initialize testnet configuration files for multi-validator setup
+    #[command(name = "init-files")]
+    InitFiles {
+        /// Number of validators to generate
+        #[arg(short = 'n', long, default_value = "4")]
+        validators: usize,
+
+        /// Output directory for testnet files
+        #[arg(short, long, default_value = "./testnet")]
+        output: PathBuf,
+
+        /// Chain ID for the network
+        #[arg(long, default_value = "85300")]
+        chain_id: u64,
+
+        /// Network identifier
+        #[arg(long, default_value = "cipherbft-testnet-1")]
+        network_id: String,
+
+        /// Initial stake per validator in ETH
+        #[arg(long, default_value = "32")]
+        initial_stake_eth: u64,
+
+        /// Starting P2P port (increments by 10 for each validator)
+        #[arg(long, default_value = "9000")]
+        starting_port: u16,
+    },
+
+    /// Start a local testnet with multiple validators (in-process)
+    Start {
+        /// Number of validators
+        #[arg(short = 'n', long, default_value = "4")]
+        validators: usize,
+
+        /// Duration to run in seconds (0 = run until Ctrl+C)
+        #[arg(short, long, default_value = "0")]
+        duration: u64,
+    },
+}
+
+/// Returns the default home directory for cipherd.
+///
+/// Resolution order:
+/// 1. `CIPHERD_HOME` environment variable (if set)
+/// 2. `~/.cipherd` (default)
 fn default_home_dir() -> PathBuf {
+    // Check for CIPHERD_HOME environment variable first
+    if let Ok(home) = std::env::var(CIPHERD_HOME_ENV) {
+        return PathBuf::from(home);
+    }
+
+    // Fall back to default: ~/.cipherd
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(DEFAULT_HOME_DIR)
@@ -277,20 +368,24 @@ async fn main() -> Result<()> {
         Commands::Init {
             moniker,
             chain_id,
+            network_id,
+            initial_stake_eth,
             overwrite,
-        } => cmd_init(&cli.home, moniker, &chain_id, overwrite),
+        } => cmd_init(
+            &cli.home,
+            moniker,
+            chain_id,
+            &network_id,
+            initial_stake_eth,
+            overwrite,
+        ),
 
         Commands::Start { config, genesis } => {
             let config_path = config.unwrap_or_else(|| cli.home.join("config/node.json"));
             cmd_start(config_path, genesis).await
         }
 
-        Commands::Testnet { validators, output } => cmd_testnet(validators, output),
-
-        Commands::TestnetStart {
-            validators,
-            duration,
-        } => cmd_testnet_start(validators, duration).await,
+        Commands::Testnet { command } => cmd_testnet(command).await,
 
         Commands::Keys { command } => cmd_keys(&cli.home, command),
 
@@ -351,7 +446,9 @@ fn init_tracing(log_level: &str, log_format: &str, no_color: bool) {
 fn cmd_init(
     home: &std::path::Path,
     moniker: Option<String>,
-    chain_id: &str,
+    chain_id: u64,
+    network_id: &str,
+    initial_stake_eth: u64,
     overwrite: bool,
 ) -> Result<()> {
     let config_dir = home.join("config");
@@ -377,12 +474,31 @@ fn cmd_init(
     let node_moniker =
         moniker.unwrap_or_else(|| format!("node-{}", hex::encode(&config.validator_id.0[..8])));
 
+    // Generate genesis file
+    let genesis_path = config_dir.join("genesis.json");
+    // Convert ETH to wei (1 ETH = 10^18 wei)
+    let initial_stake = U256::from(initial_stake_eth) * U256::from(1_000_000_000_000_000_000u128);
+    let initial_balance = U256::from(100u64) * U256::from(1_000_000_000_000_000_000u128); // 100 ETH
+
+    let genesis = GenesisGenerator::generate_from_node_config(
+        config,
+        chain_id,
+        network_id,
+        initial_stake,
+        initial_balance,
+    )?;
+
+    let genesis_json = genesis.to_json()?;
+    std::fs::write(&genesis_path, genesis_json)?;
+
     println!("Successfully initialized node configuration");
     println!();
-    println!("  Home:     {}", home.display());
-    println!("  Moniker:  {}", node_moniker);
-    println!("  Chain ID: {}", chain_id);
-    println!("  Config:   {}", config_path.display());
+    println!("  Home:       {}", home.display());
+    println!("  Moniker:    {}", node_moniker);
+    println!("  Chain ID:   {}", chain_id);
+    println!("  Network ID: {}", network_id);
+    println!("  Config:     {}", config_path.display());
+    println!("  Genesis:    {}", genesis_path.display());
     println!();
     println!("To start the node:");
     println!("  cipherd start --home {}", home.display());
@@ -763,7 +879,7 @@ fn cmd_validate(home: &std::path::Path, genesis_path: Option<PathBuf>) -> Result
     Ok(())
 }
 
-fn cmd_genesis(command: GenesisCommands) -> Result<()> {
+fn cmd_genesis(home: &std::path::Path, command: GenesisCommands) -> Result<()> {
     match command {
         GenesisCommands::Generate {
             validators,
@@ -782,6 +898,25 @@ fn cmd_genesis(command: GenesisCommands) -> Result<()> {
             &keys_dir,
             no_keys,
         ),
+        GenesisCommands::AddGenesisAccount {
+            address,
+            balance_eth,
+            genesis,
+        } => {
+            let genesis_path = genesis.unwrap_or_else(|| home.join("config/genesis.json"));
+            cmd_genesis_add_account(&address, balance_eth, &genesis_path)
+        }
+        GenesisCommands::Gentx {
+            key_file,
+            stake_eth,
+            moniker,
+            commission_rate,
+            output_dir,
+        } => cmd_genesis_gentx(&key_file, stake_eth, moniker, commission_rate, &output_dir),
+        GenesisCommands::CollectGentxs { gentx_dir, genesis } => {
+            let genesis_path = genesis.unwrap_or_else(|| home.join("config/genesis.json"));
+            cmd_genesis_collect_gentxs(&gentx_dir, &genesis_path)
+        }
     }
 }
 

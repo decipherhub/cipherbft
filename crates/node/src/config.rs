@@ -19,6 +19,25 @@ use std::path::PathBuf;
 /// ```
 pub const CIPHERD_GENESIS_PATH_ENV: &str = "CIPHERD_GENESIS_PATH";
 
+/// Environment variable for home directory override.
+///
+/// When set, this environment variable takes precedence over the default
+/// home directory (`~/.cipherd`). This follows the Cosmos SDK convention
+/// where each daemon supports a `{DAEMON}_HOME` environment variable.
+///
+/// # Example
+///
+/// ```bash
+/// export CIPHERD_HOME=/custom/path/cipherd
+/// cipherd start
+/// ```
+pub const CIPHERD_HOME_ENV: &str = "CIPHERD_HOME";
+
+/// Default home directory name (relative to user's home directory).
+///
+/// The full default path is `~/.cipherd`.
+pub const DEFAULT_HOME_DIR: &str = ".cipherd";
+
 /// Default genesis file path relative to the data directory.
 ///
 /// The full default path is `~/.cipherd/config/genesis.json`.

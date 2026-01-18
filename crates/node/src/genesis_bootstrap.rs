@@ -426,6 +426,121 @@ impl GenesisGenerator {
             },
         }
     }
+
+    /// Generate a genesis file from an existing NodeConfig.
+    ///
+    /// This creates a single-validator genesis using the keys already present
+    /// in the NodeConfig. Useful for `cipherd init` to generate both config
+    /// and genesis in one step.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_config` - The node configuration containing validator keys
+    /// * `chain_id` - The EVM chain ID (e.g., 85300)
+    /// * `network_id` - The network identifier string (e.g., "cipherbft-testnet-1")
+    /// * `initial_stake` - Initial stake per validator in wei
+    /// * `initial_balance` - Initial balance for validator account in wei
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use cipherd::genesis_bootstrap::GenesisGenerator;
+    /// use cipherd::config::NodeConfig;
+    ///
+    /// let config = NodeConfig::for_local_test(0, 1);
+    /// let genesis = GenesisGenerator::generate_from_node_config(
+    ///     &config,
+    ///     85300,
+    ///     "cipherbft-testnet-1",
+    ///     32_000_000_000_000_000_000u128.into(),  // 32 ETH
+    ///     100_000_000_000_000_000_000u128.into(), // 100 ETH
+    /// )?;
+    /// ```
+    pub fn generate_from_node_config(
+        node_config: &crate::config::NodeConfig,
+        chain_id: u64,
+        network_id: &str,
+        initial_stake: U256,
+        initial_balance: U256,
+    ) -> Result<Genesis, GenesisError> {
+        debug!(
+            "Generating genesis from NodeConfig, chain_id={}, network_id={}",
+            chain_id, network_id
+        );
+
+        // Extract public keys from the NodeConfig's secret keys
+        let bls_keypair = node_config
+            .keypair()
+            .map_err(|e| GenesisError::InvalidField {
+                field: "bls_secret_key_hex",
+                reason: format!("failed to derive BLS keypair: {}", e),
+            })?;
+        let bls_pubkey_hex = hex::encode(bls_keypair.public_key.to_bytes());
+
+        let ed25519_keypair =
+            node_config
+                .ed25519_keypair()
+                .map_err(|e| GenesisError::InvalidField {
+                    field: "ed25519_secret_key_hex",
+                    reason: format!("failed to derive Ed25519 keypair: {}", e),
+                })?;
+        let ed25519_pubkey_hex = hex::encode(ed25519_keypair.public_key.to_bytes());
+
+        // Derive EVM address from validator ID
+        let address = Address::from_slice(&node_config.validator_id.0);
+
+        debug!(
+            "Validator: address={}, ed25519={:.16}..., bls={:.16}...",
+            address, ed25519_pubkey_hex, bls_pubkey_hex
+        );
+
+        // Create genesis validator entry
+        let genesis_validator = GenesisValidator {
+            address,
+            name: Some("validator-0".to_string()),
+            ed25519_pubkey: format!("0x{}", ed25519_pubkey_hex),
+            bls_pubkey: format!("0x{}", bls_pubkey_hex),
+            staked_amount: initial_stake,
+            commission_rate_percent: 10,
+        };
+
+        // Create alloc with initial balance
+        let mut alloc = HashMap::new();
+        alloc.insert(address, AllocEntry::new(initial_balance));
+
+        // Create the genesis structure
+        let genesis_time = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+        let genesis = Genesis {
+            config: GethConfig::new(chain_id),
+            alloc,
+            gas_limit: U256::from(30_000_000u64),
+            difficulty: U256::from(1u64),
+            nonce: Some(U256::ZERO),
+            timestamp: Some(U256::ZERO),
+            extra_data: None,
+            mix_hash: None,
+            coinbase: None,
+            cipherbft: CipherBftConfig {
+                genesis_time,
+                network_id: network_id.to_string(),
+                consensus: ConsensusParams::default(),
+                dcl: DclParams::default(),
+                staking: StakingParams::default(),
+                validators: vec![genesis_validator],
+            },
+        };
+
+        // Validate the generated genesis
+        genesis.validate()?;
+
+        info!(
+            "Genesis generated from NodeConfig: chain_id={}, validator={}",
+            chain_id, address
+        );
+
+        Ok(genesis)
+    }
 }
 
 /// Validator key file for secure storage.
