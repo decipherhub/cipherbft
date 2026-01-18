@@ -155,12 +155,12 @@ impl ClientConfig {
 
         // Ensure config directory exists
         if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create config directory: {}", parent.display()))?;
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create config directory: {}", parent.display())
+            })?;
         }
 
-        let content = toml::to_string_pretty(self)
-            .context("Failed to serialize client config")?;
+        let content = toml::to_string_pretty(self).context("Failed to serialize client config")?;
 
         std::fs::write(&config_path, content)
             .with_context(|| format!("Failed to write client config: {}", config_path.display()))?;

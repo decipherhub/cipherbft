@@ -94,7 +94,11 @@ fn list_file_keystores(keys_dir: &Path) -> Result<Vec<KeystoreInfo>> {
             if parts.len() >= 2 {
                 let key_type = parts[0].to_string(); // "ed25519" or "bls"
                 let account: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-                let key_name = if parts.len() >= 3 { parts[2] } else { "unknown" };
+                let key_name = if parts.len() >= 3 {
+                    parts[2]
+                } else {
+                    "unknown"
+                };
 
                 // Try to parse as keystore to get UUID and description
                 if let Ok(keystore) = EncryptedKeystore::load(&path) {
