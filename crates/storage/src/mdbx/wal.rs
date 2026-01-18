@@ -267,7 +267,11 @@ impl reth_db_api::table::Decode for WalIndexKey {
         if value.len() < 8 {
             return Err(reth_db_api::DatabaseError::Decode);
         }
-        Ok(Self(u64::from_be_bytes(value[..8].try_into().unwrap())))
+        Ok(Self(u64::from_be_bytes(
+            value[..8]
+                .try_into()
+                .map_err(|_| reth_db_api::DatabaseError::Decode)?,
+        )))
     }
 }
 

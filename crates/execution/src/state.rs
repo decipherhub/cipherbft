@@ -11,7 +11,14 @@ use crate::types::STATE_ROOT_SNAPSHOT_INTERVAL;
 use alloy_primitives::{Address, B256};
 use parking_lot::RwLock;
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
+
+/// State root cache size (compile-time verified non-zero).
+const STATE_ROOT_CACHE_SIZE: NonZeroUsize = match NonZeroUsize::new(1000) {
+    Some(n) => n,
+    None => panic!("state root cache size must be non-zero"),
+};
 
 /// State snapshot at a specific block height.
 #[derive(Debug, Clone)]
@@ -73,9 +80,7 @@ impl<P: Provider> StateManager<P> {
             last_checkpoint_block: Arc::new(RwLock::new(0)),
             snapshots: Arc::new(RwLock::new(BTreeMap::new())),
             max_snapshots: 100, // Keep last 10,000 blocks worth (100 snapshots * 100 blocks)
-            state_root_cache: Arc::new(RwLock::new(lru::LruCache::new(
-                std::num::NonZeroUsize::new(1000).unwrap(),
-            ))),
+            state_root_cache: Arc::new(RwLock::new(lru::LruCache::new(STATE_ROOT_CACHE_SIZE))),
         }
     }
 

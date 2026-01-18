@@ -70,7 +70,11 @@ impl Decode for CarTableKey {
         }
         let mut validator_prefix = [0u8; 20];
         validator_prefix.copy_from_slice(&value[..20]);
-        let position = u64::from_be_bytes(value[20..28].try_into().unwrap());
+        let position = u64::from_be_bytes(
+            value[20..28]
+                .try_into()
+                .map_err(|_| reth_db_api::DatabaseError::Decode)?,
+        );
         Ok(Self {
             validator_prefix,
             position,
@@ -131,8 +135,16 @@ impl Decode for HeightRoundKey {
         if value.len() < 12 {
             return Err(reth_db_api::DatabaseError::Decode);
         }
-        let height = u64::from_be_bytes(value[..8].try_into().unwrap());
-        let round = u32::from_be_bytes(value[8..12].try_into().unwrap());
+        let height = u64::from_be_bytes(
+            value[..8]
+                .try_into()
+                .map_err(|_| reth_db_api::DatabaseError::Decode)?,
+        );
+        let round = u32::from_be_bytes(
+            value[8..12]
+                .try_into()
+                .map_err(|_| reth_db_api::DatabaseError::Decode)?,
+        );
         Ok(Self { height, round })
     }
 }
@@ -198,7 +210,11 @@ impl Decode for HeightKey {
         if value.len() < 8 {
             return Err(reth_db_api::DatabaseError::Decode);
         }
-        Ok(Self(u64::from_be_bytes(value[..8].try_into().unwrap())))
+        Ok(Self(u64::from_be_bytes(
+            value[..8]
+                .try_into()
+                .map_err(|_| reth_db_api::DatabaseError::Decode)?,
+        )))
     }
 }
 

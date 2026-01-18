@@ -196,9 +196,15 @@ impl NodeConfig {
             key_name: format!("validator_{}", index),
             keystore_dir: None,
             keystore_account: None,
-            primary_listen: format!("127.0.0.1:{}", base_port).parse().unwrap(),
-            consensus_listen: format!("127.0.0.1:{}", base_port + 5).parse().unwrap(),
-            worker_listens: vec![format!("127.0.0.1:{}", base_port + 1).parse().unwrap()],
+            primary_listen: format!("127.0.0.1:{}", base_port)
+                .parse()
+                .expect("test address format is always valid"),
+            consensus_listen: format!("127.0.0.1:{}", base_port + 5)
+                .parse()
+                .expect("test address format is always valid"),
+            worker_listens: vec![format!("127.0.0.1:{}", base_port + 1)
+                .parse()
+                .expect("test address format is always valid")],
             peers: Vec::new(), // Will be populated after all nodes are created
             num_workers: 1,
             home_dir: Some(home_dir.clone()),
