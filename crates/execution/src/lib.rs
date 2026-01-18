@@ -84,7 +84,7 @@ pub use types::{
 };
 
 // Re-export commonly used external types
-pub use alloy_primitives::{Address, Bloom, Bytes, B256, U256};
+pub use alloy_primitives::{keccak256, Address, Bloom, Bytes, B256, U256};
 
 /// Main execution layer interface for the consensus layer.
 ///
