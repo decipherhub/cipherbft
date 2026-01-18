@@ -714,6 +714,8 @@ fn cmd_testnet_init_files(
     initial_stake_eth: u64,
     starting_port: u16,
 ) -> Result<()> {
+    use cipherd::PeerConfig;
+
     println!(
         "Generating testnet configuration for {} validators...",
         num_validators
@@ -722,10 +724,7 @@ fn cmd_testnet_init_files(
 
     std::fs::create_dir_all(output)?;
 
-    // Generate node configs with keypairs
-    let test_configs = generate_local_configs(num_validators);
-
-    // Generate a shared genesis file with all validators
+    // Generate genesis with validators - this is our single source of truth for keys
     let initial_stake = U256::from(initial_stake_eth) * U256::from(1_000_000_000_000_000_000u128);
     let genesis_config = GenesisGeneratorConfig {
         num_validators,
@@ -744,31 +743,66 @@ fn cmd_testnet_init_files(
     std::fs::write(&genesis_path, genesis_json)?;
     println!("  Created shared genesis: {}", genesis_path.display());
 
-    // Create directories and configs for each node
-    for (i, tc) in test_configs.iter().enumerate() {
+    // Build peer configs from genesis validators (same keys as genesis)
+    let peer_configs: Vec<PeerConfig> = genesis_result
+        .validators
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let port_offset = starting_port + (i as u16 * 10);
+            PeerConfig {
+                validator_id: hex::encode(v.validator_id.as_bytes()),
+                bls_public_key_hex: v.bls_pubkey_hex.clone(),
+                ed25519_public_key_hex: v.ed25519_pubkey_hex.clone(),
+                primary_addr: format!("127.0.0.1:{}", port_offset).parse().unwrap(),
+                consensus_addr: format!("127.0.0.1:{}", port_offset + 5).parse().unwrap(),
+                worker_addrs: vec![format!("127.0.0.1:{}", port_offset + 1).parse().unwrap()],
+            }
+        })
+        .collect();
+
+    // Create directories and configs for each node using genesis validators
+    for (i, validator) in genesis_result.validators.iter().enumerate() {
         let node_dir = output.join(format!("node{}", i));
         let config_dir = node_dir.join("config");
         let data_dir = node_dir.join("data");
         std::fs::create_dir_all(&config_dir)?;
         std::fs::create_dir_all(&data_dir)?;
 
-        // Modify config with unique ports and genesis path
-        let mut node_config = tc.config.clone();
         let port_offset = starting_port + (i as u16 * 10);
-        node_config.primary_listen = format!("0.0.0.0:{}", port_offset).parse()?;
-        node_config.consensus_listen = format!("0.0.0.0:{}", port_offset + 5).parse()?;
-        node_config.genesis_path = Some(genesis_path.clone());
+
+        // Build node config using the SAME validator ID as in genesis
+        let node_config = NodeConfig {
+            validator_id: Some(validator.validator_id),
+            keyring_backend: "file".to_string(),
+            key_name: format!("validator-{}", i),
+            keystore_dir: None,
+            keystore_account: None,
+            primary_listen: format!("0.0.0.0:{}", port_offset).parse()?,
+            consensus_listen: format!("0.0.0.0:{}", port_offset + 5).parse()?,
+            worker_listens: vec![format!("0.0.0.0:{}", port_offset + 1).parse()?],
+            // Add all other validators as peers
+            peers: peer_configs
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .map(|(_, p)| p.clone())
+                .collect(),
+            num_workers: 1,
+            home_dir: Some(node_dir.clone()),
+            data_dir: data_dir.clone(),
+            genesis_path: Some(genesis_path.clone()),
+            car_interval_ms: 100,
+            max_batch_txs: 100,
+            max_batch_bytes: 1024 * 1024,
+        };
 
         let config_path = config_dir.join("node.json");
         node_config.save(&config_path)?;
 
         println!(
             "  Created node{} (validator {:?}, port {})",
-            i,
-            tc.config
-                .validator_id
-                .expect("test config should have validator_id"),
-            starting_port + (i as u16 * 10)
+            i, validator.validator_id, port_offset
         );
     }
 
