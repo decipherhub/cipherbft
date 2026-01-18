@@ -207,7 +207,7 @@ impl DclStore for InMemoryStore {
 
         // Update highest position if this is higher than current
         let current_highest = state.highest_positions.get(&car.proposer).copied();
-        if current_highest.map_or(true, |h| car.position > h) {
+        if current_highest.is_none_or(|h| car.position > h) {
             state.highest_positions.insert(car.proposer, car.position);
         }
 
