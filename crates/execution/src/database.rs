@@ -1034,9 +1034,9 @@ pub mod mdbx_provider {
             assert_eq!(accounts.len(), 3);
 
             // Verify we can find all accounts
-            assert!(accounts.get(&addr1).is_some());
-            assert!(accounts.get(&addr2).is_some());
-            assert!(accounts.get(&addr3).is_some());
+            assert!(accounts.contains_key(&addr1));
+            assert!(accounts.contains_key(&addr2));
+            assert!(accounts.contains_key(&addr3));
 
             // Verify account details
             assert_eq!(accounts.get(&addr1).unwrap().nonce, 1);
@@ -1078,7 +1078,7 @@ pub mod mdbx_provider {
             assert_eq!(storage.get(&slot2).copied(), Some(value2));
 
             // Verify addr2's storage is not included
-            assert!(storage.get(&slot3).is_none());
+            assert!(!storage.contains_key(&slot3));
 
             // Get storage for addr2
             let storage2 = provider.get_all_storage(addr2).unwrap();
