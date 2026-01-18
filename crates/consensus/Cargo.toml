@@ -21,6 +21,7 @@ malachite = [
     "informalsystems-malachitebft-signing-ed25519",
     "informalsystems-malachitebft-codec",
     "informalsystems-malachitebft-metrics",
+    "ractor",
 ]
 
 [dependencies]
@@ -29,10 +30,13 @@ async-trait = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 hex = { workspace = true }
-ractor = "0.14"
-serde = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
 bincode = { workspace = true }
+serde = { workspace = true }
+bytes = { workspace = true }
+borsh = { workspace = true }
 parking_lot = "0.12"
+ractor = { workspace = true, optional = true }
 
 cipherbft-types = { path = "../types" }
 cipherbft-crypto = { path = "../crypto" }

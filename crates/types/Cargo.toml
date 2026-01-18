@@ -8,11 +8,17 @@ description = "Core type definitions for CipherBFT"
 
 [dependencies]
 serde = { workspace = true }
+serde_json = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
 sha3 = { workspace = true }
 thiserror = { workspace = true }
+borsh = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+
+# Ethereum types for Geth-compatible genesis format (T001)
+alloy-primitives = { version = "1", features = ["serde"] }
+alloy-serde = "1"
 
 [dev-dependencies]
 proptest = { workspace = true }
-serde_json = { workspace = true }

@@ -1,7 +1,10 @@
 use std::fmt::{Debug, Display};
+use std::io::{Read, Write};
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use cipherbft_crypto::Ed25519PublicKey;
 use cipherbft_types::ValidatorId;
+use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
 #[cfg(feature = "malachite")]
@@ -14,8 +17,20 @@ use crate::error::MAX_VALIDATORS;
 use crate::signing::ConsensusPublicKey;
 
 /// Consensus address wrapper (Ed25519-derived validator ID).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
 pub struct ConsensusAddress(pub ValidatorId);
+
+impl BorshSerialize for ConsensusAddress {
+    fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        BorshSerialize::serialize(&self.0, writer)
+    }
+}
+
+impl BorshDeserialize for ConsensusAddress {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        Ok(Self(ValidatorId::deserialize_reader(reader)?))
+    }
+}
 
 impl Debug for ConsensusAddress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -38,6 +53,24 @@ pub struct ConsensusValidator {
     pub address: ConsensusAddress,
     pub public_key: ConsensusPublicKey,
     pub voting_power: u64,
+}
+
+impl BorshSerialize for ConsensusValidator {
+    fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        BorshSerialize::serialize(&self.address, writer)?;
+        BorshSerialize::serialize(&self.public_key, writer)?;
+        BorshSerialize::serialize(&self.voting_power, writer)
+    }
+}
+
+impl BorshDeserialize for ConsensusValidator {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        Ok(Self {
+            address: ConsensusAddress::deserialize_reader(reader)?,
+            public_key: ConsensusPublicKey::deserialize_reader(reader)?,
+            voting_power: u64::deserialize_reader(reader)?,
+        })
+    }
 }
 
 impl ConsensusValidator {
@@ -63,6 +96,37 @@ pub struct ConsensusValidatorSet {
     validators: Vec<ConsensusValidator>,
 }
 
+impl BorshSerialize for ConsensusValidatorSet {
+    fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        BorshSerialize::serialize(&(self.validators.len() as u32), writer)?;
+        for v in &self.validators {
+            BorshSerialize::serialize(v, writer)?;
+        }
+        Ok(())
+    }
+}
+
+impl BorshDeserialize for ConsensusValidatorSet {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let len = u32::deserialize_reader(reader)? as usize;
+        // Bounded deserialization for Borsh to prevent OOM attacks
+        if len > MAX_VALIDATORS {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "validator set size {} exceeds maximum of {}",
+                    len, MAX_VALIDATORS
+                ),
+            ));
+        }
+        let mut validators = Vec::with_capacity(len);
+        for _ in 0..len {
+            validators.push(ConsensusValidator::deserialize_reader(reader)?);
+        }
+        Ok(Self { validators })
+    }
+}
+
 /// Custom deserializer that enforces MAX_VALIDATORS limit to prevent OOM attacks.
 ///
 /// This function intercepts the deserialization of the validators vector and
@@ -73,8 +137,6 @@ fn deserialize_bounded_validators<'de, D>(
 where
     D: Deserializer<'de>,
 {
-    use serde::de::{SeqAccess, Visitor};
-
     struct BoundedVecVisitor;
 
     impl<'de> Visitor<'de> for BoundedVecVisitor {

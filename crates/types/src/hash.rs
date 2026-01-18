@@ -1,12 +1,28 @@
 //! SHA-256 hash type for CipherBFT
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
+use std::io::{Read, Write};
 
 /// SHA-256 hash (32 bytes)
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
 pub struct Hash(#[serde(with = "hex_bytes")] pub [u8; 32]);
+
+impl BorshSerialize for Hash {
+    fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        writer.write_all(&self.0)
+    }
+}
+
+impl BorshDeserialize for Hash {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let mut bytes = [0u8; 32];
+        reader.read_exact(&mut bytes)?;
+        Ok(Self(bytes))
+    }
+}
 
 impl Hash {
     /// Zero hash constant

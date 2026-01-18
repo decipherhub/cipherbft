@@ -504,7 +504,7 @@ mod tests {
     #[test]
     fn test_engine_creation() {
         let engine = create_test_engine();
-        assert_eq!(engine.chain_config.chain_id, 31337);
+        assert_eq!(engine.chain_config.chain_id, 85300);
         assert_eq!(engine.chain_config.block_gas_limit, 30_000_000);
     }
 

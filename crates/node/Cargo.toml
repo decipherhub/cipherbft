@@ -1,5 +1,5 @@
 [package]
-name = "cipherbft-node"
+name = "cipherd"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -7,7 +7,7 @@ license.workspace = true
 description = "CipherBFT Node - MVP for DCL testing"
 
 [[bin]]
-name = "cipherbft-node"
+name = "cipherd"
 path = "src/main.rs"
 
 [dependencies]
@@ -17,6 +17,10 @@ cipherbft-crypto = { path = "../crypto" }
 cipherbft-data-chain = { path = "../data-chain" }
 cipherbft-storage = { path = "../storage" }
 cipherbft-execution = { path = "../execution" }
+cipherbft-consensus = { path = "../consensus", features = ["malachite"] }
+
+# Ethereum primitives (for genesis types in tests)
+alloy-primitives = { version = "1", features = ["serde"] }
 
 # Async runtime
 tokio = { workspace = true, features = ["full", "signal"] }
@@ -31,10 +35,11 @@ bytes = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 
 # CLI
 clap = { version = "4.4", features = ["derive"] }
+dirs = "5.0"
 
 # Error handling
 thiserror = { workspace = true }
@@ -44,5 +49,19 @@ anyhow = "1.0"
 rand = { workspace = true }
 hex = { workspace = true }
 
+# Key management CLI (T030-T038)
+rpassword = { workspace = true }
+zeroize = { workspace = true }
+
+# Time handling (for genesis generation)
+chrono = { workspace = true }
+
+# Malachite BFT (for consensus actor refs)
+informalsystems-malachitebft-metrics = { workspace = true }
+informalsystems-malachitebft-network = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
+# CLI testing (T041-T042)
+assert_cmd = "2.0"
+predicates = "3.0"
