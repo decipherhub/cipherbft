@@ -802,9 +802,7 @@ fn cmd_testnet_init_files(
 
         println!(
             "  Created node{} (validator {:?}, port {})",
-            i,
-            validator.validator_id,
-            port_offset
+            i, validator.validator_id, port_offset
         );
     }
 
