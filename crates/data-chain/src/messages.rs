@@ -1,10 +1,19 @@
 //! DCL message types for Primary-Worker and inter-node communication
+//!
+//! # Security
+//!
+//! All message types implement bounded deserialization to prevent OOM attacks.
+//! The [`decode`] and [`decode_bounded`] methods enforce size limits defined
+//! in the [`crate::error`] module.
 
 use crate::attestation::Attestation;
 use crate::batch::Batch;
 use crate::car::Car;
+use crate::error::{MAX_MESSAGE_SIZE, MAX_RESPONSE_DATA_SIZE, MAX_SYNC_DIGESTS};
+use bincode::Options;
 use cipherbft_types::{Hash, ValidatorId};
-use serde::{Deserialize, Serialize};
+use serde::de::{SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Messages from Worker to Primary (internal channel)
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -36,12 +45,103 @@ pub enum WorkerToPrimary {
     },
 }
 
+// ============================================================================
+// Bounded Deserialization Helpers
+// ============================================================================
+
+/// Create bincode options with size limits for safe deserialization.
+///
+/// This prevents OOM attacks by limiting the maximum size of deserialized messages.
+fn bincode_options() -> impl Options {
+    bincode::DefaultOptions::new()
+        .with_limit(MAX_MESSAGE_SIZE)
+        .with_fixint_encoding()
+        .allow_trailing_bytes()
+}
+
+/// Deserialize a Vec<Hash> with bounds checking.
+fn deserialize_bounded_hashes<'de, D>(deserializer: D) -> Result<Vec<Hash>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct BoundedHashVecVisitor;
+
+    impl<'de> Visitor<'de> for BoundedHashVecVisitor {
+        type Value = Vec<Hash>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(
+                formatter,
+                "a sequence of at most {} hashes",
+                MAX_SYNC_DIGESTS
+            )
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            // Check size hint to reject early
+            if let Some(size) = seq.size_hint() {
+                if size > MAX_SYNC_DIGESTS {
+                    return Err(serde::de::Error::custom(format!(
+                        "hash vec size {} exceeds maximum of {}",
+                        size, MAX_SYNC_DIGESTS
+                    )));
+                }
+            }
+
+            let capacity = seq.size_hint().unwrap_or(0).min(MAX_SYNC_DIGESTS);
+            let mut hashes = Vec::with_capacity(capacity);
+
+            while let Some(hash) = seq.next_element()? {
+                if hashes.len() >= MAX_SYNC_DIGESTS {
+                    return Err(serde::de::Error::custom(format!(
+                        "hash vec size exceeds maximum of {}",
+                        MAX_SYNC_DIGESTS
+                    )));
+                }
+                hashes.push(hash);
+            }
+
+            Ok(hashes)
+        }
+    }
+
+    deserializer.deserialize_seq(BoundedHashVecVisitor)
+}
+
+/// Deserialize an Option<Vec<u8>> with bounds checking for response data.
+fn deserialize_bounded_bytes<'de, D>(deserializer: D) -> Result<Option<Vec<u8>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt: Option<Vec<u8>> = Option::deserialize(deserializer)?;
+
+    if let Some(ref bytes) = opt {
+        if bytes.len() > MAX_RESPONSE_DATA_SIZE {
+            return Err(serde::de::Error::custom(format!(
+                "response data size {} exceeds maximum of {}",
+                bytes.len(),
+                MAX_RESPONSE_DATA_SIZE
+            )));
+        }
+    }
+
+    Ok(opt)
+}
+
+// ============================================================================
+// Message Types
+// ============================================================================
+
 /// Messages from Primary to Worker (internal channel)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum PrimaryToWorker {
     /// Request Worker to sync missing batches for attestation
     Synchronize {
-        /// Batch digests to sync
+        /// Batch digests to sync (bounded by MAX_SYNC_DIGESTS)
+        #[serde(deserialize_with = "deserialize_bounded_hashes")]
         digests: Vec<Hash>,
         /// Validator whose Worker should be contacted
         target_validator: ValidatorId,
@@ -58,6 +158,11 @@ pub enum PrimaryToWorker {
 }
 
 /// Messages between Primary nodes (over network)
+///
+/// # Security
+///
+/// All message variants with variable-size data use bounded deserialization
+/// to prevent OOM attacks from malicious peers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum DclMessage {
     /// Broadcast new Car
@@ -87,7 +192,8 @@ pub enum DclMessage {
     BatchResponse {
         /// Batch digest
         digest: Hash,
-        /// Batch data (None if not found)
+        /// Batch data (None if not found, bounded by MAX_RESPONSE_DATA_SIZE)
+        #[serde(deserialize_with = "deserialize_bounded_bytes")]
         data: Option<Vec<u8>>,
     },
 }
@@ -112,12 +218,26 @@ impl DclMessage {
         bincode::serialize(self).expect("serialization cannot fail")
     }
 
-    /// Decode message from bytes
+    /// Decode message from bytes with size limits.
+    ///
+    /// # Security
+    ///
+    /// This method enforces a maximum message size of [`MAX_MESSAGE_SIZE`] bytes
+    /// to prevent OOM attacks from malicious peers.
     pub fn decode(data: &[u8]) -> Result<Self, String> {
         if data.is_empty() {
             return Err("empty message".to_string());
         }
-        bincode::deserialize(data).map_err(|e| e.to_string())
+        if data.len() as u64 > MAX_MESSAGE_SIZE {
+            return Err(format!(
+                "message size {} exceeds maximum of {}",
+                data.len(),
+                MAX_MESSAGE_SIZE
+            ));
+        }
+        bincode_options()
+            .deserialize(data)
+            .map_err(|e| e.to_string())
     }
 
     /// Get message type name for logging
@@ -134,6 +254,11 @@ impl DclMessage {
 }
 
 /// Messages between Worker nodes (over network, same worker_id peers)
+///
+/// # Security
+///
+/// All message variants with variable-size data use bounded deserialization
+/// to prevent OOM attacks from malicious peers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum WorkerMessage {
     /// Full batch data broadcast
@@ -141,7 +266,8 @@ pub enum WorkerMessage {
 
     /// Request missing batches
     BatchRequest {
-        /// Batch digests to request
+        /// Batch digests to request (bounded by MAX_SYNC_DIGESTS)
+        #[serde(deserialize_with = "deserialize_bounded_hashes")]
         digests: Vec<Hash>,
         /// Requesting validator
         requestor: ValidatorId,
@@ -171,12 +297,26 @@ impl WorkerMessage {
         bincode::serialize(self).expect("serialization cannot fail")
     }
 
-    /// Decode message from bytes
+    /// Decode message from bytes with size limits.
+    ///
+    /// # Security
+    ///
+    /// This method enforces a maximum message size of [`MAX_MESSAGE_SIZE`] bytes
+    /// to prevent OOM attacks from malicious peers.
     pub fn decode(data: &[u8]) -> Result<Self, String> {
         if data.is_empty() {
             return Err("empty message".to_string());
         }
-        bincode::deserialize(data).map_err(|e| e.to_string())
+        if data.len() as u64 > MAX_MESSAGE_SIZE {
+            return Err(format!(
+                "message size {} exceeds maximum of {}",
+                data.len(),
+                MAX_MESSAGE_SIZE
+            ));
+        }
+        bincode_options()
+            .deserialize(data)
+            .map_err(|e| e.to_string())
     }
 
     /// Get message type name for logging
