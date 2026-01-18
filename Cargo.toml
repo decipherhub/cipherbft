@@ -8,6 +8,7 @@ members = [
     "crates/consensus",
     "crates/execution",
     "crates/mempool",
+    "crates/rpc",
 ]
 resolver = "2"
 
@@ -72,6 +73,19 @@ reth-db = { git = "https://github.com/paradigmxyz/reth", tag = "v1.10.0", defaul
 reth-db-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.10.0" }
 reth-codecs = { git = "https://github.com/paradigmxyz/reth", tag = "v1.10.0" }
 reth-libmdbx = { git = "https://github.com/paradigmxyz/reth", tag = "v1.10.0", features = ["return-borrowed"] }
+
+# JSON-RPC (T048 - Reth RPC Implementation)
+reth-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.10.0" }
+jsonrpsee = { version = "0.24", features = ["server", "client", "macros"] }
+tower = { version = "0.5", features = ["full"] }
+tower-http = { version = "0.6", features = ["full"] }
+dashmap = "6.1"
+
+# Alloy types (v1.x for reth v1.10.0 compatibility)
+alloy-primitives = { version = "1", features = ["serde", "rlp"] }
+alloy-rpc-types = { version = "1" }
+alloy-rpc-types-eth = { version = "1" }
+alloy-consensus = { version = "1" }
 
 # Networking
 futures = "0.3"

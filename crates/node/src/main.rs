@@ -102,10 +102,10 @@ enum Commands {
         command: ConfigCommands,
     },
 
-    /// Query remote node for status
+    /// Query remote node for status via JSON-RPC
     Status {
-        /// Node address to query (host:port)
-        #[arg(long, default_value = "127.0.0.1:26657")]
+        /// Node RPC URL to query (e.g., http://localhost:8545)
+        #[arg(long, default_value = "http://localhost:8545")]
         node: String,
     },
 
@@ -351,7 +351,7 @@ async fn main() -> Result<()> {
 
         Commands::Config { command } => cmd_config(&cli.home, command),
 
-        Commands::Status { node } => cmd_status(&node),
+        Commands::Status { node } => cmd_status(&node).await,
 
         Commands::Version { output } => cmd_version(&output),
 
@@ -932,12 +932,88 @@ fn cmd_config(home: &std::path::Path, command: ConfigCommands) -> Result<()> {
     Ok(())
 }
 
-fn cmd_status(node: &str) -> Result<()> {
-    // TODO: Implement proper RPC status query
+async fn cmd_status(node: &str) -> Result<()> {
+    use jsonrpsee::core::client::ClientT;
+    use jsonrpsee::http_client::HttpClientBuilder;
+    use jsonrpsee::rpc_params;
+
     println!("Querying node status at {}...", node);
     println!();
-    println!("Status querying not yet implemented.");
-    println!("This will show node sync status, validator info, and network state.");
+
+    // Build HTTP client with reasonable timeout
+    let client = HttpClientBuilder::default()
+        .request_timeout(std::time::Duration::from_secs(10))
+        .build(node)
+        .context("Failed to create RPC client")?;
+
+    // Query chain ID
+    let chain_id: String = client
+        .request("eth_chainId", rpc_params![])
+        .await
+        .context("Failed to query chain ID")?;
+    let chain_id_num = u64::from_str_radix(chain_id.trim_start_matches("0x"), 16).unwrap_or(0);
+
+    // Query block number
+    let block_number: String = client
+        .request("eth_blockNumber", rpc_params![])
+        .await
+        .context("Failed to query block number")?;
+    let block_num = u64::from_str_radix(block_number.trim_start_matches("0x"), 16).unwrap_or(0);
+
+    // Query sync status
+    let syncing: serde_json::Value = client
+        .request("eth_syncing", rpc_params![])
+        .await
+        .context("Failed to query sync status")?;
+
+    // Query peer count
+    let peer_count: String = client
+        .request("net_peerCount", rpc_params![])
+        .await
+        .context("Failed to query peer count")?;
+    let peer_count_num = u64::from_str_radix(peer_count.trim_start_matches("0x"), 16).unwrap_or(0);
+
+    // Query client version
+    let client_version: String = client
+        .request("web3_clientVersion", rpc_params![])
+        .await
+        .context("Failed to query client version")?;
+
+    // Format output
+    println!("Node Status:");
+    println!("  Client:     {}", client_version);
+    println!("  Chain ID:   {}", chain_id_num);
+    println!("  Height:     {}", block_num);
+
+    // Parse sync status
+    if syncing.is_boolean() && !syncing.as_bool().unwrap_or(true) {
+        println!("  Syncing:    false (fully synced)");
+    } else if let Some(sync_obj) = syncing.as_object() {
+        let starting = sync_obj
+            .get("startingBlock")
+            .and_then(|v| v.as_str())
+            .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+            .unwrap_or(0);
+        let current = sync_obj
+            .get("currentBlock")
+            .and_then(|v| v.as_str())
+            .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+            .unwrap_or(0);
+        let highest = sync_obj
+            .get("highestBlock")
+            .and_then(|v| v.as_str())
+            .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+            .unwrap_or(0);
+        println!(
+            "  Syncing:    true ({}/{} blocks)",
+            current - starting,
+            highest - starting
+        );
+    } else {
+        println!("  Syncing:    false");
+    }
+
+    println!("  Peers:      {}", peer_count_num);
 
     Ok(())
 }

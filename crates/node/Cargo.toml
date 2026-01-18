@@ -61,6 +61,9 @@ chrono = { workspace = true }
 informalsystems-malachitebft-metrics = { workspace = true }
 informalsystems-malachitebft-network = { workspace = true }
 
+# RPC client (T048 - status query via JSON-RPC)
+jsonrpsee = { workspace = true, features = ["http-client"] }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 # CLI testing (T041-T042)

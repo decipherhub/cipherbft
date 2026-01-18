@@ -12,12 +12,12 @@ ignore = [
     # paste crate unmaintained - transitive dependency from alloy-primitives 1.x
     # Used as proc-macro only, not a runtime security concern
     "RUSTSEC-2024-0436",
-    # proc-macro-error unmaintained - transitive dependency via reth tooling
-    # Used as proc-macro only, not a runtime security concern
-    "RUSTSEC-2024-0370",
     # bincode unmaintained - transitive dependency in core crates
     # No maintained upgrade available; revisit if replacement is planned.
     "RUSTSEC-2025-0141",
+    # lru 0.12.5 soundness issue - transitive dependency from libp2p-swarm/malachitebft
+    # Upgrade blocked by upstream dependencies; monitor for libp2p updates
+    "RUSTSEC-2026-0002",
 ]
 
 [licenses]
@@ -29,12 +29,13 @@ allow = [
     "BSD-3-Clause",
     "BSD-2-Clause",
     "ISC",
-    "Unicode-DFS-2016",
     "Unicode-3.0",
     "Zlib",
     "CC0-1.0",
-    "BSL-1.0",
     "MPL-2.0",
+    # CDLA-Permissive-2.0 - permissive data license used by webpki-root-certs
+    # Transitive dependency from jsonrpsee for TLS certificate verification
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
 
