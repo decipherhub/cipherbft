@@ -15,20 +15,23 @@ use tracing::{info, info_span};
 ///
 /// # Arguments
 /// * `ctx` - The CipherBFT context (used for type parameter inference)
-/// * `wal_path` - Path to the WAL directory where messages will be stored
+/// * `wal_dir` - Path to the WAL directory where the WAL file will be stored
 /// * `metrics` - Shared metrics registry
 ///
 /// # Returns
 /// * `WalRef<CipherBftContext>` - Reference to the spawned WAL actor
 pub async fn spawn_wal(
     ctx: &CipherBftContext,
-    wal_path: PathBuf,
+    wal_dir: PathBuf,
     metrics: SharedRegistry,
 ) -> Result<WalRef<CipherBftContext>> {
-    info!("Spawning consensus WAL actor at {}", wal_path.display());
-
     // Create WAL directory if it doesn't exist
-    std::fs::create_dir_all(&wal_path)?;
+    std::fs::create_dir_all(&wal_dir)?;
+
+    // Malachite's Wal::spawn expects a FILE path, not a directory
+    // The WAL file will be created inside the directory
+    let wal_file = wal_dir.join("consensus.wal");
+    info!("Spawning consensus WAL actor at {}", wal_file.display());
 
     // Create codec for message serialization (unit struct, no Default needed)
     let codec = CipherBftCodec;
@@ -38,7 +41,7 @@ pub async fn spawn_wal(
 
     // Spawn WAL actor using Malachite's Wal::spawn
     let wal_ref =
-        Wal::<CipherBftContext, CipherBftCodec>::spawn(ctx, codec, wal_path, metrics, span).await?;
+        Wal::<CipherBftContext, CipherBftCodec>::spawn(ctx, codec, wal_file, metrics, span).await?;
 
     info!("Consensus WAL actor spawned successfully");
     Ok(wal_ref)

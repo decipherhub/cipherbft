@@ -411,7 +411,7 @@ impl Node {
         // Spawn Consensus actors
         let network = spawn_network(consensus_keypair, network_config, metrics.clone()).await?;
 
-        let wal_path = self.config.data_dir.join("consensus_wal");
+        let wal_path = self.config.data_dir.join("wal");
         let wal = spawn_wal(&ctx, wal_path, metrics.clone()).await?;
 
         let host = spawn_host(self.validator_id, ctx.clone(), cut_rx, Some(decided_tx)).await?;
