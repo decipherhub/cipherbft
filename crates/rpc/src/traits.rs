@@ -12,11 +12,12 @@ use async_trait::async_trait;
 use crate::error::RpcResult;
 
 /// Block number or tag for state queries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BlockNumberOrTag {
     /// Specific block number.
     Number(u64),
     /// Latest finalized block.
+    #[default]
     Latest,
     /// Earliest block (genesis).
     Earliest,
@@ -26,12 +27,6 @@ pub enum BlockNumberOrTag {
     Safe,
     /// Finalized block (for PoS chains).
     Finalized,
-}
-
-impl Default for BlockNumberOrTag {
-    fn default() -> Self {
-        Self::Latest
-    }
 }
 
 impl From<u64> for BlockNumberOrTag {
@@ -129,7 +124,11 @@ pub trait MempoolApi: Send + Sync {
 }
 
 /// Execution interface for eth_call and gas estimation.
+///
+/// Note: The many parameters on `call` and `estimate_gas` match
+/// the Ethereum JSON-RPC specification for eth_call.
 #[async_trait]
+#[allow(clippy::too_many_arguments)]
 pub trait ExecutionApi: Send + Sync {
     /// Execute a read-only call against the state.
     async fn call(

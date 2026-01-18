@@ -4,21 +4,16 @@ use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
 
 /// RPC namespace enumeration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum RpcNamespace {
     /// Ethereum namespace (eth_*)
+    #[default]
     Eth,
     /// Web3 namespace (web3_*)
     Web3,
     /// Network namespace (net_*)
     Net,
-}
-
-impl Default for RpcNamespace {
-    fn default() -> Self {
-        Self::Eth
-    }
 }
 
 /// RPC server configuration.

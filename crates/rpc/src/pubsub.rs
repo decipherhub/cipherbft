@@ -60,7 +60,8 @@ pub enum SubscriptionKind {
     /// Subscribe to new block headers.
     NewHeads,
     /// Subscribe to logs matching a filter.
-    Logs(Filter),
+    /// Boxed to reduce enum size (Filter is ~400 bytes).
+    Logs(Box<Filter>),
     /// Subscribe to new pending transaction hashes.
     NewPendingTransactions,
 }
@@ -100,8 +101,13 @@ pub struct SubscriptionManager {
 }
 
 impl SubscriptionManager {
+    /// Create a new subscription manager with default capacity.
+    pub fn new() -> Self {
+        Self::with_capacity(1024)
+    }
+
     /// Create a new subscription manager with the given channel capacity.
-    pub fn new(capacity: usize) -> Self {
+    pub fn with_capacity(capacity: usize) -> Self {
         let (block_tx, _) = broadcast::channel(capacity);
         let (log_tx, _) = broadcast::channel(capacity);
         let (pending_tx_tx, _) = broadcast::channel(capacity);
@@ -169,7 +175,7 @@ impl SubscriptionManager {
 
 impl Default for SubscriptionManager {
     fn default() -> Self {
-        Self::new(1024)
+        Self::new()
     }
 }
 
@@ -201,7 +207,7 @@ impl EthPubSubRpcServer for EthPubSubApi {
             "newHeads" => SubscriptionKind::NewHeads,
             "logs" => {
                 let f = filter.unwrap_or_default();
-                SubscriptionKind::Logs(f)
+                SubscriptionKind::Logs(Box::new(f))
             }
             "newPendingTransactions" => SubscriptionKind::NewPendingTransactions,
             _ => {

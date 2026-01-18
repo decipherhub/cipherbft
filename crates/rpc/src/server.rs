@@ -145,7 +145,7 @@ where
         // Validate config first
         self.config
             .validate()
-            .map_err(|e| crate::error::RpcError::Internal(e))?;
+            .map_err(crate::error::RpcError::Internal)?;
 
         // Update state
         {
