@@ -8,10 +8,11 @@ use cipherbft_execution::{
     keccak256, Bytes, Car as ExecutionCar, ChainConfig, Cut as ExecutionCut, ExecutionLayer,
     ExecutionResult, B256, U256,
 };
+use cipherbft_storage::DclStore;
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Bridge between consensus and execution layers
 ///
@@ -20,6 +21,8 @@ use tracing::info;
 pub struct ExecutionBridge {
     /// Execution layer instance
     execution: Arc<RwLock<ExecutionLayer>>,
+    /// DCL storage for batch lookups
+    dcl_store: Arc<dyn DclStore>,
     /// Hash of the last executed block (used as parent hash for the next block)
     ///
     /// Initialized to B256::ZERO for the genesis block.
@@ -33,11 +36,13 @@ impl ExecutionBridge {
     /// # Arguments
     ///
     /// * `config` - Chain configuration for the execution layer
-    pub fn new(config: ChainConfig) -> anyhow::Result<Self> {
+    /// * `dcl_store` - DCL storage for batch lookups
+    pub fn new(config: ChainConfig, dcl_store: Arc<dyn DclStore>) -> anyhow::Result<Self> {
         let execution = ExecutionLayer::new(config)?;
 
         Ok(Self {
             execution: Arc::new(RwLock::new(execution)),
+            dcl_store,
             // Genesis block has no parent, so initialize to zero
             last_block_hash: StdRwLock::new(B256::ZERO),
         })
@@ -85,8 +90,8 @@ impl ExecutionBridge {
             "Executing Cut"
         );
 
-        // Convert consensus Cut to execution Cut
-        let execution_cut = self.convert_cut(consensus_cut)?;
+        // Convert consensus Cut to execution Cut (fetches batches from storage)
+        let execution_cut = self.convert_cut(consensus_cut).await?;
 
         // Store block metadata for hash computation after execution
         let block_number = execution_cut.block_number;
@@ -127,8 +132,9 @@ impl ExecutionBridge {
     /// Convert a consensus Cut to an execution Cut
     ///
     /// This converts the data-chain Cut format to the execution layer format.
+    /// Fetches actual batches from storage to extract transactions.
     /// Uses the tracked `last_block_hash` as the parent hash to maintain chain connectivity.
-    fn convert_cut(
+    async fn convert_cut(
         &self,
         consensus_cut: cipherbft_data_chain::Cut,
     ) -> anyhow::Result<ExecutionCut> {
@@ -136,12 +142,32 @@ impl ExecutionBridge {
         let mut execution_cars = Vec::new();
 
         for (validator_id, car) in consensus_cut.ordered_cars() {
-            // Extract transactions from batches
-            let transactions = Vec::new();
-            for _batch_digest in &car.batch_digests {
-                // Note: In a full implementation, we would fetch the actual batch
-                // from storage and extract its transactions. For now, this is a placeholder.
-                // The actual batch lookup will be implemented when integrating with the worker storage.
+            // Extract transactions from batches by fetching from storage
+            let mut transactions = Vec::new();
+            for batch_digest in &car.batch_digests {
+                // Fetch the actual batch from storage using its digest
+                match self.dcl_store.get_batch(&batch_digest.digest).await {
+                    Ok(Some(batch)) => {
+                        // Convert each transaction (Vec<u8>) to Bytes
+                        for tx in batch.transactions {
+                            transactions.push(Bytes::from(tx));
+                        }
+                    }
+                    Ok(None) => {
+                        warn!(
+                            digest = %batch_digest.digest,
+                            worker_id = batch_digest.worker_id,
+                            "Batch not found in storage, skipping"
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            digest = %batch_digest.digest,
+                            error = %e,
+                            "Failed to fetch batch from storage"
+                        );
+                    }
+                }
             }
 
             let execution_car = ExecutionCar {
@@ -219,10 +245,11 @@ fn compute_block_hash(
 
 /// Create a default execution bridge for testing/development
 ///
-/// Uses default chain configuration.
+/// Uses default chain configuration and in-memory storage.
 pub fn create_default_bridge() -> anyhow::Result<ExecutionBridge> {
     let config = ChainConfig::default();
-    ExecutionBridge::new(config)
+    let dcl_store: Arc<dyn DclStore> = Arc::new(cipherbft_storage::InMemoryStore::new());
+    ExecutionBridge::new(config, dcl_store)
 }
 
 /// Implement TransactionValidator trait for ExecutionBridge
