@@ -1,4 +1,8 @@
 //! Node configuration
+//!
+//! Supports two modes of key storage:
+//! - **Keystore mode** (recommended): Keys stored in EIP-2335 encrypted keystores
+//! - **Plaintext mode** (deprecated): Keys stored directly in config (migration required)
 
 use cipherbft_crypto::{BlsKeyPair, Ed25519KeyPair};
 use cipherbft_types::ValidatorId;
@@ -43,6 +47,17 @@ pub const DEFAULT_HOME_DIR: &str = ".cipherd";
 /// The full default path is `~/.cipherd/config/genesis.json`.
 pub const DEFAULT_GENESIS_FILENAME: &str = "config/genesis.json";
 
+/// Default keys directory relative to the home directory.
+///
+/// The full default path is `~/.cipherd/keys`.
+pub const DEFAULT_KEYS_DIR: &str = "keys";
+
+/// Exit code for configuration errors requiring user action.
+///
+/// This follows the sysexits.h convention where 78 = EX_CONFIG.
+/// Used when plaintext keys are detected and migration is required.
+pub const EXIT_CONFIG_ERROR: i32 = 78;
+
 /// Peer configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerConfig {
@@ -61,14 +76,57 @@ pub struct PeerConfig {
 }
 
 /// Node configuration
+///
+/// Keys can be provided either via:
+/// - `keystore_dir`: Path to directory containing EIP-2335 encrypted keystores (recommended)
+/// - `bls_secret_key_hex` + `ed25519_secret_key_hex`: Plaintext keys (deprecated, migration required)
+///
+/// If both are present, `keystore_dir` takes precedence and a warning is logged.
+/// If plaintext keys are detected and `keystore_dir` is not set, the node will exit
+/// with code 78 (EX_CONFIG) and print migration instructions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeConfig {
     /// This node's validator ID
     pub validator_id: ValidatorId,
-    /// BLS secret key (hex encoded)
-    pub bls_secret_key_hex: String,
-    /// Ed25519 secret key (hex encoded) for Consensus Layer
-    pub ed25519_secret_key_hex: String,
+
+    /// Directory containing EIP-2335 encrypted keystores (recommended).
+    ///
+    /// Expected structure:
+    /// ```text
+    /// {keystore_dir}/
+    ///   validator_0/
+    ///     consensus.json     # Ed25519 keystore
+    ///     data_chain.json    # BLS keystore
+    ///     validator_info.json
+    /// ```
+    ///
+    /// If not set, defaults to `{data_dir}/keys` or `~/.cipherd/keys`.
+    #[serde(default)]
+    pub keystore_dir: Option<PathBuf>,
+
+    /// Account index within the keystore directory (default: 0).
+    ///
+    /// Used to select which validator's keys to load when multiple
+    /// validators exist in the keystore directory.
+    #[serde(default)]
+    pub keystore_account: Option<u32>,
+
+    /// BLS secret key (hex encoded) - **DEPRECATED**
+    ///
+    /// Use `keystore_dir` instead. This field is only for backwards compatibility
+    /// and migration. The node will refuse to start if this field is present
+    /// without `keystore_dir` being set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bls_secret_key_hex: Option<String>,
+
+    /// Ed25519 secret key (hex encoded) for Consensus Layer - **DEPRECATED**
+    ///
+    /// Use `keystore_dir` instead. This field is only for backwards compatibility
+    /// and migration. The node will refuse to start if this field is present
+    /// without `keystore_dir` being set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ed25519_secret_key_hex: Option<String>,
+
     /// Primary listen address (DCL layer)
     pub primary_listen: SocketAddr,
     /// Consensus listen address (Malachite p2p layer)
@@ -97,6 +155,9 @@ pub struct NodeConfig {
 
 impl NodeConfig {
     /// Create a test configuration for local testing
+    ///
+    /// NOTE: This uses plaintext keys for testing convenience. Production
+    /// deployments should use `keystore_dir` with encrypted keystores.
     pub fn for_local_test(index: usize, _total: usize) -> Self {
         let bls_keypair = BlsKeyPair::generate(&mut rand::thread_rng());
         let ed25519_keypair = Ed25519KeyPair::generate(&mut rand::thread_rng());
@@ -106,8 +167,11 @@ impl NodeConfig {
 
         Self {
             validator_id,
-            bls_secret_key_hex: hex::encode(bls_keypair.secret_key.to_bytes()),
-            ed25519_secret_key_hex: hex::encode(ed25519_keypair.secret_key.to_bytes()),
+            keystore_dir: None,
+            keystore_account: None,
+            // Use plaintext keys for testing (not recommended for production)
+            bls_secret_key_hex: Some(hex::encode(bls_keypair.secret_key.to_bytes())),
+            ed25519_secret_key_hex: Some(hex::encode(ed25519_keypair.secret_key.to_bytes())),
             primary_listen: format!("127.0.0.1:{}", base_port).parse().unwrap(),
             consensus_listen: format!("127.0.0.1:{}", base_port + 5).parse().unwrap(),
             worker_listens: vec![format!("127.0.0.1:{}", base_port + 1).parse().unwrap()],
@@ -150,9 +214,52 @@ impl NodeConfig {
         self.data_dir.join(DEFAULT_GENESIS_FILENAME)
     }
 
-    /// Generate BLS keypair from config
+    /// Check if plaintext keys are present in the configuration.
+    ///
+    /// Returns `true` if either `bls_secret_key_hex` or `ed25519_secret_key_hex`
+    /// is set in the configuration. This is used to detect configurations that
+    /// need migration to keystore-based storage.
+    pub fn has_plaintext_keys(&self) -> bool {
+        self.bls_secret_key_hex.is_some() || self.ed25519_secret_key_hex.is_some()
+    }
+
+    /// Check if keystore-based key storage is configured.
+    pub fn has_keystore_config(&self) -> bool {
+        self.keystore_dir.is_some()
+    }
+
+    /// Resolve the effective keystore directory path.
+    ///
+    /// Resolution order (highest priority first):
+    /// 1. `keystore_dir` field in config (if set)
+    /// 2. Default: `{data_dir}/keys`
+    pub fn effective_keystore_dir(&self) -> PathBuf {
+        if let Some(ref keystore_dir) = self.keystore_dir {
+            return keystore_dir.clone();
+        }
+        self.data_dir.join(DEFAULT_KEYS_DIR)
+    }
+
+    /// Get the account index for keystore loading (default: 0).
+    pub fn effective_keystore_account(&self) -> u32 {
+        self.keystore_account.unwrap_or(0)
+    }
+
+    /// Generate BLS keypair from config (plaintext mode).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `bls_secret_key_hex` is not set or is invalid.
+    ///
+    /// # Deprecated
+    ///
+    /// Use keystore-based key loading instead of plaintext keys.
     pub fn keypair(&self) -> Result<BlsKeyPair, anyhow::Error> {
-        let secret_bytes = hex::decode(&self.bls_secret_key_hex)?;
+        let secret_hex = self
+            .bls_secret_key_hex
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("bls_secret_key_hex not set in config"))?;
+        let secret_bytes = hex::decode(secret_hex)?;
         if secret_bytes.len() != 32 {
             anyhow::bail!(
                 "BLS secret key must be 32 bytes, got {}",
@@ -166,9 +273,21 @@ impl NodeConfig {
         Ok(BlsKeyPair::from_secret_key(secret_key))
     }
 
-    /// Generate Ed25519 keypair from config
+    /// Generate Ed25519 keypair from config (plaintext mode).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `ed25519_secret_key_hex` is not set or is invalid.
+    ///
+    /// # Deprecated
+    ///
+    /// Use keystore-based key loading instead of plaintext keys.
     pub fn ed25519_keypair(&self) -> Result<Ed25519KeyPair, anyhow::Error> {
-        let secret_bytes = hex::decode(&self.ed25519_secret_key_hex)?;
+        let secret_hex = self
+            .ed25519_secret_key_hex
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("ed25519_secret_key_hex not set in config"))?;
+        let secret_bytes = hex::decode(secret_hex)?;
         if secret_bytes.len() != 32 {
             anyhow::bail!(
                 "Ed25519 secret key must be 32 bytes, got {}",
@@ -300,6 +419,7 @@ mod tests {
     #[test]
     fn test_genesis_path_field_optional_in_serde() {
         // Test that genesis_path is optional in JSON (backwards compatibility)
+        // Also test backwards compatibility with old plaintext key format
         let json = r#"{
             "validator_id": "0000000000000000000000000000000000000000",
             "bls_secret_key_hex": "0000000000000000000000000000000000000000000000000000000000000001",
@@ -317,6 +437,9 @@ mod tests {
 
         let config: NodeConfig = serde_json::from_str(json).unwrap();
         assert!(config.genesis_path.is_none());
+        assert!(config.keystore_dir.is_none());
+        // Plaintext keys should be parsed
+        assert!(config.has_plaintext_keys());
     }
 
     #[test]
@@ -327,5 +450,93 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("genesis_path"));
         assert!(json.contains("/custom/genesis.json"));
+    }
+
+    #[test]
+    fn test_has_plaintext_keys() {
+        let config = NodeConfig::for_local_test(0, 1);
+        // for_local_test creates plaintext keys
+        assert!(config.has_plaintext_keys());
+        assert!(!config.has_keystore_config());
+    }
+
+    #[test]
+    fn test_keystore_config() {
+        let mut config = NodeConfig::for_local_test(0, 1);
+        assert!(!config.has_keystore_config());
+
+        config.keystore_dir = Some(PathBuf::from("/path/to/keys"));
+        assert!(config.has_keystore_config());
+    }
+
+    #[test]
+    fn test_effective_keystore_dir_default() {
+        let config = NodeConfig::for_local_test(0, 1);
+        let expected = config.data_dir.join(DEFAULT_KEYS_DIR);
+        assert_eq!(config.effective_keystore_dir(), expected);
+    }
+
+    #[test]
+    fn test_effective_keystore_dir_configured() {
+        let mut config = NodeConfig::for_local_test(0, 1);
+        let custom_path = PathBuf::from("/custom/keys");
+        config.keystore_dir = Some(custom_path.clone());
+        assert_eq!(config.effective_keystore_dir(), custom_path);
+    }
+
+    #[test]
+    fn test_keystore_account_default() {
+        let config = NodeConfig::for_local_test(0, 1);
+        assert_eq!(config.effective_keystore_account(), 0);
+    }
+
+    #[test]
+    fn test_keystore_account_configured() {
+        let mut config = NodeConfig::for_local_test(0, 1);
+        config.keystore_account = Some(5);
+        assert_eq!(config.effective_keystore_account(), 5);
+    }
+
+    #[test]
+    fn test_config_without_plaintext_keys() {
+        // Config with keystore_dir but no plaintext keys
+        let json = r#"{
+            "validator_id": "0000000000000000000000000000000000000000",
+            "keystore_dir": "/path/to/keys",
+            "keystore_account": 0,
+            "primary_listen": "127.0.0.1:9000",
+            "consensus_listen": "127.0.0.1:9005",
+            "worker_listens": ["127.0.0.1:9001"],
+            "peers": [],
+            "num_workers": 1,
+            "data_dir": "/tmp/cipherd-0",
+            "car_interval_ms": 100,
+            "max_batch_txs": 100,
+            "max_batch_bytes": 1048576
+        }"#;
+
+        let config: NodeConfig = serde_json::from_str(json).unwrap();
+        assert!(!config.has_plaintext_keys());
+        assert!(config.has_keystore_config());
+        assert_eq!(
+            config.effective_keystore_dir(),
+            PathBuf::from("/path/to/keys")
+        );
+    }
+
+    #[test]
+    fn test_plaintext_keys_not_serialized_when_none() {
+        let mut config = NodeConfig::for_local_test(0, 1);
+        // Clear plaintext keys
+        config.bls_secret_key_hex = None;
+        config.ed25519_secret_key_hex = None;
+        config.keystore_dir = Some(PathBuf::from("/path/to/keys"));
+
+        let json = serde_json::to_string(&config).unwrap();
+        // Plaintext key fields should not be present
+        assert!(!json.contains("bls_secret_key_hex"));
+        assert!(!json.contains("ed25519_secret_key_hex"));
+        // Keystore dir should be present
+        assert!(json.contains("keystore_dir"));
     }
 }

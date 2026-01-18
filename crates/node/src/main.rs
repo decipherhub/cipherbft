@@ -5,12 +5,13 @@
 use alloy_primitives::U256;
 use anyhow::Result;
 use cipherd::{
-    generate_local_configs, GenesisGenerator, GenesisGeneratorConfig, GenesisLoader, Node,
-    NodeConfig, ValidatorKeyFile, CIPHERD_HOME_ENV, DEFAULT_HOME_DIR,
+    execute_keys_command, generate_local_configs, GenesisGenerator, GenesisGeneratorConfig,
+    GenesisLoader, KeysCommand, Node, NodeConfig, ValidatorKeyFile, CIPHERD_HOME_ENV,
+    DEFAULT_HOME_DIR, EXIT_CONFIG_ERROR,
 };
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use tracing::{info, Level};
+use tracing::{info, warn, Level};
 use tracing_subscriber::EnvFilter;
 
 /// CipherBFT Daemon
@@ -88,10 +89,10 @@ enum Commands {
         command: TestnetCommands,
     },
 
-    /// Manage your application's keys
+    /// Manage your application's keys (secure EIP-2335 keystores)
     Keys {
         #[command(subcommand)]
-        command: KeysCommands,
+        command: KeysCommand,
     },
 
     /// Utilities for managing application configuration
@@ -134,49 +135,7 @@ enum Commands {
     },
 }
 
-#[derive(Subcommand)]
-enum KeysCommands {
-    /// Add a new key
-    Add {
-        /// Name of the key
-        name: String,
-    },
-
-    /// List all keys
-    List,
-
-    /// Show key details
-    Show {
-        /// Name of the key
-        name: String,
-    },
-
-    /// Delete a key
-    Delete {
-        /// Name of the key
-        name: String,
-
-        /// Skip confirmation prompt
-        #[arg(short = 'y', long)]
-        yes: bool,
-    },
-
-    /// Export a key to a file
-    Export {
-        /// Name of the key
-        name: String,
-    },
-
-    /// Import a key from a file
-    Import {
-        /// Name of the key
-        name: String,
-
-        /// Path to the key file
-        #[arg(long)]
-        file: PathBuf,
-    },
-}
+// Old KeysCommands removed - now using key_cli::KeysCommand with EIP-2335 encrypted storage
 
 #[derive(Subcommand)]
 enum ConfigCommands {
@@ -387,7 +346,7 @@ async fn main() -> Result<()> {
 
         Commands::Testnet { command } => cmd_testnet(command).await,
 
-        Commands::Keys { command } => cmd_keys(&cli.home, command),
+        Commands::Keys { command } => execute_keys_command(&cli.home, command),
 
         Commands::Config { command } => cmd_config(&cli.home, command),
 
@@ -397,7 +356,7 @@ async fn main() -> Result<()> {
 
         Commands::Validate { genesis } => cmd_validate(&cli.home, genesis),
 
-        Commands::Genesis { command } => cmd_genesis(command),
+        Commands::Genesis { command } => cmd_genesis(&cli.home, command),
 
         Commands::Debug { command } => cmd_debug(command),
     };
@@ -518,6 +477,47 @@ async fn cmd_start(config_path: PathBuf, genesis_override: Option<PathBuf>) -> R
 
     let mut config = NodeConfig::load(&config_path)?;
 
+    // SECURITY: Detect plaintext keys and require migration
+    if config.has_plaintext_keys() && !config.has_keystore_config() {
+        eprintln!();
+        eprintln!("=============================================================================");
+        eprintln!("  SECURITY ERROR: Plaintext keys detected in configuration!");
+        eprintln!("=============================================================================");
+        eprintln!();
+        eprintln!("  Your configuration file contains secret keys in plaintext format.");
+        eprintln!("  This is a security risk and is no longer supported.");
+        eprintln!();
+        eprintln!("  Configuration file: {}", config_path.display());
+        eprintln!();
+        eprintln!("  To migrate to secure encrypted keystores, run:");
+        eprintln!();
+        eprintln!("    cipherd keys migrate --dry-run");
+        eprintln!();
+        eprintln!("  Review the output, then run without --dry-run to perform the migration:");
+        eprintln!();
+        eprintln!("    cipherd keys migrate");
+        eprintln!();
+        eprintln!("  After migration, update your config to use:");
+        eprintln!();
+        eprintln!("    keystore_dir = \"{}\"", config.effective_keystore_dir().display());
+        eprintln!();
+        eprintln!("  And remove the 'bls_secret_key_hex' and 'ed25519_secret_key_hex' fields.");
+        eprintln!();
+        eprintln!("  For more information, see: cipherd keys --help");
+        eprintln!("=============================================================================");
+        eprintln!();
+        std::process::exit(EXIT_CONFIG_ERROR);
+    }
+
+    // Warn if both keystore and plaintext keys are present (use keystore)
+    if config.has_plaintext_keys() && config.has_keystore_config() {
+        warn!(
+            "Configuration contains both keystore_dir and plaintext keys. \
+             Using keystore_dir and ignoring plaintext keys. \
+             Consider removing the plaintext key fields from your config."
+        );
+    }
+
     // Override genesis path if provided via CLI
     if genesis_override.is_some() {
         config.genesis_path = genesis_override;
@@ -540,7 +540,24 @@ async fn cmd_start(config_path: PathBuf, genesis_override: Option<PathBuf>) -> R
     Ok(())
 }
 
-fn cmd_testnet(num_validators: usize, output: PathBuf) -> Result<()> {
+async fn cmd_testnet(command: TestnetCommands) -> Result<()> {
+    match command {
+        TestnetCommands::InitFiles {
+            validators,
+            output,
+            chain_id: _,
+            network_id: _,
+            initial_stake_eth: _,
+            starting_port: _,
+        } => cmd_testnet_init_files(validators, output),
+        TestnetCommands::Start {
+            validators,
+            duration,
+        } => cmd_testnet_start(validators, duration).await,
+    }
+}
+
+fn cmd_testnet_init_files(num_validators: usize, output: PathBuf) -> Result<()> {
     println!(
         "Generating testnet configuration for {} validators...",
         num_validators
@@ -643,119 +660,8 @@ async fn cmd_testnet_start(num_validators: usize, duration: u64) -> Result<()> {
     Ok(())
 }
 
-fn cmd_keys(home: &std::path::Path, command: KeysCommands) -> Result<()> {
-    let keys_dir = home.join("keys");
-
-    match command {
-        KeysCommands::Add { name } => {
-            std::fs::create_dir_all(&keys_dir)?;
-            // Generate a new BLS keypair
-            let keypair = cipherd::generate_keypair();
-            let key_path = keys_dir.join(format!("{}.json", name));
-
-            let pubkey_bytes = keypair.public_key.to_bytes();
-            let secret_bytes = keypair.secret_key.to_bytes();
-
-            let key_data = serde_json::json!({
-                "name": name,
-                "type": "bls12-381",
-                "public_key": hex::encode(pubkey_bytes),
-                "secret_key": hex::encode(secret_bytes),
-            });
-
-            std::fs::write(&key_path, serde_json::to_string_pretty(&key_data)?)?;
-
-            println!("Key '{}' created successfully", name);
-            println!();
-            println!("  Name:       {}", name);
-            println!("  Type:       bls12-381");
-            println!("  Public Key: {}", hex::encode(pubkey_bytes));
-            println!();
-            println!("**Important**: Keep your secret key safe and never share it.");
-        }
-
-        KeysCommands::List => {
-            if !keys_dir.exists() {
-                println!("No keys found. Use 'cipherd keys add <name>' to create a key.");
-                return Ok(());
-            }
-
-            println!("Available keys:");
-            println!();
-            for entry in std::fs::read_dir(&keys_dir)? {
-                let entry = entry?;
-                let path = entry.path();
-                if path.extension().is_some_and(|ext| ext == "json") {
-                    if let Some(name) = path.file_stem() {
-                        println!("  - {}", name.to_string_lossy());
-                    }
-                }
-            }
-        }
-
-        KeysCommands::Show { name } => {
-            let key_path = keys_dir.join(format!("{}.json", name));
-            if !key_path.exists() {
-                anyhow::bail!("Key '{}' not found", name);
-            }
-
-            let data: serde_json::Value =
-                serde_json::from_str(&std::fs::read_to_string(&key_path)?)?;
-            println!("Name:       {}", data["name"]);
-            println!("Public Key: {}", data["public_key"]);
-        }
-
-        KeysCommands::Delete { name, yes } => {
-            let key_path = keys_dir.join(format!("{}.json", name));
-            if !key_path.exists() {
-                anyhow::bail!("Key '{}' not found", name);
-            }
-
-            if !yes {
-                println!("Are you sure you want to delete key '{}'? [y/N]", name);
-                let mut input = String::new();
-                std::io::stdin().read_line(&mut input)?;
-                if input.trim().to_lowercase() != "y" {
-                    println!("Aborted.");
-                    return Ok(());
-                }
-            }
-
-            std::fs::remove_file(&key_path)?;
-            println!("Key '{}' deleted", name);
-        }
-
-        KeysCommands::Export { name } => {
-            let key_path = keys_dir.join(format!("{}.json", name));
-            if !key_path.exists() {
-                anyhow::bail!("Key '{}' not found", name);
-            }
-
-            let data = std::fs::read_to_string(&key_path)?;
-            println!("{}", data);
-        }
-
-        KeysCommands::Import { name, file } => {
-            std::fs::create_dir_all(&keys_dir)?;
-            let key_path = keys_dir.join(format!("{}.json", name));
-            if key_path.exists() {
-                anyhow::bail!(
-                    "Key '{}' already exists. Delete it first or choose a different name.",
-                    name
-                );
-            }
-
-            let data = std::fs::read_to_string(&file)?;
-            // Validate JSON
-            let _: serde_json::Value = serde_json::from_str(&data)?;
-            std::fs::write(&key_path, data)?;
-
-            println!("Key '{}' imported successfully", name);
-        }
-    }
-
-    Ok(())
-}
+// Old cmd_keys function removed - now using key_cli::execute_keys_command
+// with secure EIP-2335 encrypted keystores
 
 fn cmd_config(home: &std::path::Path, command: ConfigCommands) -> Result<()> {
     let config_path = home.join("config/node.json");
@@ -999,6 +905,47 @@ fn cmd_genesis_generate(
     println!("  cipherd validate --genesis {}", output.display());
 
     Ok(())
+}
+
+fn cmd_genesis_add_account(
+    address: &str,
+    balance_eth: u64,
+    genesis_path: &std::path::Path,
+) -> Result<()> {
+    println!("Adding genesis account...");
+    println!("  Address:      {}", address);
+    println!("  Balance:      {} ETH", balance_eth);
+    println!("  Genesis file: {}", genesis_path.display());
+    println!();
+    anyhow::bail!("add-genesis-account is not yet implemented")
+}
+
+fn cmd_genesis_gentx(
+    key_file: &std::path::Path,
+    stake_eth: u64,
+    moniker: Option<String>,
+    commission_rate: u8,
+    output_dir: &std::path::Path,
+) -> Result<()> {
+    println!("Generating genesis transaction...");
+    println!("  Key file:        {}", key_file.display());
+    println!("  Stake:           {} ETH", stake_eth);
+    println!("  Moniker:         {}", moniker.as_deref().unwrap_or("(default)"));
+    println!("  Commission rate: {}%", commission_rate);
+    println!("  Output dir:      {}", output_dir.display());
+    println!();
+    anyhow::bail!("gentx is not yet implemented")
+}
+
+fn cmd_genesis_collect_gentxs(
+    gentx_dir: &std::path::Path,
+    genesis_path: &std::path::Path,
+) -> Result<()> {
+    println!("Collecting genesis transactions...");
+    println!("  Gentx directory: {}", gentx_dir.display());
+    println!("  Genesis file:    {}", genesis_path.display());
+    println!();
+    anyhow::bail!("collect-gentxs is not yet implemented")
 }
 
 fn cmd_debug(command: DebugCommands) -> Result<()> {

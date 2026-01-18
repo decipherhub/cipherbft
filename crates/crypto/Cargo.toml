@@ -6,6 +6,10 @@ authors.workspace = true
 license.workspace = true
 description = "Cryptographic primitives for CipherBFT (BLS12-381 and Ed25519)"
 
+[features]
+default = []
+keychain = ["dep:keyring"]
+
 [dependencies]
 # Internal dependencies
 cipherbft-types = { path = "../types" }
@@ -24,16 +28,34 @@ rand = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
+serde_json = { workspace = true }
 hex = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }
 
+# Memory security (T001)
+zeroize = { workspace = true }
+secrecy = { workspace = true }
+
+# Encrypted storage - EIP-2335 (T002)
+scrypt = { workspace = true }
+aes = { workspace = true }
+ctr = { workspace = true }
+cipher = { workspace = true }
+uuid = { workspace = true }
+
+# Mnemonic & HD derivation (T003)
+bip39 = { workspace = true }
+
+# OS keychain integration - optional (T004)
+keyring = { workspace = true, optional = true }
+
 [dev-dependencies]
 proptest = { workspace = true }
 criterion = { workspace = true }
 bincode = { workspace = true }
-serde_json = { workspace = true }
+tempfile = { workspace = true }
 
 [[bench]]
 name = "bls_bench"
