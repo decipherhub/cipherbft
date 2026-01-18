@@ -12,7 +12,9 @@
 //! 3. **Decision Processing**: Handle finalized decisions and persist them.
 //! 4. **Sync Support**: Provide historical values for node synchronization.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use informalsystems_malachitebft_core_consensus::LocallyProposedValue;
@@ -20,13 +22,16 @@ use informalsystems_malachitebft_core_types::CommitCertificate;
 use informalsystems_malachitebft_engine::host::{HostMsg, HostRef, Next};
 use informalsystems_malachitebft_sync::RawDecidedValue;
 use ractor::{async_trait as ractor_async_trait, Actor, ActorProcessingErr, ActorRef};
+use tokio::sync::{mpsc, Notify, RwLock};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::context::CipherBftContext;
 use crate::error::ConsensusError;
 use crate::types::{ConsensusHeight, ConsensusRound, ConsensusValue, ConsensusValueId};
 use crate::validator_set::ConsensusValidatorSet;
-use crate::validator_set_manager::ValidatorSetManager;
+use crate::validator_set_manager::{EpochConfig, ValidatorSetManager};
+use cipherbft_data_chain::Cut;
+use cipherbft_types::ValidatorId;
 
 /// Configuration for the Host actor.
 #[derive(Debug, Clone)]
@@ -638,6 +643,266 @@ pub async fn spawn_host_actor(
 
     info!(parent: &span, "Host actor spawned");
     Ok(actor_ref)
+}
+
+// ============================================================================
+// Backward-Compatibility Layer
+// ============================================================================
+
+/// Channel-based value builder for backward compatibility.
+///
+/// This adapter implements `ValueBuilder` by receiving cuts from a channel.
+pub struct ChannelValueBuilder {
+    /// Pending cuts by height (waiting for consensus to request)
+    pending_cuts: Arc<RwLock<HashMap<ConsensusHeight, Cut>>>,
+    /// Cuts by value_id (for finding cuts from certificates)
+    cuts_by_value_id: Arc<RwLock<HashMap<ConsensusValueId, Cut>>>,
+    /// Notifier for when new cuts are stored
+    cut_notify: Arc<Notify>,
+}
+
+impl Default for ChannelValueBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ChannelValueBuilder {
+    /// Create a new channel-based value builder.
+    pub fn new() -> Self {
+        Self {
+            pending_cuts: Arc::new(RwLock::new(HashMap::new())),
+            cuts_by_value_id: Arc::new(RwLock::new(HashMap::new())),
+            cut_notify: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Store a cut for consensus requests.
+    pub async fn store_cut(&self, height: ConsensusHeight, cut: Cut) {
+        debug!(
+            "ChannelValueBuilder: Storing Cut for height {} with {} cars",
+            height,
+            cut.cars.len()
+        );
+
+        {
+            let mut pending = self.pending_cuts.write().await;
+            pending.insert(height, cut.clone());
+        }
+
+        // Clean up old pending cuts (keep only last 10 heights)
+        let mut pending = self.pending_cuts.write().await;
+        if pending.len() > 10 {
+            let heights: Vec<_> = pending.keys().cloned().collect();
+            let max_height = heights.iter().max().copied().unwrap_or(height);
+            let cutoff = max_height.0.saturating_sub(10);
+            pending.retain(|h, _| h.0 >= cutoff);
+        }
+
+        // Notify any waiters
+        self.cut_notify.notify_waiters();
+    }
+}
+
+#[async_trait]
+impl ValueBuilder for ChannelValueBuilder {
+    async fn build_value(
+        &self,
+        height: ConsensusHeight,
+        _round: ConsensusRound,
+    ) -> Result<LocallyProposedValue<CipherBftContext>, ConsensusError> {
+        // Wait for a cut at this height with timeout
+        let timeout = Duration::from_secs(30);
+        let start = std::time::Instant::now();
+
+        loop {
+            // Check if we have a cut
+            {
+                let mut pending = self.pending_cuts.write().await;
+                if let Some(cut) = pending.remove(&height) {
+                    let value = ConsensusValue::from(cut.clone());
+                    let value_id = informalsystems_malachitebft_core_types::Value::id(&value);
+
+                    // Store by value_id for later lookup
+                    self.cuts_by_value_id
+                        .write()
+                        .await
+                        .insert(value_id.clone(), cut);
+
+                    return Ok(LocallyProposedValue::new(
+                        height,
+                        informalsystems_malachitebft_core_types::Round::new(0),
+                        value,
+                    ));
+                }
+            }
+
+            // Check timeout
+            if start.elapsed() > timeout {
+                return Err(ConsensusError::Other(format!(
+                    "Timeout: No cut available for height {} after {:?}",
+                    height, timeout
+                )));
+            }
+
+            // Wait for notification or timeout
+            tokio::select! {
+                _ = self.cut_notify.notified() => {}
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+            }
+        }
+    }
+
+    async fn restream_value(
+        &self,
+        _height: ConsensusHeight,
+        _round: ConsensusRound,
+        _value_id: ConsensusValueId,
+    ) -> Result<(), ConsensusError> {
+        // No-op for backward compatibility
+        Ok(())
+    }
+}
+
+/// Type alias for the decided cuts storage (cut + commit certificate by height).
+type DecidedCutsMap =
+    Arc<RwLock<HashMap<ConsensusHeight, (Cut, CommitCertificate<CipherBftContext>)>>>;
+
+/// Channel-based decision handler for backward compatibility.
+///
+/// This adapter implements `DecisionHandler` by sending decisions to a channel.
+pub struct ChannelDecisionHandler {
+    /// Channel to send decided events
+    decided_tx: Option<mpsc::Sender<(ConsensusHeight, Cut)>>,
+    /// Decided cuts by height (for history queries)
+    decided_cuts: DecidedCutsMap,
+}
+
+impl ChannelDecisionHandler {
+    /// Create a new channel-based decision handler.
+    pub fn new(decided_tx: Option<mpsc::Sender<(ConsensusHeight, Cut)>>) -> Self {
+        Self {
+            decided_tx,
+            decided_cuts: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+}
+
+#[async_trait]
+impl DecisionHandler for ChannelDecisionHandler {
+    async fn on_decided(
+        &self,
+        height: ConsensusHeight,
+        _round: ConsensusRound,
+        value: ConsensusValue,
+        certificate: CommitCertificate<CipherBftContext>,
+    ) -> Result<(), ConsensusError> {
+        let cut = value.into_cut();
+
+        // Store for history queries
+        {
+            let mut decided = self.decided_cuts.write().await;
+            decided.insert(height, (cut.clone(), certificate));
+
+            // Clean up old decisions (keep last 100)
+            if decided.len() > 100 {
+                let heights: Vec<_> = decided.keys().cloned().collect();
+                let max_height = heights.iter().max().copied().unwrap_or(height);
+                let cutoff = max_height.0.saturating_sub(100);
+                decided.retain(|h, _| h.0 >= cutoff);
+            }
+        }
+
+        // Send to channel
+        if let Some(tx) = &self.decided_tx {
+            if let Err(e) = tx.send((height, cut)).await {
+                warn!("Failed to send decided event: {}", e);
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn get_decided_value(
+        &self,
+        height: ConsensusHeight,
+    ) -> Result<Option<RawDecidedValue<CipherBftContext>>, ConsensusError> {
+        let decided = self.decided_cuts.read().await;
+        Ok(decided.get(&height).map(|(cut, cert)| {
+            // Encode cut to bytes using bincode
+            let value_bytes = bincode::serialize(cut).unwrap_or_default().into();
+            RawDecidedValue {
+                certificate: cert.clone(),
+                value_bytes,
+            }
+        }))
+    }
+
+    async fn get_history_min_height(&self) -> Result<ConsensusHeight, ConsensusError> {
+        let decided = self.decided_cuts.read().await;
+        Ok(decided.keys().min().cloned().unwrap_or(ConsensusHeight(1)))
+    }
+}
+
+/// Spawn the host actor using the backward-compatible channel-based API.
+///
+/// This function provides compatibility with the old `spawn_host` signature
+/// by wrapping the new trait-based architecture.
+///
+/// # Arguments
+///
+/// * `_our_id` - Our validator ID (unused in new architecture)
+/// * `ctx` - Consensus context containing validator set
+/// * `cut_rx` - Channel to receive cuts from DCL
+/// * `decided_tx` - Channel to send decided events
+///
+/// # Returns
+///
+/// A `HostRef<CipherBftContext>` for sending messages to the host.
+pub async fn spawn_host(
+    _our_id: ValidatorId,
+    ctx: CipherBftContext,
+    mut cut_rx: mpsc::Receiver<Cut>,
+    decided_tx: Option<mpsc::Sender<(ConsensusHeight, Cut)>>,
+) -> anyhow::Result<HostRef<CipherBftContext>> {
+    // Extract validators from context
+    let validators: Vec<_> = ctx.validator_set.as_slice().to_vec();
+
+    // Create a simple validator set manager (single epoch, no transitions)
+    let epoch_config = EpochConfig::new(u64::MAX); // Very large epoch = no transitions
+    let validator_set_manager = Arc::new(
+        ValidatorSetManager::new(epoch_config, validators)
+            .map_err(|e| anyhow::anyhow!("Failed to create validator set manager: {}", e))?,
+    );
+
+    // Create channel-based handlers
+    let value_builder = Arc::new(ChannelValueBuilder::new());
+    let decision_handler = Arc::new(ChannelDecisionHandler::new(decided_tx));
+
+    // Spawn background task to process DCL cuts
+    let value_builder_for_cuts = Arc::clone(&value_builder);
+    tokio::spawn(async move {
+        while let Some(cut) = cut_rx.recv().await {
+            let height = ConsensusHeight::from(cut.height);
+            value_builder_for_cuts.store_cut(height, cut).await;
+        }
+        warn!("Host: DCL cut receiver closed");
+    });
+
+    // Spawn host actor
+    let span = tracing::info_span!("CipherBftHost");
+    let host_ref = spawn_host_actor(
+        validator_set_manager,
+        value_builder as Arc<dyn ValueBuilder>,
+        decision_handler as Arc<dyn DecisionHandler>,
+        HostConfig::default(),
+        span,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("Failed to spawn host: {}", e))?;
+
+    info!("Host actor spawned (backward-compatible mode)");
+    Ok(host_ref)
 }
 
 #[cfg(test)]

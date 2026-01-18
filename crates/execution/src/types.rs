@@ -24,7 +24,9 @@ pub const DELAYED_COMMITMENT_DEPTH: u64 = 2;
 /// Contains all configurable parameters for the blockchain execution layer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChainConfig {
-    /// Chain ID for transaction signing and replay protection (default: 31337).
+    /// Chain ID for transaction signing and replay protection.
+    /// Default: 85300 (CipherBFT Testnet)
+    /// Mainnet will use: 85301
     pub chain_id: u64,
 
     /// Block gas limit (default: 30M).
@@ -43,7 +45,8 @@ pub struct ChainConfig {
 impl Default for ChainConfig {
     fn default() -> Self {
         Self {
-            chain_id: 31337,
+            // CipherBFT Testnet chain ID (unique, not on chainlist.org)
+            chain_id: 85300,
             block_gas_limit: 30_000_000,
             staking_min_stake: U256::from(1_000_000_000_000_000_000u64), // 1 ETH
             staking_unbonding_period: 259_200,                           // 3 days

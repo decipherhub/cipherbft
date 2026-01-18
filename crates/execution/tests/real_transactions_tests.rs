@@ -73,7 +73,7 @@ fn create_legacy_transaction(
     data: Bytes,
 ) -> Bytes {
     let tx = TxLegacy {
-        chain_id: Some(31337),
+        chain_id: Some(85300), // CipherBFT Testnet chain ID
         nonce,
         gas_price,
         gas_limit,
@@ -105,7 +105,7 @@ struct Eip1559TxParams {
 /// Create and sign an EIP-1559 transaction
 fn create_eip1559_transaction(signer: &PrivateKeySigner, params: Eip1559TxParams) -> Bytes {
     let tx = TxEip1559 {
-        chain_id: 31337,
+        chain_id: 85300, // CipherBFT Testnet chain ID
         nonce: params.nonce,
         gas_limit: params.gas_limit,
         max_fee_per_gas: params.max_fee_per_gas,
@@ -135,7 +135,7 @@ fn create_contract_creation_transaction(
     bytecode: Bytes,
 ) -> Bytes {
     let tx = TxEip1559 {
-        chain_id: 31337,
+        chain_id: 85300, // CipherBFT Testnet chain ID
         nonce,
         gas_limit,
         max_fee_per_gas,
