@@ -72,6 +72,11 @@ pub fn execute(
 }
 
 /// List keystores from file backend (EIP-2335 JSON files)
+///
+/// Supports two naming patterns:
+/// 1. New pattern: `{name}_{account}_{type}.json` files directly in keys_dir
+///    (e.g., `default_0_ed25519.json`, `default_0_bls.json`)
+/// 2. Legacy pattern: `validator_{account}/` directories with keystore files inside
 fn list_file_keystores(keys_dir: &Path) -> Result<Vec<KeystoreInfo>> {
     let mut keystores = Vec::new();
 
@@ -79,8 +84,48 @@ fn list_file_keystores(keys_dir: &Path) -> Result<Vec<KeystoreInfo>> {
         let entry = entry?;
         let path = entry.path();
 
-        if path.is_dir() {
-            // Parse account from directory name (e.g., "validator_0")
+        if path.is_file() && path.extension().is_some_and(|ext| ext == "json") {
+            // New pattern: {name}_{account}_{type}.json files directly in keys_dir
+            let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+
+            // Parse file name pattern: {name}_{account}_{type}
+            // e.g., "default_0_ed25519" -> name="default", account=0, type="ed25519"
+            let parts: Vec<&str> = file_stem.rsplitn(3, '_').collect();
+            if parts.len() >= 2 {
+                let key_type = parts[0].to_string(); // "ed25519" or "bls"
+                let account: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+                let key_name = if parts.len() >= 3 { parts[2] } else { "unknown" };
+
+                // Try to parse as keystore to get UUID and description
+                if let Ok(keystore) = EncryptedKeystore::load(&path) {
+                    // Try to get validator_id from key_info.json in the corresponding directory
+                    let info_dir = keys_dir.join(format!("{}_{}", key_name, account));
+                    let info_path = info_dir.join("key_info.json");
+                    let validator_id = if info_path.exists() {
+                        fs::read_to_string(&info_path)
+                            .ok()
+                            .and_then(|content| {
+                                serde_json::from_str::<serde_json::Value>(&content).ok()
+                            })
+                            .and_then(|v| v["validator_id"].as_str().map(String::from))
+                    } else {
+                        None
+                    };
+
+                    keystores.push(KeystoreInfo {
+                        account,
+                        validator_id,
+                        key_type,
+                        path: Some(path),
+                        uuid: Some(keystore.uuid().to_string()),
+                        description: keystore.description().map(String::from),
+                        pubkey: Some(keystore.pubkey().to_string()),
+                        backend: KeyringBackend::File,
+                    });
+                }
+            }
+        } else if path.is_dir() {
+            // Legacy pattern: validator_{account}/ directories
             let dir_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
             let account = if dir_name.starts_with("validator_") {
                 dir_name
@@ -88,6 +133,7 @@ fn list_file_keystores(keys_dir: &Path) -> Result<Vec<KeystoreInfo>> {
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(0)
             } else {
+                // Skip non-validator directories (like default_0/ which contains key_info.json)
                 continue;
             };
 
