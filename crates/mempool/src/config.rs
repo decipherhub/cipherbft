@@ -51,7 +51,16 @@ impl From<MempoolConfig> for PoolConfig {
         pool_cfg.price_bumps.default_price_bump = cfg.default_price_bump;
         pool_cfg.price_bumps.replace_blob_tx_price_bump = cfg.replace_blob_tx_price_bump;
 
-        // TODO: map min_gas_price and max_nonce_gap once upstream hooks are wired.
+        // Map min_gas_price to Reth's minimal_protocol_basefee.
+        // This enforces the minimum base fee for transactions entering the pool.
+        // Note: u128 -> u64 conversion is safe for practical gas prices (well under u64::MAX).
+        pool_cfg.minimal_protocol_basefee = cfg.min_gas_price as u64;
+
+        // Note: max_nonce_gap does not have a direct PoolConfig equivalent in Reth.
+        // Nonce gap validation is handled by the transaction validator at submission time,
+        // and max_account_slots (mapped from max_queued_per_account) provides an indirect
+        // limit on how many future-nonce transactions can be queued per account.
+
         pool_cfg
     }
 }
@@ -76,6 +85,7 @@ mod tests {
         let cfg = MempoolConfig {
             max_pending: 5_000,
             max_queued_per_account: 42,
+            min_gas_price: 2_000_000_000, // 2 gwei
             default_price_bump: 25,
             replace_blob_tx_price_bump: 150,
             ..Default::default()
@@ -87,5 +97,6 @@ mod tests {
         assert_eq!(reth_cfg.max_account_slots, 42);
         assert_eq!(reth_cfg.price_bumps.default_price_bump, 25);
         assert_eq!(reth_cfg.price_bumps.replace_blob_tx_price_bump, 150);
+        assert_eq!(reth_cfg.minimal_protocol_basefee, 2_000_000_000);
     }
 }
