@@ -2,11 +2,70 @@
 //!
 //! A Car represents a validator's contribution containing batch digests.
 //! Cars form a chain per validator via parent_ref linking.
+//!
+//! # Security
+//!
+//! The [`Car`] type implements bounded deserialization to prevent OOM attacks.
+//! The batch_digests field is limited to [`MAX_BATCH_DIGESTS`] entries.
 
 use crate::batch::BatchDigest;
+use crate::error::MAX_BATCH_DIGESTS;
 use cipherbft_crypto::BlsSignature;
 use cipherbft_types::{Hash, ValidatorId};
-use serde::{Deserialize, Serialize};
+use serde::de::{SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Deserialize a Vec<BatchDigest> with bounds checking to prevent OOM attacks.
+fn deserialize_bounded_batch_digests<'de, D>(deserializer: D) -> Result<Vec<BatchDigest>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct BoundedBatchDigestsVisitor;
+
+    impl<'de> Visitor<'de> for BoundedBatchDigestsVisitor {
+        type Value = Vec<BatchDigest>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(
+                formatter,
+                "a sequence of at most {} batch digests",
+                MAX_BATCH_DIGESTS
+            )
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            // Check size hint to reject early
+            if let Some(size) = seq.size_hint() {
+                if size > MAX_BATCH_DIGESTS {
+                    return Err(serde::de::Error::custom(format!(
+                        "batch digest count {} exceeds maximum of {}",
+                        size, MAX_BATCH_DIGESTS
+                    )));
+                }
+            }
+
+            let capacity = seq.size_hint().unwrap_or(0).min(MAX_BATCH_DIGESTS);
+            let mut digests = Vec::with_capacity(capacity);
+
+            while let Some(digest) = seq.next_element()? {
+                if digests.len() >= MAX_BATCH_DIGESTS {
+                    return Err(serde::de::Error::custom(format!(
+                        "batch digest count exceeds maximum of {}",
+                        MAX_BATCH_DIGESTS
+                    )));
+                }
+                digests.push(digest);
+            }
+
+            Ok(digests)
+        }
+    }
+
+    deserializer.deserialize_seq(BoundedBatchDigestsVisitor)
+}
 
 /// A Car represents a validator's contribution to a consensus height
 ///
@@ -15,13 +74,19 @@ use serde::{Deserialize, Serialize};
 /// - Position in the validator's lane (monotonically increasing)
 /// - Parent reference for chain integrity
 /// - BLS12-381 signature for authenticity
+///
+/// # Security
+///
+/// This type implements bounded deserialization. When deserializing:
+/// - Batch digest count is limited to [`MAX_BATCH_DIGESTS`]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Car {
     /// Validator who created this Car
     pub proposer: ValidatorId,
     /// Position in this validator's lane (monotonically increasing, starts at 0)
     pub position: u64,
-    /// Batch digests from Workers (must be sorted by worker_id)
+    /// Batch digests from Workers (must be sorted by worker_id, bounded by MAX_BATCH_DIGESTS)
+    #[serde(deserialize_with = "deserialize_bounded_batch_digests")]
     pub batch_digests: Vec<BatchDigest>,
     /// Hash of previous Car in this validator's lane (None for position 0)
     pub parent_ref: Option<Hash>,
