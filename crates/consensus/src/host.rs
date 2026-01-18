@@ -661,6 +661,12 @@ pub struct ChannelValueBuilder {
     cut_notify: Arc<Notify>,
 }
 
+impl Default for ChannelValueBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ChannelValueBuilder {
     /// Create a new channel-based value builder.
     pub fn new() -> Self {
@@ -758,6 +764,10 @@ impl ValueBuilder for ChannelValueBuilder {
     }
 }
 
+/// Type alias for the decided cuts storage (cut + commit certificate by height).
+type DecidedCutsMap =
+    Arc<RwLock<HashMap<ConsensusHeight, (Cut, CommitCertificate<CipherBftContext>)>>>;
+
 /// Channel-based decision handler for backward compatibility.
 ///
 /// This adapter implements `DecisionHandler` by sending decisions to a channel.
@@ -765,7 +775,7 @@ pub struct ChannelDecisionHandler {
     /// Channel to send decided events
     decided_tx: Option<mpsc::Sender<(ConsensusHeight, Cut)>>,
     /// Decided cuts by height (for history queries)
-    decided_cuts: Arc<RwLock<HashMap<ConsensusHeight, (Cut, CommitCertificate<CipherBftContext>)>>>,
+    decided_cuts: DecidedCutsMap,
 }
 
 impl ChannelDecisionHandler {
