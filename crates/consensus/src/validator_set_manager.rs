@@ -155,6 +155,24 @@ pub struct EpochValidatorSet {
     pub activated_at: ConsensusHeight,
 }
 
+/// Internal state for ValidatorSetManager.
+///
+/// This struct consolidates all mutable state into a single unit to prevent
+/// ABBA deadlock patterns. Previously, separate RwLocks for `sets`, `current_epoch`,
+/// and `pending_next_epoch` could be acquired in different orders across methods,
+/// leading to potential deadlocks under concurrent access.
+#[derive(Debug)]
+struct ValidatorSetState {
+    /// Validator sets by epoch (epoch -> EpochValidatorSet).
+    sets: BTreeMap<u64, EpochValidatorSet>,
+
+    /// The current epoch number.
+    current_epoch: u64,
+
+    /// Pending validator set for the next epoch (if any).
+    pending_next_epoch: Option<ConsensusValidatorSet>,
+}
+
 /// Manages validator sets across epochs.
 ///
 /// Thread-safe implementation using `parking_lot::RwLock` for concurrent access.
@@ -200,19 +218,12 @@ pub struct ValidatorSetManager {
     /// Epoch configuration.
     config: EpochConfig,
 
-    /// Validator sets by epoch (epoch -> EpochValidatorSet).
+    /// Consolidated state protected by a single lock.
     ///
-    /// Using BTreeMap for ordered iteration and efficient range queries.
-    sets: RwLock<BTreeMap<u64, EpochValidatorSet>>,
-
-    /// The current epoch number.
-    current_epoch: RwLock<u64>,
-
-    /// Pending validator set for the next epoch (if any).
-    ///
-    /// This is set when a validator set change is detected and
-    /// will become active at the next epoch boundary.
-    pending_next_epoch: RwLock<Option<ConsensusValidatorSet>>,
+    /// DEADLOCK FIX: Previously this was three separate RwLocks (sets, current_epoch,
+    /// pending_next_epoch) which could be acquired in different orders across methods,
+    /// causing ABBA deadlock. Now all state is protected by a single lock.
+    state: RwLock<ValidatorSetState>,
 
     /// Optional storage provider for persistence.
     storage: Option<Arc<dyn ValidatorSetStorageProvider>>,
@@ -250,9 +261,11 @@ impl ValidatorSetManager {
 
         Ok(Self {
             config,
-            sets: RwLock::new(sets),
-            current_epoch: RwLock::new(0),
-            pending_next_epoch: RwLock::new(None),
+            state: RwLock::new(ValidatorSetState {
+                sets,
+                current_epoch: 0,
+                pending_next_epoch: None,
+            }),
             storage: None,
         })
     }
@@ -296,9 +309,11 @@ impl ValidatorSetManager {
 
         Ok(Self {
             config,
-            sets: RwLock::new(sets),
-            current_epoch: RwLock::new(0),
-            pending_next_epoch: RwLock::new(None),
+            state: RwLock::new(ValidatorSetState {
+                sets,
+                current_epoch: 0,
+                pending_next_epoch: None,
+            }),
             storage: Some(storage),
         })
     }
@@ -339,9 +354,11 @@ impl ValidatorSetManager {
 
         Ok(Self {
             config,
-            sets: RwLock::new(sets),
-            current_epoch: RwLock::new(current_epoch),
-            pending_next_epoch: RwLock::new(None),
+            state: RwLock::new(ValidatorSetState {
+                sets,
+                current_epoch,
+                pending_next_epoch: None,
+            }),
             storage: Some(storage),
         })
     }
@@ -369,9 +386,11 @@ impl ValidatorSetManager {
 
         Ok(Self {
             config,
-            sets: RwLock::new(sets),
-            current_epoch: RwLock::new(epoch),
-            pending_next_epoch: RwLock::new(None),
+            state: RwLock::new(ValidatorSetState {
+                sets,
+                current_epoch: epoch,
+                pending_next_epoch: None,
+            }),
             storage: None,
         })
     }
@@ -395,7 +414,7 @@ impl ValidatorSetManager {
 
     /// Get the current epoch number.
     pub fn current_epoch(&self) -> u64 {
-        *self.current_epoch.read()
+        self.state.read().current_epoch
     }
 
     /// Get the validator set for a specific height.
@@ -424,16 +443,16 @@ impl ValidatorSetManager {
         &self,
         epoch: u64,
     ) -> Result<Option<ConsensusValidatorSet>, ConsensusError> {
-        let sets = self.sets.read();
+        let state = self.state.read();
 
         // First try exact match
-        if let Some(epoch_set) = sets.get(&epoch) {
+        if let Some(epoch_set) = state.sets.get(&epoch) {
             return Ok(Some(epoch_set.validator_set.clone()));
         }
 
         // Fall back to the most recent epoch before the requested one
         // This handles the case where validator set didn't change for several epochs
-        if let Some((_, epoch_set)) = sets.range(..=epoch).next_back() {
+        if let Some((_, epoch_set)) = state.sets.range(..=epoch).next_back() {
             return Ok(Some(epoch_set.validator_set.clone()));
         }
 
@@ -463,8 +482,8 @@ impl ValidatorSetManager {
             return Err(ConsensusError::EmptyValidatorSet);
         }
 
-        let mut pending = self.pending_next_epoch.write();
-        *pending = Some(new_set);
+        let mut state = self.state.write();
+        state.pending_next_epoch = Some(new_set);
 
         Ok(())
     }
@@ -480,20 +499,26 @@ impl ValidatorSetManager {
     /// # Returns
     ///
     /// The validator set for the new epoch.
+    ///
+    /// # Deadlock Fix
+    ///
+    /// Previously this function acquired three separate write locks in order:
+    /// `current_epoch.write() -> sets.write() -> pending_next_epoch.write()`
+    /// This created a potential ABBA deadlock if other code acquired locks in
+    /// a different order. Now all state is protected by a single consolidated lock.
     pub fn advance_epoch(&self) -> Result<ConsensusValidatorSet, ConsensusError> {
-        let mut current_epoch = self.current_epoch.write();
-        let mut sets = self.sets.write();
-        let mut pending = self.pending_next_epoch.write();
+        let mut state = self.state.write();
 
-        let new_epoch = *current_epoch + 1;
+        let new_epoch = state.current_epoch + 1;
 
         // Get the new validator set (either pending or current)
-        let new_set = if let Some(pending_set) = pending.take() {
+        let new_set = if let Some(pending_set) = state.pending_next_epoch.take() {
             pending_set
         } else {
             // No pending change, use current epoch's set
-            // Dereference the RwLockWriteGuard to get &u64
-            sets.get(&*current_epoch)
+            state
+                .sets
+                .get(&state.current_epoch)
                 .map(|es| es.validator_set.clone())
                 .ok_or(ConsensusError::EmptyValidatorSet)?
         };
@@ -511,14 +536,13 @@ impl ValidatorSetManager {
             storage.persist_current_epoch(new_epoch)?;
         }
 
-        sets.insert(new_epoch, epoch_set);
+        state.sets.insert(new_epoch, epoch_set);
 
         // Update current epoch
-        *current_epoch = new_epoch;
+        state.current_epoch = new_epoch;
 
         // Prune old epochs if needed
-        // Pass new_epoch directly to avoid deadlock (we already hold current_epoch write lock)
-        self.prune_old_epochs_locked(&mut sets, new_epoch);
+        self.prune_old_epochs_internal(&mut state, new_epoch);
 
         Ok(new_set)
     }
@@ -541,23 +565,23 @@ impl ValidatorSetManager {
 
     /// Check if a validator set change is pending.
     pub fn has_pending_change(&self) -> bool {
-        self.pending_next_epoch.read().is_some()
+        self.state.read().pending_next_epoch.is_some()
     }
 
     /// Get the pending validator set (if any).
     pub fn pending_validator_set(&self) -> Option<ConsensusValidatorSet> {
-        self.pending_next_epoch.read().clone()
+        self.state.read().pending_next_epoch.clone()
     }
 
     /// Clear any pending validator set change.
     pub fn clear_pending_change(&self) {
-        let mut pending = self.pending_next_epoch.write();
-        *pending = None;
+        let mut state = self.state.write();
+        state.pending_next_epoch = None;
     }
 
     /// Get the number of stored epochs.
     pub fn stored_epoch_count(&self) -> usize {
-        self.sets.read().len()
+        self.state.read().sets.len()
     }
 
     /// Import a validator set for a specific epoch.
@@ -584,34 +608,29 @@ impl ValidatorSetManager {
             storage.persist_epoch_set(&epoch_set)?;
         }
 
-        let mut sets = self.sets.write();
-        sets.insert(epoch, epoch_set);
+        let mut state = self.state.write();
+        state.sets.insert(epoch, epoch_set);
 
         Ok(())
     }
 
-    /// Prune old epochs (internal, with lock already held).
+    /// Prune old epochs (internal helper).
     ///
-    /// Takes `current_epoch` as a parameter to avoid deadlock when called from
-    /// `advance_epoch` which already holds the `current_epoch` write lock.
-    ///
+    /// Called from within methods that already hold the state write lock.
     /// Also removes pruned epochs from storage if configured.
-    fn prune_old_epochs_locked(
-        &self,
-        sets: &mut BTreeMap<u64, EpochValidatorSet>,
-        current_epoch: u64,
-    ) {
+    fn prune_old_epochs_internal(&self, state: &mut ValidatorSetState, current_epoch: u64) {
         let min_retained = current_epoch.saturating_sub(self.config.max_retained_epochs);
 
         // Remove epochs older than the retention window
-        let epochs_to_remove: Vec<u64> = sets
+        let epochs_to_remove: Vec<u64> = state
+            .sets
             .keys()
             .filter(|&&e| e < min_retained)
             .copied()
             .collect();
 
         for epoch in epochs_to_remove {
-            sets.remove(&epoch);
+            state.sets.remove(&epoch);
 
             // Also remove from storage if available
             // Note: We log errors but don't fail the operation since in-memory state is authoritative
