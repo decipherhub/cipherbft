@@ -4,7 +4,7 @@ use crate::config::NodeConfig;
 use crate::execution_bridge::ExecutionBridge;
 use crate::network::TcpPrimaryNetwork;
 use crate::util::validator_id_from_bls;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use cipherbft_consensus::{
     create_context, default_consensus_params, default_engine_config_single_part, spawn_host,
     spawn_network, spawn_wal, ConsensusHeight, ConsensusSigner, ConsensusSigningProvider,
@@ -287,7 +287,13 @@ impl Node {
         // Start primary listener
         Arc::clone(&primary_network)
             .start_listener(self.config.primary_listen)
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to start primary network listener on {}",
+                    self.config.primary_listen
+                )
+            })?;
 
         // Connect to peers (with retry)
         tokio::spawn({
@@ -426,7 +432,18 @@ impl Node {
         };
 
         // Spawn Consensus actors
-        let network = spawn_network(consensus_keypair, network_config, metrics.clone()).await?;
+        let network = spawn_network(consensus_keypair, network_config, metrics.clone())
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to start consensus network on {}. \
+                     Port {} may already be in use. \
+                     Check with: lsof -i :{}",
+                    listen_addr,
+                    self.config.consensus_listen.port(),
+                    self.config.consensus_listen.port()
+                )
+            })?;
 
         let wal_path = self.config.data_dir.join("wal");
         let wal = spawn_wal(&ctx, wal_path, metrics.clone()).await?;
