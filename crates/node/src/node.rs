@@ -366,7 +366,16 @@ impl Node {
             }
         }
         let ctx = create_context(chain_id, consensus_validators, None)?;
-        let our_address = ctx.validator_set().as_slice()[0].address;
+        // Find our own address in the sorted validator set by matching our validator ID.
+        // Note: The validator set is sorted by voting power (desc), then address (asc),
+        // so we cannot assume our position - we must search for ourselves.
+        let our_address = ctx
+            .validator_set()
+            .as_slice()
+            .iter()
+            .find(|v| v.address.0 == self.validator_id)
+            .expect("our validator must be in the validator set")
+            .address;
         let params = default_consensus_params(&ctx, our_address);
         let consensus_config = default_engine_config_single_part();
 
