@@ -421,7 +421,7 @@ fn cmd_init(
     moniker: Option<String>,
     chain_id: u64,
     network_id: &str,
-    _initial_stake_eth: u64,
+    initial_stake_eth: u64,
     overwrite: bool,
 ) -> Result<()> {
     let config_dir = home.join("config");
@@ -444,6 +444,42 @@ fn cmd_init(
     // Generate a random node identifier for the moniker (not validator ID)
     let node_id: [u8; 4] = rand::random();
     let node_moniker = moniker.unwrap_or_else(|| format!("node-{}", hex::encode(node_id)));
+
+    // ========================================
+    // Generate genesis with single validator
+    // ========================================
+    println!("Generating genesis file with single validator...");
+
+    // Convert ETH to wei (1 ETH = 10^18 wei)
+    let initial_stake = U256::from(initial_stake_eth) * U256::from(1_000_000_000_000_000_000u128);
+
+    let genesis_config = GenesisGeneratorConfig {
+        num_validators: 1,
+        chain_id,
+        network_id: network_id.to_string(),
+        initial_stake,
+        ..Default::default()
+    };
+
+    let mut rng = rand::thread_rng();
+    let genesis_result = GenesisGenerator::generate(&mut rng, genesis_config)
+        .context("Failed to generate genesis")?;
+
+    // Save genesis file
+    let genesis_path = config_dir.join("genesis.json");
+    genesis_result
+        .genesis
+        .save(&genesis_path)
+        .context("Failed to save genesis file")?;
+
+    // Save validator key file
+    let validator = &genesis_result.validators[0];
+    let key_file = ValidatorKeyFile::from_generated(0, validator);
+    let validator_key_path = keys_dir.join("validator-0.json");
+    let key_json = key_file
+        .to_json()
+        .context("Failed to serialize validator key")?;
+    std::fs::write(&validator_key_path, key_json)?;
 
     // Create client.toml (Cosmos SDK style) for CLI settings
     let client_config = cipherd::ClientConfig {
@@ -479,7 +515,7 @@ fn cmd_init(
         num_workers: 1,
         home_dir: Some(home.to_path_buf()),
         data_dir: data_dir.clone(),
-        genesis_path: None,
+        genesis_path: Some(genesis_path.clone()),
         car_interval_ms: 100,
         max_batch_txs: 100,
         max_batch_bytes: 1024 * 1024,
@@ -500,32 +536,39 @@ fn cmd_init(
 
     let client_config_path = cipherd::ClientConfig::config_path(home);
 
+    println!();
     println!("Successfully initialized node configuration");
     println!();
-    println!("  Home:         {}", home.display());
-    println!("  Moniker:      {}", node_moniker);
-    println!("  Chain ID:     {}", chain_id);
-    println!("  Network ID:   {}", network_id);
-    println!("  Node config:  {}", config_path.display());
+    println!("  Home:          {}", home.display());
+    println!("  Moniker:       {}", node_moniker);
+    println!("  Chain ID:      {}", chain_id);
+    println!("  Network ID:    {}", network_id);
+    println!("  Node config:   {}", config_path.display());
     println!("  Client config: {}", client_config_path.display());
-    println!("  Keys dir:     {}", keys_dir.display());
+    println!("  Genesis:       {}", genesis_path.display());
+    println!("  Keys dir:      {}", keys_dir.display());
+    println!();
+    println!("Genesis Summary:");
+    println!(
+        "  Validators:    {}",
+        genesis_result.genesis.validator_count()
+    );
+    println!("  Total Stake:   {} ETH", initial_stake_eth);
+    println!(
+        "  Validator:     {} (ed25519: {}...)",
+        validator.address,
+        &validator.ed25519_pubkey_hex[..16]
+    );
+    println!();
+    println!("Validator key saved to: {}", validator_key_path.display());
     println!();
     println!("Next steps:");
     println!();
-    println!("  1. Create validator keys:");
-    println!("     cipherd keys add validator --validator");
-    println!();
-    println!("  2. For a new network, generate genesis:");
-    println!(
-        "     cipherd genesis generate --output {}",
-        config_dir.join("genesis.json").display()
-    );
-    println!();
-    println!("  3. For joining an existing network, copy the genesis file to:");
-    println!("     {}", config_dir.join("genesis.json").display());
-    println!();
-    println!("  4. Start the node:");
+    println!("  1. Start the node:");
     println!("     cipherd start --home {}", home.display());
+    println!();
+    println!("  2. (Optional) For joining an existing network, replace the genesis file:");
+    println!("     {}", genesis_path.display());
 
     Ok(())
 }
