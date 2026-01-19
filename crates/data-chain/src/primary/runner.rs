@@ -295,7 +295,18 @@ impl Primary {
     pub async fn run(&mut self) {
         info!(
             validator = %self.config.validator_id,
-            "Primary starting"
+            startup_delay = ?self.config.startup_delay,
+            "Primary starting, waiting for network to establish connections"
+        );
+
+        // Wait for network connections to be established before starting CAR creation.
+        // This prevents position 0 CARs from being broadcast when no peers are connected,
+        // which would cause PositionGap errors when later CARs arrive at other validators.
+        tokio::time::sleep(self.config.startup_delay).await;
+
+        info!(
+            validator = %self.config.validator_id,
+            "Primary startup delay complete, beginning CAR creation"
         );
 
         // Set up Car creation interval
@@ -858,7 +869,8 @@ mod tests {
         let our_id = validator_id_from_bls_pubkey(&keypairs[0].public_key);
         let config = PrimaryConfig::new(our_id, keypairs[0].secret_key.clone())
             .with_car_interval(Duration::from_millis(50))
-            .with_attestation_timeout(Duration::from_millis(100), Duration::from_millis(500));
+            .with_attestation_timeout(Duration::from_millis(100), Duration::from_millis(500))
+            .with_startup_delay(Duration::ZERO); // No delay for tests
 
         (config, validator_pubkeys, keypairs)
     }

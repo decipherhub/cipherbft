@@ -26,6 +26,13 @@ pub struct PrimaryConfig {
     /// Higher values preserve forensic evidence longer for slashing proofs,
     /// at the cost of increased memory usage.
     pub equivocation_retention: u64,
+    /// Startup delay before beginning CAR creation (default: 2s).
+    ///
+    /// This delay allows the network to establish peer connections before
+    /// the Primary starts creating and broadcasting CARs. Without this delay,
+    /// position 0 CARs may be broadcast when no peers are connected and lost,
+    /// causing PositionGap errors when later CARs arrive.
+    pub startup_delay: Duration,
 }
 
 impl PrimaryConfig {
@@ -40,6 +47,7 @@ impl PrimaryConfig {
             max_empty_cars: 3,
             worker_count: 1,
             equivocation_retention: 1000,
+            startup_delay: Duration::from_secs(2),
         }
     }
 
@@ -73,6 +81,12 @@ impl PrimaryConfig {
         self.equivocation_retention = retention;
         self
     }
+
+    /// Set startup delay before CAR creation begins
+    pub fn with_startup_delay(mut self, delay: Duration) -> Self {
+        self.startup_delay = delay;
+        self
+    }
 }
 
 impl std::fmt::Debug for PrimaryConfig {
@@ -85,6 +99,7 @@ impl std::fmt::Debug for PrimaryConfig {
             .field("max_empty_cars", &self.max_empty_cars)
             .field("worker_count", &self.worker_count)
             .field("equivocation_retention", &self.equivocation_retention)
+            .field("startup_delay", &self.startup_delay)
             .finish()
     }
 }
