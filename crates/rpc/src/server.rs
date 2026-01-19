@@ -206,7 +206,17 @@ where
             .max_connections(self.config.max_connections)
             .build(addr)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                format!(
+                    "Failed to bind HTTP RPC server to {}. \
+                     Port {} may already be in use. \
+                     Check with: lsof -i :{} (error: {})",
+                    addr,
+                    addr.port(),
+                    addr.port(),
+                    e
+                )
+            })?;
 
         let handle = server.start(module);
         Ok(handle)
@@ -223,7 +233,17 @@ where
             .ws_only()
             .build(addr)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| {
+                format!(
+                    "Failed to bind WebSocket RPC server to {}. \
+                     Port {} may already be in use. \
+                     Check with: lsof -i :{} (error: {})",
+                    addr,
+                    addr.port(),
+                    addr.port(),
+                    e
+                )
+            })?;
 
         let handle = server.start(module);
         Ok(handle)

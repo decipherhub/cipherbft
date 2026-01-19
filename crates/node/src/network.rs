@@ -27,7 +27,7 @@
 //! This prevents the `peers` lock from being held during slow network operations.
 
 use crate::config::PeerConfig;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, BytesMut};
 use cipherbft_data_chain::{
@@ -98,7 +98,16 @@ impl TcpPrimaryNetwork {
 
     /// Start listening for incoming connections
     pub async fn start_listener(self: Arc<Self>, listen_addr: SocketAddr) -> Result<()> {
-        let listener = TcpListener::bind(listen_addr).await?;
+        let listener = TcpListener::bind(listen_addr).await.with_context(|| {
+            format!(
+                "Failed to bind primary network listener to {}. \
+                 Port {} may already be in use. \
+                 Check with: lsof -i :{}",
+                listen_addr,
+                listen_addr.port(),
+                listen_addr.port()
+            )
+        })?;
         info!("Primary listening on {}", listen_addr);
 
         tokio::spawn(async move {
