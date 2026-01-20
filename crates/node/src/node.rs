@@ -17,7 +17,7 @@
 
 use crate::config::NodeConfig;
 use crate::execution_bridge::ExecutionBridge;
-use crate::network::TcpPrimaryNetwork;
+use crate::network::{TcpPrimaryNetwork, TcpWorkerNetwork};
 use crate::supervisor::NodeSupervisor;
 use crate::util::validator_id_from_bls;
 use anyhow::{Context, Result};
@@ -29,7 +29,8 @@ use cipherbft_consensus::{
 use cipherbft_crypto::{BlsKeyPair, BlsPublicKey, Ed25519KeyPair, Ed25519PublicKey};
 use cipherbft_data_chain::{
     primary::{Primary, PrimaryConfig, PrimaryEvent},
-    Cut, DclMessage,
+    worker::{Worker, WorkerConfig},
+    Cut, DclMessage, WorkerMessage,
 };
 use cipherbft_execution::ChainConfig;
 use cipherbft_types::genesis::Genesis;
@@ -407,7 +408,7 @@ impl Node {
             .collect();
 
         // Spawn Primary task
-        let (mut primary_handle, _worker_rxs) = Primary::spawn(
+        let (mut primary_handle, worker_rxs) = Primary::spawn(
             primary_config,
             bls_pubkeys,
             Box::new(TcpPrimaryNetworkAdapter {
@@ -415,6 +416,115 @@ impl Node {
             }),
             self.config.num_workers as u8,
         );
+
+        // Spawn Workers and wire up channels
+        // Workers receive batches from peers and notify Primary when batches are ready
+        for (worker_idx, mut from_primary_rx) in worker_rxs.into_iter().enumerate() {
+            let worker_id = worker_idx as u8;
+
+            // Create Worker network with incoming message channel
+            let (worker_incoming_tx, mut worker_incoming_rx) =
+                mpsc::channel::<(ValidatorId, WorkerMessage)>(1024);
+
+            let worker_network = TcpWorkerNetwork::new(
+                self.validator_id,
+                worker_id,
+                &self.config.peers,
+                worker_incoming_tx,
+            );
+
+            // Start Worker network listener
+            if let Some(listen_addr) = self.config.worker_listens.get(worker_id as usize) {
+                let network_for_listener = Arc::new(worker_network.clone());
+                let listen_addr = *listen_addr;
+                tokio::spawn(async move {
+                    if let Err(e) = network_for_listener.start_listener(listen_addr).await {
+                        error!("Failed to start worker {} listener: {}", worker_id, e);
+                    }
+                });
+
+                // Connect to peers after a brief delay to allow listeners to start
+                let network_for_connect = worker_network.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    network_for_connect.connect_to_all_peers().await;
+                });
+            }
+
+            // Create Worker config and spawn
+            let worker_config = WorkerConfig::new(self.validator_id, worker_id);
+            let mut worker_handle = Worker::spawn(worker_config, Box::new(worker_network));
+
+            // Combined bridge task: handles all communication with Worker
+            // - Primary -> Worker: forward batch requests
+            // - Worker -> Primary: forward batch digests
+            // - Network -> Worker: forward peer messages
+            let token = cancel_token.clone();
+            let primary_worker_sender = primary_handle.worker_sender();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        biased;
+
+                        _ = token.cancelled() => {
+                            debug!("Worker {} bridge shutting down", worker_id);
+                            break;
+                        }
+
+                        // Primary -> Worker: forward batch requests and digests
+                        msg = from_primary_rx.recv() => {
+                            match msg {
+                                Some(m) => {
+                                    if worker_handle.send_from_primary(m).await.is_err() {
+                                        warn!("Worker {} send_from_primary failed", worker_id);
+                                        break;
+                                    }
+                                }
+                                None => {
+                                    debug!("Worker {} primary channel closed", worker_id);
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Worker -> Primary: forward batch availability notifications
+                        msg = worker_handle.recv_from_worker() => {
+                            match msg {
+                                Some(m) => {
+                                    if primary_worker_sender.send(m).await.is_err() {
+                                        warn!("Worker {} send to primary failed", worker_id);
+                                        break;
+                                    }
+                                }
+                                None => {
+                                    debug!("Worker {} receiver closed", worker_id);
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Network -> Worker: forward peer messages (batches, sync requests)
+                        msg = worker_incoming_rx.recv() => {
+                            match msg {
+                                Some((peer, worker_msg)) => {
+                                    if worker_handle.send_from_peer(peer, worker_msg).await.is_err() {
+                                        warn!("Worker {} send_from_peer failed", worker_id);
+                                        break;
+                                    }
+                                }
+                                None => {
+                                    debug!("Worker {} network channel closed", worker_id);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            info!("Worker {} spawned and wired", worker_id);
+        }
+
         let (decided_tx, mut decided_rx) = mpsc::channel::<(ConsensusHeight, Cut)>(100);
 
         // Get Ed25519 keypair for Consensus
