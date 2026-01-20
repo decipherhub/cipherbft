@@ -69,6 +69,7 @@ pub struct TcpPrimaryNetwork {
 }
 
 /// Connection to a peer
+#[derive(Clone)]
 struct PeerConnection {
     writer: Arc<Mutex<tokio::io::WriteHalf<TcpStream>>>,
 }
@@ -320,22 +321,28 @@ impl PrimaryNetwork for TcpPrimaryNetwork {
 }
 
 /// TCP-based Worker network implementation
+#[derive(Clone)]
 pub struct TcpWorkerNetwork {
     /// Our validator ID
-    #[allow(dead_code)]
     our_id: ValidatorId,
     /// Worker ID
-    #[allow(dead_code)]
     worker_id: u8,
     /// Peer worker connections
     peers: Arc<RwLock<HashMap<ValidatorId, PeerConnection>>>,
     /// Peer worker addresses
     peer_addrs: HashMap<ValidatorId, SocketAddr>,
+    /// Incoming message channel
+    incoming_tx: mpsc::Sender<(ValidatorId, WorkerMessage)>,
 }
 
 impl TcpWorkerNetwork {
     /// Create a new TCP worker network
-    pub fn new(our_id: ValidatorId, worker_id: u8, peers: &[PeerConfig]) -> Self {
+    pub fn new(
+        our_id: ValidatorId,
+        worker_id: u8,
+        peers: &[PeerConfig],
+        incoming_tx: mpsc::Sender<(ValidatorId, WorkerMessage)>,
+    ) -> Self {
         let peer_addrs: HashMap<_, _> = peers
             .iter()
             .filter_map(|p| {
@@ -350,6 +357,119 @@ impl TcpWorkerNetwork {
             worker_id,
             peers: Arc::new(RwLock::new(HashMap::new())),
             peer_addrs,
+            incoming_tx,
+        }
+    }
+
+    /// Start listening for incoming connections
+    pub async fn start_listener(self: Arc<Self>, listen_addr: SocketAddr) -> Result<()> {
+        let listener = TcpListener::bind(listen_addr).await.with_context(|| {
+            format!(
+                "Failed to bind worker network listener to {}. \
+                 Port {} may already be in use.",
+                listen_addr,
+                listen_addr.port()
+            )
+        })?;
+        info!(
+            "Worker {} listening on {}",
+            self.worker_id, listen_addr
+        );
+
+        tokio::spawn(async move {
+            loop {
+                match listener.accept().await {
+                    Ok((stream, addr)) => {
+                        debug!("Worker {} accepted connection from {}", self.worker_id, addr);
+                        let self_clone = Arc::clone(&self);
+                        tokio::spawn(async move {
+                            if let Err(e) = self_clone.handle_connection(stream).await {
+                                error!("Worker connection error from {}: {}", addr, e);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        error!("Worker accept error: {}", e);
+                    }
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Handle an incoming connection
+    async fn handle_connection(&self, stream: TcpStream) -> Result<()> {
+        let (mut reader, writer) = tokio::io::split(stream);
+        let writer = Arc::new(Mutex::new(writer));
+
+        let mut buf = BytesMut::with_capacity(4096);
+
+        loop {
+            // Read more data
+            let n = reader.read_buf(&mut buf).await?;
+            if n == 0 {
+                break; // Connection closed
+            }
+
+            // Try to parse messages
+            while buf.len() >= HEADER_SIZE {
+                let len = (&buf[..HEADER_SIZE]).get_u32() as usize;
+                if (len as u64) > MAX_MESSAGE_SIZE {
+                    anyhow::bail!("Message too large: {}", len);
+                }
+
+                if buf.len() < HEADER_SIZE + len {
+                    break; // Need more data
+                }
+
+                buf.advance(HEADER_SIZE);
+                let msg_bytes = buf.split_to(len);
+
+                match bincode::deserialize::<NetworkMessage>(&msg_bytes) {
+                    Ok(NetworkMessage::Worker(worker_msg)) => {
+                        // Extract sender from message where available
+                        // BatchRequest has requestor field, others use ZERO (not needed for response routing)
+                        let from = match &worker_msg {
+                            WorkerMessage::BatchRequest { requestor, .. } => *requestor,
+                            _ => ValidatorId::ZERO,
+                        };
+
+                        // Store connection if sender is known (for potential future responses)
+                        if from != ValidatorId::ZERO {
+                            let mut peers = self.peers.write().await;
+                            peers.entry(from).or_insert_with(|| PeerConnection {
+                                writer: Arc::clone(&writer),
+                            });
+                        }
+
+                        // Forward to handler
+                        if self.incoming_tx.send((from, worker_msg)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(_) => {
+                        warn!("Received non-Worker message on Worker connection");
+                    }
+                    Err(e) => {
+                        error!("Failed to deserialize worker message: {}", e);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Connect to all known peers
+    pub async fn connect_to_all_peers(&self) {
+        for validator_id in self.peer_addrs.keys().cloned().collect::<Vec<_>>() {
+            if let Err(e) = self.connect_to_peer(validator_id).await {
+                warn!(
+                    "Worker {} failed to connect to peer {:?}: {}",
+                    self.worker_id, validator_id, e
+                );
+            }
         }
     }
 
