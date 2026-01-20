@@ -886,9 +886,14 @@ impl ValueBuilder for ChannelValueBuilder {
 
         loop {
             // Check if we have a cut
+            // NOTE: We use get() instead of remove() to keep the cut available for
+            // potential re-proposals in different rounds. Without this, if consensus
+            // moves to a new round (e.g., due to timeouts) and asks for the same height
+            // again, the cut would already be gone. The cut will be cleaned up by the
+            // retention logic when newer heights arrive.
             {
-                let mut pending = self.pending_cuts.write().await;
-                if let Some(cut) = pending.remove(&height) {
+                let pending = self.pending_cuts.read().await;
+                if let Some(cut) = pending.get(&height).cloned() {
                     let value = ConsensusValue::from(cut.clone());
                     let value_id = informalsystems_malachitebft_core_types::Value::id(&value);
 
