@@ -23,9 +23,11 @@ pub struct CutProposal {
 impl BorshSerialize for CutProposal {
     fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
         self.height.serialize(writer)?;
-        (self.round.as_i64() as u32).serialize(writer)?;
+        // Serialize round as i64 to handle all valid round values
+        (self.round.as_i64()).serialize(writer)?;
         self.value.serialize(writer)?;
-        (self.pol_round.as_i64() as u32).serialize(writer)?;
+        // Serialize pol_round as i64 to handle Round::Nil (-1) properly
+        (self.pol_round.as_i64()).serialize(writer)?;
         self.proposer.serialize(writer)?;
         Ok(())
     }
@@ -34,11 +36,21 @@ impl BorshSerialize for CutProposal {
 impl BorshDeserialize for CutProposal {
     fn deserialize_reader<R: Read>(reader: &mut R) -> std::io::Result<Self> {
         let height = ConsensusHeight::deserialize_reader(reader)?;
-        let round_val: u32 = BorshDeserialize::deserialize_reader(reader)?;
-        let round = Round::new(round_val);
+        // Deserialize round: stored as i64
+        let round_val: i64 = BorshDeserialize::deserialize_reader(reader)?;
+        let round = if round_val < 0 {
+            Round::Nil
+        } else {
+            Round::new(round_val as u32)
+        };
         let value = ConsensusValue::deserialize_reader(reader)?;
-        let pol_round_val: u32 = BorshDeserialize::deserialize_reader(reader)?;
-        let pol_round = Round::new(pol_round_val);
+        // Deserialize pol_round: stored as i64 to handle Round::Nil (-1)
+        let pol_round_val: i64 = BorshDeserialize::deserialize_reader(reader)?;
+        let pol_round = if pol_round_val < 0 {
+            Round::Nil
+        } else {
+            Round::new(pol_round_val as u32)
+        };
         let proposer = ConsensusAddress::deserialize_reader(reader)?;
         Ok(Self {
             height,
