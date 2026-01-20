@@ -99,47 +99,39 @@ pub struct AggregatedAttestation {
 }
 
 impl AggregatedAttestation {
-    /// Create from individual attestations
+    /// Create from individual attestations without validator indices.
     ///
-    /// # Panics
-    /// Panics if attestations is empty or attestations have different car_hash
-    pub fn aggregate(attestations: &[Attestation], validator_count: usize) -> Option<Self> {
-        if attestations.is_empty() {
-            return None;
-        }
-
-        let first = &attestations[0];
-        let car_hash = first.car_hash;
-        let car_position = first.car_position;
-        let car_proposer = first.car_proposer;
-
-        // Verify all attestations are for the same Car
-        for att in attestations {
-            if att.car_hash != car_hash {
-                return None;
-            }
-        }
-
-        // Build validator bitmap and collect signatures
-        // Note: Without index mapping, we cannot populate the bitmap correctly
-        // Use aggregate_with_indices() for proper bitmap population
-        let validators = bitvec![u8, Lsb0; 0; validator_count];
-        let mut sigs: Vec<&BlsSignature> = Vec::with_capacity(attestations.len());
-
-        for att in attestations {
-            sigs.push(&att.signature);
-        }
-
-        // Aggregate signatures
-        let aggregated_signature = BlsAggregateSignature::aggregate(&sigs).ok()?;
-
-        Some(Self {
-            car_hash,
-            car_position,
-            car_proposer,
-            validators,
-            aggregated_signature,
-        })
+    /// # Deprecated
+    ///
+    /// This method is **deprecated** and will always return `None`. The method cannot
+    /// correctly populate the validator bitmap without knowing each attestation's
+    /// validator index, which means the resulting `AggregatedAttestation` would fail
+    /// verification since `verify()` relies on the bitmap to select public keys.
+    ///
+    /// Use [`aggregate_with_indices`](Self::aggregate_with_indices) instead, which
+    /// takes `(Attestation, usize)` pairs where the `usize` is the validator's index
+    /// in the validator set.
+    ///
+    /// For proposers creating self-attestations, use
+    /// [`aggregate_with_self`](Self::aggregate_with_self) which handles the proposer's
+    /// own attestation separately.
+    ///
+    /// # Returns
+    ///
+    /// Always returns `None`. Use `aggregate_with_indices()` for proper aggregation.
+    #[deprecated(
+        since = "0.1.0",
+        note = "Cannot populate bitmap without validator indices. Use aggregate_with_indices() instead."
+    )]
+    pub fn aggregate(_attestations: &[Attestation], _validator_count: usize) -> Option<Self> {
+        // This method cannot work correctly without validator index mapping.
+        // The bitmap must be populated with the correct validator indices for
+        // verify() to work, but we don't have that information here.
+        //
+        // Previously this returned an AggregatedAttestation with an all-zero bitmap,
+        // which would always fail verification. Now we return None to make the
+        // failure explicit at aggregation time rather than verification time.
+        None
     }
 
     /// Create from attestations with validator index mapping
