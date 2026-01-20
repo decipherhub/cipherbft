@@ -878,7 +878,8 @@ impl ValueBuilder for ChannelValueBuilder {
 
     async fn get_value_by_id(&self, value_id: &ConsensusValueId) -> Option<ConsensusValue> {
         let cuts = self.cuts_by_value_id.read().await;
-        cuts.get(value_id).map(|cut| ConsensusValue::from(cut.clone()))
+        cuts.get(value_id)
+            .map(|cut| ConsensusValue::from(cut.clone()))
     }
 }
 
