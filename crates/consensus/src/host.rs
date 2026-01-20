@@ -877,7 +877,7 @@ impl ValueBuilder for ChannelValueBuilder {
     async fn build_value(
         &self,
         height: ConsensusHeight,
-        _round: ConsensusRound,
+        round: ConsensusRound,
     ) -> Result<LocallyProposedValue<CipherBftContext>, ConsensusError> {
         // Wait for a cut at this height with timeout
         let timeout = Duration::from_secs(30);
@@ -908,11 +908,7 @@ impl ValueBuilder for ChannelValueBuilder {
                         .await
                         .insert(value_id.clone(), cut);
 
-                    return Ok(LocallyProposedValue::new(
-                        height,
-                        informalsystems_malachitebft_core_types::Round::new(0),
-                        value,
-                    ));
+                    return Ok(LocallyProposedValue::new(height, round, value));
                 }
 
                 // Log available heights on first wait (helpful for debugging)
