@@ -109,6 +109,10 @@ impl MalachiteProposal<CipherBftContext> for CutProposal {
 pub struct CutProposalPart {
     pub height: ConsensusHeight,
     pub round: Round,
+    /// The round in which the proposer received 2f+1 prevotes for this value.
+    /// This is `Round::Nil` for fresh proposals, or a valid round number for
+    /// re-proposals (POL - Proof-of-Lock round).
+    pub valid_round: Round,
     pub proposer: ConsensusAddress,
     pub cut: Cut,
     pub first: bool,
@@ -120,6 +124,8 @@ impl BorshSerialize for CutProposalPart {
         // Serialize metadata
         self.height.serialize(writer)?;
         (self.round.as_i64() as u32).serialize(writer)?;
+        // Serialize valid_round: use i64 to handle Round::Nil (-1) properly
+        (self.valid_round.as_i64()).serialize(writer)?;
         self.proposer.serialize(writer)?;
 
         // Use bincode for Cut (contains HashMap which doesn't implement borsh)
@@ -139,6 +145,13 @@ impl BorshDeserialize for CutProposalPart {
         let height = ConsensusHeight::deserialize_reader(reader)?;
         let round_val: u32 = BorshDeserialize::deserialize_reader(reader)?;
         let round = Round::new(round_val);
+        // Deserialize valid_round: stored as i64 to handle Round::Nil (-1)
+        let valid_round_val: i64 = BorshDeserialize::deserialize_reader(reader)?;
+        let valid_round = if valid_round_val < 0 {
+            Round::Nil
+        } else {
+            Round::new(valid_round_val as u32)
+        };
         let proposer = ConsensusAddress::deserialize_reader(reader)?;
 
         // Deserialize cut
@@ -152,6 +165,7 @@ impl BorshDeserialize for CutProposalPart {
         Ok(Self {
             height,
             round,
+            valid_round,
             proposer,
             cut,
             first,
@@ -166,15 +180,26 @@ impl CutProposalPart {
     /// Since the Malachite StreamMessage no longer carries height/round/proposer,
     /// we embed this metadata directly in the proposal part for reconstruction
     /// on the receiving end.
+    ///
+    /// # Arguments
+    ///
+    /// * `height` - The consensus height for this proposal
+    /// * `round` - The round in which this proposal is being made
+    /// * `valid_round` - The round in which the proposer received 2f+1 prevotes
+    ///   for this value. Use `Round::Nil` for fresh proposals (not re-proposals).
+    /// * `proposer` - The address of the proposing validator
+    /// * `cut` - The Cut data being proposed
     pub fn single(
         height: ConsensusHeight,
         round: Round,
+        valid_round: Round,
         proposer: ConsensusAddress,
         cut: Cut,
     ) -> Self {
         Self {
             height,
             round,
+            valid_round,
             proposer,
             cut,
             first: true,
@@ -190,6 +215,14 @@ impl CutProposalPart {
     /// Accessor for round
     pub fn round(&self) -> Round {
         self.round
+    }
+
+    /// Accessor for valid_round (POL round).
+    ///
+    /// Returns `Round::Nil` for fresh proposals, or the round number where
+    /// the proposer received 2f+1 prevotes for this value (re-proposals).
+    pub fn valid_round(&self) -> Round {
+        self.valid_round
     }
 
     /// Accessor for proposer address
