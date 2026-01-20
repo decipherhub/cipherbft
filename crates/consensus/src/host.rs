@@ -104,6 +104,13 @@ pub trait ValueBuilder: Send + Sync + 'static {
     ///
     /// The `ConsensusValue` if found, or `None` if the value is not in the cache.
     async fn get_value_by_id(&self, value_id: &ConsensusValueId) -> Option<ConsensusValue>;
+
+    /// Store a received proposal value.
+    ///
+    /// Called when this node receives a proposal from another validator.
+    /// The value is stored so it can be retrieved later when consensus decides.
+    /// This enables non-proposer nodes to process the decision correctly.
+    async fn store_received_value(&self, value_id: ConsensusValueId, value: ConsensusValue);
 }
 
 /// Handler for processing decided values.
@@ -400,6 +407,15 @@ impl Actor for CipherBftHost {
                                 proposer = %proposer,
                                 "Assembled complete proposal from single part"
                             );
+
+                            // Store the received value so it can be found when consensus decides.
+                            // Without this, non-proposer nodes can't process decisions because
+                            // get_value_by_id() would return None.
+                            let value_id =
+                                informalsystems_malachitebft_core_types::Value::id(&value);
+                            self.value_builder
+                                .store_received_value(value_id, value.clone())
+                                .await;
 
                             // Build ProposedValue for the received proposal
                             // Use the actual valid_round from the proposal (Round::Nil for fresh
@@ -989,6 +1005,15 @@ impl ValueBuilder for ChannelValueBuilder {
         let cuts = self.cuts_by_value_id.read().await;
         cuts.get(value_id)
             .map(|cut| ConsensusValue::from(cut.clone()))
+    }
+
+    async fn store_received_value(&self, value_id: ConsensusValueId, value: ConsensusValue) {
+        let cut = value.0;
+        debug!(
+            "ChannelValueBuilder: Storing received value for height {}, value_id={:?}",
+            cut.height, value_id
+        );
+        self.cuts_by_value_id.write().await.insert(value_id, cut);
     }
 }
 
