@@ -11,6 +11,7 @@ pub mod genesis_bootstrap;
 pub mod key_cli;
 pub mod network;
 pub mod node;
+pub mod supervisor;
 pub mod util;
 
 pub use client_config::ClientConfig;
@@ -26,3 +27,4 @@ pub use genesis_bootstrap::{
 };
 pub use key_cli::{execute_keys_command, KeysCommand};
 pub use node::Node;
+pub use supervisor::{NodeSupervisor, ShutdownError};

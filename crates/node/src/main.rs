@@ -8,8 +8,8 @@ use cipherbft_crypto::{BlsKeyPair, BlsSecretKey, Ed25519KeyPair, Ed25519SecretKe
 use cipherd::key_cli::KeyringBackendArg;
 use cipherd::{
     execute_keys_command, generate_local_configs, GenesisGenerator, GenesisGeneratorConfig,
-    GenesisLoader, KeysCommand, Node, NodeConfig, ValidatorKeyFile, CIPHERD_HOME_ENV,
-    DEFAULT_HOME_DIR,
+    GenesisLoader, KeysCommand, Node, NodeConfig, NodeSupervisor, ValidatorKeyFile,
+    CIPHERD_HOME_ENV, DEFAULT_HOME_DIR,
 };
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -720,7 +720,24 @@ async fn cmd_start(
     let mut node = Node::new(config, bls_keypair, ed25519_keypair)?;
     node.bootstrap_validators_from_genesis(&genesis)?;
 
-    node.run().await?;
+    // Create a supervisor for structured task management and graceful shutdown
+    let supervisor = NodeSupervisor::new();
+
+    // Set up signal handling for graceful shutdown
+    let shutdown_supervisor = supervisor.clone();
+    tokio::spawn(async move {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::error!("Failed to listen for Ctrl+C: {}", e);
+            return;
+        }
+        info!("Received Ctrl+C, initiating graceful shutdown...");
+        if let Err(e) = shutdown_supervisor.shutdown().await {
+            tracing::warn!("Shutdown warning: {}", e);
+        }
+    });
+
+    // Run node with the supervisor for coordinated task management
+    node.run_with_supervisor(supervisor).await?;
 
     Ok(())
 }
@@ -908,11 +925,13 @@ async fn cmd_testnet_start(num_validators: usize, duration: u64) -> Result<()> {
         })
         .collect();
 
-    // Create and start nodes
-    let mut handles = Vec::new();
+    // Create a shared supervisor for coordinated task management across all nodes
+    // This ensures graceful shutdown propagates to all validators simultaneously
+    let supervisor = NodeSupervisor::new();
 
+    // Create and start nodes under the shared supervisor
     for tc in test_configs {
-        let validator_id = tc
+        let _validator_id = tc
             .config
             .validator_id
             .expect("test config should have validator_id");
@@ -924,33 +943,56 @@ async fn cmd_testnet_start(num_validators: usize, duration: u64) -> Result<()> {
             node.add_validator(*vid, bls_pubkey.clone(), ed25519_pubkey.clone());
         }
 
-        let handle = tokio::spawn(async move {
-            if let Err(e) = node.run().await {
-                tracing::error!("Node {:?} error: {}", validator_id, e);
-            }
-        });
-
-        handles.push(handle);
+        // Spawn each node under the shared supervisor for coordinated lifecycle management
+        let node_supervisor = supervisor.clone();
+        supervisor.spawn(
+            // Note: Using a static string for task name as required by spawn()
+            "validator-node",
+            async move {
+                node.run_with_supervisor(node_supervisor).await?;
+                Ok(())
+            },
+        );
 
         // Stagger node startup slightly
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 
-    info!("All {} nodes started", num_validators);
+    info!(
+        "All {} nodes started under shared supervisor",
+        num_validators
+    );
 
-    // Run for specified duration or until Ctrl+C
-    if duration > 0 {
+    // Wait for shutdown trigger (duration or Ctrl+C)
+    let shutdown_reason = if duration > 0 {
         info!("Running for {} seconds...", duration);
-        tokio::time::sleep(tokio::time::Duration::from_secs(duration)).await;
-        info!("Duration elapsed, shutting down...");
+        tokio::select! {
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(duration)) => {
+                "duration elapsed"
+            }
+            _ = tokio::signal::ctrl_c() => {
+                "Ctrl+C received"
+            }
+        }
     } else {
         info!("Press Ctrl+C to stop...");
         tokio::signal::ctrl_c().await?;
-        info!("Received shutdown signal...");
+        "Ctrl+C received"
+    };
+
+    info!("Shutdown triggered: {}", shutdown_reason);
+
+    // Initiate graceful shutdown through the supervisor
+    // This propagates cancellation to all nodes in the correct order
+    info!(
+        "Initiating coordinated shutdown of all {} validators...",
+        num_validators
+    );
+    if let Err(e) = supervisor.shutdown().await {
+        tracing::warn!("Shutdown warning: {}", e);
     }
 
-    // All handles will be dropped, tasks will be cancelled
-    info!("Testnet stopped");
+    info!("Testnet stopped gracefully");
 
     Ok(())
 }
