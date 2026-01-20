@@ -921,7 +921,7 @@ impl ValueBuilder for ChannelValueBuilder {
 
             // Log progress periodically (every 5 seconds)
             let elapsed = start.elapsed();
-            if elapsed.as_secs() > 0 && elapsed.as_secs() % 5 == 0 {
+            if elapsed.as_secs() > 0 && elapsed.as_secs().is_multiple_of(5) {
                 let available = self.available_heights().await;
                 warn!(
                     "ChannelValueBuilder: Still waiting for cut at height {} ({:?} elapsed). \
