@@ -371,16 +371,16 @@ impl TcpWorkerNetwork {
                 listen_addr.port()
             )
         })?;
-        info!(
-            "Worker {} listening on {}",
-            self.worker_id, listen_addr
-        );
+        info!("Worker {} listening on {}", self.worker_id, listen_addr);
 
         tokio::spawn(async move {
             loop {
                 match listener.accept().await {
                     Ok((stream, addr)) => {
-                        debug!("Worker {} accepted connection from {}", self.worker_id, addr);
+                        debug!(
+                            "Worker {} accepted connection from {}",
+                            self.worker_id, addr
+                        );
                         let self_clone = Arc::clone(&self);
                         tokio::spawn(async move {
                             if let Err(e) = self_clone.handle_connection(stream).await {
