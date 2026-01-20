@@ -7,7 +7,7 @@ use crate::{
     database::{CipherBftDatabase, Provider},
     error::{ExecutionError, Result},
     evm::CipherBftEvmConfig,
-    precompiles::StakingPrecompile,
+    precompiles::{GenesisValidatorData, StakingPrecompile},
     receipts::{
         compute_logs_bloom_from_transactions, compute_receipts_root, compute_transactions_root,
     },
@@ -135,7 +135,33 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
     ///
     /// # Returns
     /// * New ExecutionEngine instance
+    ///
+    /// # Note
+    /// This creates an execution engine with an empty staking state.
+    /// For production use, prefer `with_genesis_validators` to initialize
+    /// the staking state from the genesis file.
     pub fn new(chain_config: ChainConfig, provider: P) -> Self {
+        Self::with_genesis_validators(chain_config, provider, vec![])
+    }
+
+    /// Create a new execution engine with genesis validators.
+    ///
+    /// This is the primary constructor for production use. It initializes the
+    /// staking precompile with the validator set from the genesis file, ensuring
+    /// the validator state is correctly populated on node startup.
+    ///
+    /// # Arguments
+    /// * `chain_config` - Chain configuration parameters
+    /// * `provider` - Storage provider (factory pattern)
+    /// * `genesis_validators` - List of validators from the genesis file
+    ///
+    /// # Returns
+    /// * New ExecutionEngine instance with initialized staking state
+    pub fn with_genesis_validators(
+        chain_config: ChainConfig,
+        provider: P,
+        genesis_validators: Vec<GenesisValidatorData>,
+    ) -> Self {
         let evm_config = CipherBftEvmConfig::new(
             chain_config.chain_id,
             SpecId::CANCUN,
@@ -146,8 +172,17 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
         let database = CipherBftDatabase::new(provider.clone());
         let state_manager = StateManager::new(provider);
 
-        // Create staking precompile instance (shared across all EVM instances)
-        let staking_precompile = Arc::new(StakingPrecompile::new());
+        // Create staking precompile instance with genesis validators
+        // This ensures validator state is correctly initialized on node startup
+        let staking_precompile = if genesis_validators.is_empty() {
+            Arc::new(StakingPrecompile::new())
+        } else {
+            tracing::info!(
+                validator_count = genesis_validators.len(),
+                "Initializing staking precompile from genesis validators"
+            );
+            Arc::new(StakingPrecompile::from_genesis_validators(genesis_validators))
+        };
 
         Self {
             chain_config,

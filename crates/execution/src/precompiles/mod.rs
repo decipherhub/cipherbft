@@ -8,4 +8,4 @@ pub mod provider;
 pub mod staking;
 
 pub use provider::{CipherBftPrecompileProvider, STAKING_PRECOMPILE_ADDRESS};
-pub use staking::{StakingPrecompile, StakingState, ValidatorInfo};
+pub use staking::{GenesisValidatorData, StakingPrecompile, StakingState, ValidatorInfo};

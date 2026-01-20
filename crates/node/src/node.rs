@@ -257,12 +257,47 @@ impl Node {
     /// Enable execution layer integration
     ///
     /// Must be called before `run()` to enable Cut execution.
+    ///
+    /// # Note
+    /// This creates an execution layer with an empty staking state.
+    /// For production use, prefer `with_execution_layer_from_genesis` to
+    /// initialize the staking state from the genesis file.
     pub fn with_execution_layer(mut self) -> Result<Self> {
         use cipherbft_storage::{DclStore, InMemoryStore};
         let chain_config = ChainConfig::default();
         let dcl_store: std::sync::Arc<dyn DclStore> = std::sync::Arc::new(InMemoryStore::new());
         let bridge = ExecutionBridge::new(chain_config, dcl_store)?;
         self.execution_bridge = Some(Arc::new(bridge));
+        Ok(self)
+    }
+
+    /// Enable execution layer integration with genesis validators.
+    ///
+    /// This is the preferred method for production use. It initializes the
+    /// staking precompile with the validator set from the genesis file,
+    /// ensuring validators are correctly registered on node startup.
+    ///
+    /// # Arguments
+    ///
+    /// * `genesis` - Validated genesis configuration
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let genesis = GenesisLoader::load_and_validate(path)?;
+    /// let node = Node::new(config, bls_keypair, ed25519_keypair)?
+    ///     .with_execution_layer_from_genesis(&genesis)?;
+    /// ```
+    pub fn with_execution_layer_from_genesis(mut self, genesis: &Genesis) -> Result<Self> {
+        use cipherbft_storage::{DclStore, InMemoryStore};
+        let chain_config = ChainConfig::default();
+        let dcl_store: std::sync::Arc<dyn DclStore> = std::sync::Arc::new(InMemoryStore::new());
+        let bridge = ExecutionBridge::from_genesis(chain_config, dcl_store, genesis)?;
+        self.execution_bridge = Some(Arc::new(bridge));
+        info!(
+            "Execution layer initialized with {} validators from genesis",
+            genesis.validator_count()
+        );
         Ok(self)
     }
 
