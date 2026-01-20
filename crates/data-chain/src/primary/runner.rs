@@ -11,6 +11,7 @@ use crate::attestation::{AggregatedAttestation, Attestation};
 use crate::batch::BatchDigest;
 use crate::car::Car;
 use crate::cut::Cut;
+use crate::error::DclError;
 use crate::messages::{DclMessage, PrimaryToWorker, WorkerToPrimary};
 use crate::primary::attestation_collector::AttestationCollector;
 use crate::primary::config::PrimaryConfig;
@@ -459,7 +460,37 @@ impl Primary {
 
             DclMessage::CarResponse(car_opt) => {
                 if let Some(car) = car_opt {
-                    self.handle_received_car(peer, car).await;
+                    debug!(
+                        from = %peer,
+                        proposer = %car.proposer,
+                        position = car.position,
+                        "Received CarResponse for gap recovery"
+                    );
+
+                    // Clear the pending request tracker
+                    self.state.clear_car_request(&car.proposer, car.position);
+
+                    // Process the missing Car first
+                    self.handle_received_car(peer, car.clone()).await;
+
+                    // After processing, check if any queued Cars are now ready
+                    // This handles the case where we had position 2 queued and just received position 1
+                    let ready_cars = self.state.get_cars_ready_after_gap_filled(&car.proposer);
+                    for ready_car in ready_cars {
+                        debug!(
+                            proposer = %ready_car.proposer,
+                            position = ready_car.position,
+                            "Processing queued Car after gap filled"
+                        );
+                        // Process recursively - might trigger more attestations or gap recoveries
+                        self.handle_received_car(ready_car.proposer, ready_car)
+                            .await;
+                    }
+                } else {
+                    debug!(
+                        from = %peer,
+                        "Received empty CarResponse - peer doesn't have the requested Car"
+                    );
                 }
             }
 
@@ -563,6 +594,49 @@ impl Primary {
                     position = car.position,
                     "Car valid but no attestation generated"
                 );
+            }
+
+            Err(DclError::PositionGap {
+                validator,
+                expected,
+                actual,
+            }) => {
+                // Position gap detected - the Car arrived out of order
+                // We need to request the missing predecessor(s) and queue this Car
+                debug!(
+                    from = %from,
+                    proposer = %validator,
+                    expected,
+                    actual,
+                    "Position gap detected, initiating gap recovery"
+                );
+
+                // Queue the out-of-order Car for later processing
+                if !self.state.is_awaiting_gap_sync(&validator, actual) {
+                    self.state.queue_car_awaiting_gap(car.clone(), expected);
+                }
+
+                // Request missing Cars (all positions from expected to actual-1)
+                let missing_positions = self.state.get_missing_positions(&validator, actual);
+                for pos in missing_positions {
+                    if !self.state.is_car_request_pending(&validator, pos) {
+                        debug!(
+                            validator = %validator,
+                            position = pos,
+                            "Sending CarRequest for missing position"
+                        );
+
+                        // Track the pending request
+                        self.state.track_car_request(validator, pos);
+
+                        // Send CarRequest to all peers (one of them should have it)
+                        let request = DclMessage::CarRequest {
+                            validator,
+                            position: pos,
+                        };
+                        self.network.broadcast(&request).await;
+                    }
+                }
             }
 
             Err(e) => {
