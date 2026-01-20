@@ -24,6 +24,7 @@ alloy-primitives = { version = "1", features = ["serde"] }
 
 # Async runtime
 tokio = { workspace = true, features = ["full", "signal"] }
+tokio-util = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
 

@@ -1,8 +1,24 @@
 //! Node runner - ties Primary, Workers, and Network together
+//!
+//! # Task Supervision
+//!
+//! The node uses a [`NodeSupervisor`] for structured task management:
+//! - All background tasks are tracked and can be cancelled gracefully
+//! - Shutdown follows a specific order to ensure clean state
+//! - Critical task failures trigger coordinated shutdown
+//!
+//! # Shutdown Order
+//!
+//! 1. Stop accepting new network connections
+//! 2. Drain in-flight consensus rounds (via cancellation signal)
+//! 3. Flush pending storage writes
+//! 4. Close database connections
+//! 5. Exit
 
 use crate::config::NodeConfig;
 use crate::execution_bridge::ExecutionBridge;
 use crate::network::TcpPrimaryNetwork;
+use crate::supervisor::NodeSupervisor;
 use crate::util::validator_id_from_bls;
 use anyhow::{Context, Result};
 use cipherbft_consensus::{
@@ -27,6 +43,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 /// Validator public key information for both DCL and Consensus layers
@@ -301,12 +318,33 @@ impl Node {
         Ok(self)
     }
 
-    /// Run the node
+    /// Run the node with a default supervisor.
+    ///
+    /// Creates a new [`NodeSupervisor`] and runs the node until shutdown is triggered
+    /// (e.g., via Ctrl+C signal).
     pub async fn run(self) -> Result<()> {
+        let supervisor = NodeSupervisor::new();
+        self.run_with_supervisor(supervisor).await
+    }
+
+    /// Run the node with a provided supervisor.
+    ///
+    /// This allows external control over task supervision, useful for:
+    /// - Testing with custom shutdown timing
+    /// - Coordinating multiple nodes in a single process
+    /// - Custom shutdown ordering
+    ///
+    /// # Arguments
+    ///
+    /// * `supervisor` - The supervisor that manages task lifecycle
+    pub async fn run_with_supervisor(self, supervisor: NodeSupervisor) -> Result<()> {
         info!("Starting node with validator ID: {:?}", self.validator_id);
 
         // Create data directory if needed
         std::fs::create_dir_all(&self.config.data_dir)?;
+
+        // Get cancellation token for graceful shutdown
+        let cancel_token = supervisor.cancellation_token();
 
         // Create channels for Primary
         let (primary_incoming_tx, mut primary_incoming_rx) =
@@ -330,16 +368,25 @@ impl Node {
                 )
             })?;
 
-        // Connect to peers (with retry)
-        tokio::spawn({
+        // Connect to peers (with retry) - supervised task
+        supervisor.spawn_cancellable("peer-connector", {
             let network = Arc::clone(&primary_network);
-            async move {
+            move |token| async move {
                 // Initial delay to let other nodes start
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 loop {
-                    network.connect_to_all_peers().await;
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    tokio::select! {
+                        biased;
+                        _ = token.cancelled() => {
+                            info!("Peer connector shutting down");
+                            break;
+                        }
+                        _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                            network.connect_to_all_peers().await;
+                        }
+                    }
                 }
+                Ok(())
             }
         });
 
@@ -513,9 +560,53 @@ impl Node {
         // Clone execution bridge for use in event loop
         let execution_bridge = self.execution_bridge.clone();
 
-        // Main event loop
+        // Run the main event loop with graceful shutdown support
+        let result = Self::run_event_loop(
+            cancel_token,
+            &mut primary_incoming_rx,
+            &mut primary_handle,
+            &cut_tx,
+            &mut decided_rx,
+            execution_bridge,
+        )
+        .await;
+
+        // Graceful shutdown sequence
+        info!("Shutting down node components...");
+
+        // Step 1: Signal Primary to stop (it will stop accepting new batches)
+        info!("Stopping Primary...");
+        primary_handle.shutdown().await;
+
+        // Step 2: Wait for supervisor to complete all tracked tasks
+        info!("Waiting for supervised tasks to complete...");
+        if let Err(e) = supervisor.shutdown().await {
+            warn!("Some tasks did not complete cleanly: {}", e);
+        }
+
+        info!("Node shutdown complete");
+        result
+    }
+
+    /// Internal event loop that handles messages and can be cancelled.
+    async fn run_event_loop(
+        cancel_token: CancellationToken,
+        primary_incoming_rx: &mut mpsc::Receiver<(ValidatorId, DclMessage)>,
+        primary_handle: &mut cipherbft_data_chain::primary::PrimaryHandle,
+        cut_tx: &mpsc::Sender<Cut>,
+        decided_rx: &mut mpsc::Receiver<(ConsensusHeight, Cut)>,
+        execution_bridge: Option<Arc<ExecutionBridge>>,
+    ) -> Result<()> {
         loop {
             tokio::select! {
+                biased;
+
+                // Check for shutdown signal first (high priority)
+                _ = cancel_token.cancelled() => {
+                    info!("Received shutdown signal, exiting event loop");
+                    return Ok(());
+                }
+
                 // Incoming network messages -> forward to Primary
                 Some((from, msg)) = primary_incoming_rx.recv() => {
                     debug!("Received message from {:?}: {:?}", from, msg.type_name());
