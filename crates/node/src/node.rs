@@ -395,11 +395,19 @@ impl Node {
         // Note: For EVM execution layer, use numeric chain ID 84530001
         let chain_id = "cipherbft-testnet-1";
 
+        // Look up our own voting power from the validator set (set during bootstrap_validators_from_genesis)
+        // Fall back to 100 if not found (e.g., if bootstrap wasn't called)
+        let our_voting_power = self
+            .validators
+            .get(&self.validator_id)
+            .map(|info| info.voting_power)
+            .unwrap_or(100);
+
         // Start with ourselves
         let mut consensus_validators = vec![ConsensusValidator::new(
             self.validator_id,
             ed25519_pubkey,
-            100, // voting power
+            our_voting_power,
         )];
 
         // Add all other validators from the known validator set
