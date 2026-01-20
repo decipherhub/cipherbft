@@ -9,7 +9,7 @@
 //!
 //! Based on ADR-009: Staking Precompile
 
-use alloy_primitives::{Address, Bytes, U256};
+use alloy_primitives::{address, Address, Bytes, U256};
 use alloy_sol_types::sol;
 use parking_lot::RwLock;
 use revm::precompile::{PrecompileError, PrecompileOutput, PrecompileResult};
@@ -20,8 +20,13 @@ pub const MIN_VALIDATOR_STAKE: u128 = 1_000_000_000_000_000_000;
 
 /// System address allowed to call slash function.
 ///
-/// In production, this should be the consensus layer's system account.
-pub const SYSTEM_ADDRESS: Address = Address::ZERO;
+/// This is the consensus layer's system account used for privileged operations
+/// like slashing validators. Using Address::ZERO is a security vulnerability
+/// because it's the null/burn address that could be accidentally matched.
+///
+/// We use 0xfffffffffffffffffffffffffffffffffffffffe which follows the Ethereum
+/// convention for system addresses (similar to the beacon chain deposit contract).
+pub const SYSTEM_ADDRESS: Address = address!("fffffffffffffffffffffffffffffffffffffffe");
 
 /// Gas costs for staking operations.
 pub mod gas {
