@@ -94,6 +94,16 @@ pub trait ValueBuilder: Send + Sync + 'static {
         round: ConsensusRound,
         value_id: ConsensusValueId,
     ) -> Result<(), ConsensusError>;
+
+    /// Get a value by its ID.
+    ///
+    /// Called when consensus decides on a value and we need to look up
+    /// the actual value content from the value_id in the commit certificate.
+    ///
+    /// # Returns
+    ///
+    /// The `ConsensusValue` if found, or `None` if the value is not in the cache.
+    async fn get_value_by_id(&self, value_id: &ConsensusValueId) -> Option<ConsensusValue>;
 }
 
 /// Handler for processing decided values.
@@ -468,7 +478,7 @@ impl Actor for CipherBftHost {
             } => {
                 let height = certificate.height;
                 let round = certificate.round;
-                let _value_id = certificate.value_id.clone();
+                let value_id = certificate.value_id.clone();
 
                 info!(
                     parent: &self.span,
@@ -477,6 +487,32 @@ impl Actor for CipherBftHost {
                     epoch = self.validator_set_manager.config().epoch_for_height(height),
                     "Consensus decided on value"
                 );
+
+                // Look up the actual value from value_id and call decision handler
+                match self.value_builder.get_value_by_id(&value_id).await {
+                    Some(value) => {
+                        if let Err(e) = self
+                            .decision_handler
+                            .on_decided(height, round, value, certificate.clone())
+                            .await
+                        {
+                            error!(
+                                parent: &self.span,
+                                height = height.0,
+                                error = %e,
+                                "Failed to process decided value"
+                            );
+                        }
+                    }
+                    None => {
+                        error!(
+                            parent: &self.span,
+                            height = height.0,
+                            value_id = ?value_id,
+                            "Could not find decided value by value_id - decision will not be processed"
+                        );
+                    }
+                }
 
                 // Check for epoch transition
                 let _epoch_transition = match self.on_block_committed(height) {
@@ -838,6 +874,12 @@ impl ValueBuilder for ChannelValueBuilder {
     ) -> Result<(), ConsensusError> {
         // No-op for backward compatibility
         Ok(())
+    }
+
+    async fn get_value_by_id(&self, value_id: &ConsensusValueId) -> Option<ConsensusValue> {
+        let cuts = self.cuts_by_value_id.read().await;
+        cuts.get(value_id)
+            .map(|cut| ConsensusValue::from(cut.clone()))
     }
 }
 
