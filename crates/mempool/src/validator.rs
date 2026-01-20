@@ -145,10 +145,7 @@ impl<V: TransactionValidator> CipherBftValidator<V> {
     /// Set the execution layer validator.
     ///
     /// This allows adding execution validation after construction.
-    pub fn with_execution_validator(
-        mut self,
-        validator: Arc<dyn ExecutionLayerValidator>,
-    ) -> Self {
+    pub fn with_execution_validator(mut self, validator: Arc<dyn ExecutionLayerValidator>) -> Self {
         self.execution_validator = Some(validator);
         self
     }
@@ -418,8 +415,9 @@ mod tests {
     async fn test_reth_fails_before_execution_layer() {
         // Use wrong chain ID so Reth validation fails
         let tx = build_test_pooled_tx(MAINNET.chain.id());
-        let validator = build_test_validator(2, &tx) // Wrong chain ID
-            .with_execution_validator(Arc::new(AlwaysValidExecutionValidator));
+        let validator =
+            build_test_validator(2, &tx) // Wrong chain ID
+                .with_execution_validator(Arc::new(AlwaysValidExecutionValidator));
 
         let outcome = validator
             .validate_transaction(TransactionOrigin::External, tx)
