@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use informalsystems_malachitebft_app::streaming::StreamContent;
 use informalsystems_malachitebft_app::types::ProposedValue;
 use informalsystems_malachitebft_core_consensus::LocallyProposedValue;
-use informalsystems_malachitebft_core_types::{CommitCertificate, Round, Validity};
+use informalsystems_malachitebft_core_types::{CommitCertificate, Validity};
 use informalsystems_malachitebft_engine::host::{HostMsg, HostRef, Next};
 use informalsystems_malachitebft_sync::RawDecidedValue;
 use ractor::{async_trait as ractor_async_trait, Actor, ActorProcessingErr, ActorRef};
@@ -387,6 +387,7 @@ impl Actor for CipherBftHost {
                         if proposal_part.first && proposal_part.last {
                             let height = proposal_part.height;
                             let round = proposal_part.round;
+                            let valid_round = proposal_part.valid_round;
                             let proposer = proposal_part.proposer;
                             let value = ConsensusValue(proposal_part.cut);
 
@@ -395,15 +396,18 @@ impl Actor for CipherBftHost {
                                 from = %from,
                                 height = height.0,
                                 round = %round,
+                                valid_round = %valid_round,
                                 proposer = %proposer,
                                 "Assembled complete proposal from single part"
                             );
 
                             // Build ProposedValue for the received proposal
+                            // Use the actual valid_round from the proposal (Round::Nil for fresh
+                            // proposals, or the POL round for re-proposals)
                             let proposed_value = ProposedValue {
                                 height,
                                 round,
-                                valid_round: Round::Nil,
+                                valid_round,
                                 proposer,
                                 value,
                                 validity: Validity::Valid,
@@ -790,16 +794,49 @@ impl ChannelValueBuilder {
     }
 
     /// Store a cut for consensus requests.
+    ///
+    /// The cut is stored by its consensus height and can be retrieved by
+    /// `build_value()` when consensus requests a proposal for that height.
     pub async fn store_cut(&self, height: ConsensusHeight, cut: Cut) {
+        // Log the cut being stored with diagnostic info
+        let cut_dcl_height = cut.height;
+
+        // Check for height mismatch between consensus height and DCL cut height
+        if height.0 != cut_dcl_height {
+            warn!(
+                "ChannelValueBuilder: Height mismatch - storing cut at consensus height {} \
+                 but cut's DCL height is {}. This may indicate DCL/consensus synchronization issues.",
+                height.0, cut_dcl_height
+            );
+        }
+
         debug!(
-            "ChannelValueBuilder: Storing Cut for height {} with {} cars",
-            height,
+            "ChannelValueBuilder: Storing Cut for consensus height {} (DCL height: {}) with {} cars",
+            height.0,
+            cut_dcl_height,
             cut.cars.len()
         );
 
         {
             let mut pending = self.pending_cuts.write().await;
+
+            // Log if we're overwriting an existing cut (shouldn't happen normally)
+            if pending.contains_key(&height) {
+                warn!(
+                    "ChannelValueBuilder: Overwriting existing cut at height {}. \
+                     This may indicate duplicate cut production.",
+                    height.0
+                );
+            }
+
             pending.insert(height, cut.clone());
+
+            // Log available heights for debugging
+            let available: Vec<u64> = pending.keys().map(|h| h.0).collect();
+            trace!(
+                "ChannelValueBuilder: Pending cuts available at heights: {:?}",
+                available
+            );
         }
 
         // Clean up old pending cuts (keep only last N heights based on config)
@@ -809,11 +846,29 @@ impl ChannelValueBuilder {
             let heights: Vec<_> = pending.keys().cloned().collect();
             let max_height = heights.iter().max().copied().unwrap_or(height);
             let cutoff = max_height.0.saturating_sub(retention as u64);
+            let removed_count = pending.len();
             pending.retain(|h, _| h.0 >= cutoff);
+            let removed = removed_count - pending.len();
+            if removed > 0 {
+                debug!(
+                    "ChannelValueBuilder: Cleaned up {} old cuts, retaining heights >= {}",
+                    removed, cutoff
+                );
+            }
         }
 
         // Notify any waiters
         self.cut_notify.notify_waiters();
+    }
+
+    /// Get a snapshot of available pending cut heights.
+    ///
+    /// Useful for debugging height synchronization issues.
+    pub async fn available_heights(&self) -> Vec<u64> {
+        let pending = self.pending_cuts.read().await;
+        let mut heights: Vec<u64> = pending.keys().map(|h| h.0).collect();
+        heights.sort_unstable();
+        heights
     }
 }
 
@@ -827,6 +882,7 @@ impl ValueBuilder for ChannelValueBuilder {
         // Wait for a cut at this height with timeout
         let timeout = Duration::from_secs(30);
         let start = std::time::Instant::now();
+        let mut logged_waiting = false;
 
         loop {
             // Check if we have a cut
@@ -835,6 +891,11 @@ impl ValueBuilder for ChannelValueBuilder {
                 if let Some(cut) = pending.remove(&height) {
                     let value = ConsensusValue::from(cut.clone());
                     let value_id = informalsystems_malachitebft_core_types::Value::id(&value);
+
+                    debug!(
+                        "ChannelValueBuilder: Found cut for height {}, building proposal",
+                        height.0
+                    );
 
                     // Store by value_id for later lookup
                     self.cuts_by_value_id
@@ -848,14 +909,61 @@ impl ValueBuilder for ChannelValueBuilder {
                         value,
                     ));
                 }
+
+                // Log available heights on first wait (helpful for debugging)
+                if !logged_waiting {
+                    let available: Vec<u64> = pending.keys().map(|h| h.0).collect();
+                    if available.is_empty() {
+                        debug!(
+                            "ChannelValueBuilder: Waiting for cut at height {}. \
+                             No cuts currently available.",
+                            height.0
+                        );
+                    } else {
+                        debug!(
+                            "ChannelValueBuilder: Waiting for cut at height {}. \
+                             Available heights: {:?}",
+                            height.0, available
+                        );
+                    }
+                    logged_waiting = true;
+                }
             }
 
             // Check timeout
             if start.elapsed() > timeout {
+                // Provide detailed error message for debugging
+                let available = self.available_heights().await;
+                let closest = if available.is_empty() {
+                    "none".to_string()
+                } else {
+                    // Find the closest available height
+                    let closest_height = available
+                        .iter()
+                        .min_by_key(|h| (**h as i64 - height.0 as i64).abs())
+                        .copied()
+                        .unwrap_or(0);
+                    format!("{} (available: {:?})", closest_height, available)
+                };
+
                 return Err(ConsensusError::Other(format!(
-                    "Timeout: No cut available for height {} after {:?}",
-                    height, timeout
+                    "Timeout waiting for cut at height {} after {:?}. \
+                     Closest available height: {}. \
+                     This indicates DCL may be behind consensus or cuts are not being produced. \
+                     Check DCL primary logs for batch/attestation activity.",
+                    height.0, timeout, closest
                 )));
+            }
+
+            // Log progress periodically (every 5 seconds)
+            let elapsed = start.elapsed();
+            if elapsed.as_secs() > 0 && elapsed.as_secs().is_multiple_of(5) {
+                let available = self.available_heights().await;
+                warn!(
+                    "ChannelValueBuilder: Still waiting for cut at height {} ({:?} elapsed). \
+                     Available heights: {:?}",
+                    height.0, elapsed, available
+                );
             }
 
             // Wait for notification or timeout
