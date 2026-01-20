@@ -153,7 +153,55 @@ impl Default for StakingState {
     }
 }
 
+/// Genesis validator data for initializing staking state.
+///
+/// This struct is used to pass validator information from the genesis file
+/// to initialize the staking precompile state on node startup.
+#[derive(Debug, Clone)]
+pub struct GenesisValidatorData {
+    /// Validator's EVM address.
+    pub address: Address,
+    /// BLS12-381 public key (48 bytes).
+    pub bls_pubkey: [u8; 48],
+    /// Staked amount in wei.
+    pub stake: U256,
+}
+
 impl StakingState {
+    /// Create staking state from genesis validators.
+    ///
+    /// This method initializes the staking state with validators from the genesis file,
+    /// ensuring the validator set is persisted across node restarts.
+    ///
+    /// # Arguments
+    /// * `validators` - List of genesis validators with their addresses, BLS keys, and stakes
+    ///
+    /// # Returns
+    /// * New StakingState with all genesis validators registered
+    pub fn from_genesis_validators(validators: Vec<GenesisValidatorData>) -> Self {
+        let mut state = Self::default();
+
+        for validator_data in validators {
+            let bls_pubkey = BlsPublicKey(validator_data.bls_pubkey);
+            let validator = ValidatorInfo {
+                address: validator_data.address,
+                bls_pubkey,
+                stake: validator_data.stake,
+                registered_at: 0, // Genesis block
+                pending_exit: None,
+            };
+            state.add_validator(validator);
+        }
+
+        tracing::info!(
+            validator_count = state.validators.len(),
+            total_stake = %state.total_stake,
+            "Initialized staking state from genesis"
+        );
+
+        state
+    }
+
     /// Check if an address is a registered validator.
     pub fn is_validator(&self, address: &Address) -> bool {
         self.validators.contains_key(address)
@@ -230,6 +278,33 @@ impl StakingPrecompile {
 
     /// Create with existing state (for testing).
     pub fn with_state(state: StakingState) -> Self {
+        Self {
+            state: Arc::new(RwLock::new(state)),
+        }
+    }
+
+    /// Create from genesis validators.
+    ///
+    /// This is the primary constructor for production use. It initializes the
+    /// staking precompile with the validator set from the genesis file, ensuring
+    /// the validator state is correctly populated on node startup.
+    ///
+    /// # Arguments
+    /// * `validators` - List of genesis validators
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let validators = vec![
+    ///     GenesisValidatorData {
+    ///         address: Address::from_slice(&[1u8; 20]),
+    ///         bls_pubkey: [0u8; 48],
+    ///         stake: U256::from(32_000_000_000_000_000_000u128),
+    ///     },
+    /// ];
+    /// let precompile = StakingPrecompile::from_genesis_validators(validators);
+    /// ```
+    pub fn from_genesis_validators(validators: Vec<GenesisValidatorData>) -> Self {
+        let state = StakingState::from_genesis_validators(validators);
         Self {
             state: Arc::new(RwLock::new(state)),
         }
@@ -773,5 +848,206 @@ mod tests {
 
         assert_eq!(encoded.len(), 32);
         assert_eq!(U256::from_be_slice(&encoded), value);
+    }
+
+    // ============================================================================
+    // Tests for genesis validator loading (Issue #97 fix)
+    // ============================================================================
+
+    #[test]
+    fn test_staking_state_from_genesis_validators_empty() {
+        // Empty genesis should create empty state
+        let state = StakingState::from_genesis_validators(vec![]);
+
+        assert_eq!(state.validators.len(), 0);
+        assert_eq!(state.total_stake, U256::ZERO);
+        assert_eq!(state.epoch, 0);
+    }
+
+    #[test]
+    fn test_staking_state_from_genesis_validators_single() {
+        // Single validator from genesis
+        let addr = Address::with_last_byte(100);
+        let stake = U256::from(32_000_000_000_000_000_000u128); // 32 ETH
+
+        let validators = vec![GenesisValidatorData {
+            address: addr,
+            bls_pubkey: [42u8; 48],
+            stake,
+        }];
+
+        let state = StakingState::from_genesis_validators(validators);
+
+        assert_eq!(state.validators.len(), 1);
+        assert!(state.is_validator(&addr));
+        assert_eq!(state.get_stake(&addr), stake);
+        assert_eq!(state.total_stake, stake);
+
+        // Check validator details
+        let validator = state.validators.get(&addr).unwrap();
+        assert_eq!(validator.registered_at, 0); // Genesis block
+        assert!(validator.pending_exit.is_none());
+        assert_eq!(validator.bls_pubkey.0, [42u8; 48]);
+    }
+
+    #[test]
+    fn test_staking_state_from_genesis_validators_multiple() {
+        // Multiple validators from genesis
+        let addr1 = Address::with_last_byte(101);
+        let stake1 = U256::from(32_000_000_000_000_000_000u128); // 32 ETH
+
+        let addr2 = Address::with_last_byte(102);
+        let stake2 = U256::from(64_000_000_000_000_000_000u128); // 64 ETH
+
+        let addr3 = Address::with_last_byte(103);
+        let stake3 = U256::from(100_000_000_000_000_000_000u128); // 100 ETH
+
+        let validators = vec![
+            GenesisValidatorData {
+                address: addr1,
+                bls_pubkey: [1u8; 48],
+                stake: stake1,
+            },
+            GenesisValidatorData {
+                address: addr2,
+                bls_pubkey: [2u8; 48],
+                stake: stake2,
+            },
+            GenesisValidatorData {
+                address: addr3,
+                bls_pubkey: [3u8; 48],
+                stake: stake3,
+            },
+        ];
+
+        let state = StakingState::from_genesis_validators(validators);
+
+        assert_eq!(state.validators.len(), 3);
+        assert!(state.is_validator(&addr1));
+        assert!(state.is_validator(&addr2));
+        assert!(state.is_validator(&addr3));
+
+        let expected_total = stake1 + stake2 + stake3;
+        assert_eq!(state.total_stake, expected_total);
+    }
+
+    #[test]
+    fn test_staking_precompile_from_genesis_validators() {
+        // Test StakingPrecompile::from_genesis_validators
+        let addr = Address::with_last_byte(110);
+        let stake = U256::from(50_000_000_000_000_000_000u128); // 50 ETH
+
+        let validators = vec![GenesisValidatorData {
+            address: addr,
+            bls_pubkey: [99u8; 48],
+            stake,
+        }];
+
+        let precompile = StakingPrecompile::from_genesis_validators(validators);
+
+        // Verify state is properly initialized
+        let state = precompile.state.read();
+        assert_eq!(state.validators.len(), 1);
+        assert!(state.is_validator(&addr));
+        assert_eq!(state.get_stake(&addr), stake);
+    }
+
+    #[test]
+    fn test_genesis_validators_can_be_queried_via_precompile() {
+        // Test that genesis validators can be queried via the precompile interface
+        let addr = Address::with_last_byte(120);
+        let stake = U256::from(32_000_000_000_000_000_000u128);
+
+        let validators = vec![GenesisValidatorData {
+            address: addr,
+            bls_pubkey: [77u8; 48],
+            stake,
+        }];
+
+        let precompile = StakingPrecompile::from_genesis_validators(validators);
+
+        // Query stake via getStake() function
+        let mut input = vec![0x7a, 0x76, 0x64, 0x60]; // selector for getStake
+        let mut addr_bytes = [0u8; 32];
+        addr_bytes[12..32].copy_from_slice(addr.as_slice());
+        input.extend_from_slice(&addr_bytes);
+
+        let result = precompile.run(&Bytes::from(input), 100_000, Address::ZERO, U256::ZERO, 1);
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        let returned_stake = U256::from_be_slice(&output.bytes);
+        assert_eq!(returned_stake, stake);
+    }
+
+    #[test]
+    fn test_genesis_validators_appear_in_validator_set() {
+        // Test that genesis validators appear in getValidatorSet()
+        let addr1 = Address::with_last_byte(130);
+        let stake1 = U256::from(32_000_000_000_000_000_000u128);
+
+        let addr2 = Address::with_last_byte(131);
+        let stake2 = U256::from(64_000_000_000_000_000_000u128);
+
+        let validators = vec![
+            GenesisValidatorData {
+                address: addr1,
+                bls_pubkey: [1u8; 48],
+                stake: stake1,
+            },
+            GenesisValidatorData {
+                address: addr2,
+                bls_pubkey: [2u8; 48],
+                stake: stake2,
+            },
+        ];
+
+        let precompile = StakingPrecompile::from_genesis_validators(validators);
+
+        // Query validator set via getValidatorSet() function
+        let input = vec![0xcf, 0x33, 0x12, 0x50]; // selector for getValidatorSet
+
+        let result = precompile.run(&Bytes::from(input), 100_000, Address::ZERO, U256::ZERO, 1);
+
+        assert!(result.is_ok());
+        let output = result.unwrap();
+
+        // Verify gas cost reflects 2 validators
+        let expected_gas = gas::GET_VALIDATOR_SET_BASE + (gas::GET_VALIDATOR_SET_PER_VALIDATOR * 2);
+        assert_eq!(output.gas_used, expected_gas);
+
+        // Output should contain encoded validator set
+        assert!(!output.bytes.is_empty());
+    }
+
+    #[test]
+    fn test_genesis_validator_can_register_additional_stake() {
+        // Test that a genesis validator can add more stake via registerValidator
+        let addr = Address::with_last_byte(140);
+        let initial_stake = U256::from(32_000_000_000_000_000_000u128);
+
+        let validators = vec![GenesisValidatorData {
+            address: addr,
+            bls_pubkey: [88u8; 48],
+            stake: initial_stake,
+        }];
+
+        let precompile = StakingPrecompile::from_genesis_validators(validators);
+
+        // Verify initial state
+        {
+            let state = precompile.state.read();
+            assert_eq!(state.get_stake(&addr), initial_stake);
+        }
+
+        // Try to register again (should fail - already a validator)
+        let mut input = vec![0x60, 0x70, 0x49, 0xd8]; // selector for registerValidator
+        input.extend_from_slice(&[1u8; 32]); // BLS pubkey
+        let additional_stake = U256::from(10_000_000_000_000_000_000u128);
+
+        let result = precompile.run(&Bytes::from(input), 100_000, addr, additional_stake, 1);
+
+        // Should fail because validator is already registered
+        assert!(result.is_err());
     }
 }

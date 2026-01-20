@@ -6,9 +6,11 @@
 use cipherbft_data_chain::worker::TransactionValidator;
 use cipherbft_execution::{
     keccak256, BlockInput, Bytes, Car as ExecutionCar, ChainConfig, Cut as ExecutionCut,
-    ExecutionEngine, ExecutionLayerTrait, ExecutionResult, InMemoryProvider, B256, U256,
+    ExecutionEngine, ExecutionLayerTrait, ExecutionResult, GenesisValidatorData, InMemoryProvider,
+    B256, U256,
 };
 use cipherbft_storage::DclStore;
+use cipherbft_types::genesis::Genesis;
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
 use tokio::sync::RwLock;
@@ -37,9 +39,100 @@ impl ExecutionBridge {
     ///
     /// * `config` - Chain configuration for the execution layer
     /// * `dcl_store` - DCL storage for batch lookups
+    ///
+    /// # Note
+    /// This creates an execution bridge with an empty staking state.
+    /// For production use, prefer `from_genesis` to initialize the staking
+    /// state from the genesis file.
     pub fn new(config: ChainConfig, dcl_store: Arc<dyn DclStore>) -> anyhow::Result<Self> {
         let provider = InMemoryProvider::new();
         let execution = ExecutionEngine::new(config, provider);
+
+        Ok(Self {
+            execution: Arc::new(RwLock::new(execution)),
+            dcl_store,
+            // Genesis block has no parent, so initialize to zero
+            last_block_hash: StdRwLock::new(B256::ZERO),
+        })
+    }
+
+    /// Create a new execution bridge initialized from genesis.
+    ///
+    /// This is the primary constructor for production use. It initializes the
+    /// staking precompile with the validator set from the genesis file, ensuring
+    /// the validator state is correctly populated on node startup.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Chain configuration for the execution layer
+    /// * `dcl_store` - DCL storage for batch lookups
+    /// * `genesis` - Genesis configuration containing validator set
+    ///
+    /// # Returns
+    ///
+    /// A new `ExecutionBridge` with staking state initialized from genesis validators.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let genesis = GenesisLoader::load_and_validate(path)?;
+    /// let bridge = ExecutionBridge::from_genesis(config, dcl_store, &genesis)?;
+    /// ```
+    pub fn from_genesis(
+        config: ChainConfig,
+        dcl_store: Arc<dyn DclStore>,
+        genesis: &Genesis,
+    ) -> anyhow::Result<Self> {
+        // Convert genesis validators to execution layer format
+        let genesis_validators: Vec<GenesisValidatorData> = genesis
+            .cipherbft
+            .validators
+            .iter()
+            .filter_map(|v| {
+                // Parse BLS public key (strip 0x prefix if present)
+                let bls_hex = v.bls_pubkey.trim_start_matches("0x");
+                let bls_bytes = match hex::decode(bls_hex) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        warn!(
+                            address = %v.address,
+                            error = %e,
+                            "Failed to parse BLS public key, skipping validator"
+                        );
+                        return None;
+                    }
+                };
+
+                if bls_bytes.len() != 48 {
+                    warn!(
+                        address = %v.address,
+                        expected = 48,
+                        actual = bls_bytes.len(),
+                        "Invalid BLS public key length, skipping validator"
+                    );
+                    return None;
+                }
+
+                let mut bls_pubkey = [0u8; 48];
+                bls_pubkey.copy_from_slice(&bls_bytes);
+
+                Some(GenesisValidatorData {
+                    address: v.address,
+                    bls_pubkey,
+                    stake: v.staked_amount,
+                })
+            })
+            .collect();
+
+        info!(
+            validator_count = genesis_validators.len(),
+            total_stake = %genesis.total_staked(),
+            "Initializing execution layer from genesis"
+        );
+
+        let provider = InMemoryProvider::new();
+        let execution =
+            ExecutionEngine::with_genesis_validators(config, provider, genesis_validators);
 
         Ok(Self {
             execution: Arc::new(RwLock::new(execution)),

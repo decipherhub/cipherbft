@@ -73,8 +73,8 @@ pub use genesis::{
 };
 pub use mpt::{compute_state_root, compute_state_root_from_entries, compute_storage_root};
 pub use precompiles::{
-    CipherBftPrecompileProvider, StakingPrecompile, StakingState, ValidatorInfo,
-    STAKING_PRECOMPILE_ADDRESS,
+    CipherBftPrecompileProvider, GenesisValidatorData, StakingPrecompile, StakingState,
+    ValidatorInfo, STAKING_PRECOMPILE_ADDRESS,
 };
 pub use receipts::{
     aggregate_bloom, compute_logs_bloom_from_transactions, compute_receipts_root,
