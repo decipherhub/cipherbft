@@ -53,6 +53,9 @@ once_cell = "1.19"
 # Rate limiting
 governor = "0.6"
 
+# Concurrency
+parking_lot = "0.12"
+
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio-test = "0.4"

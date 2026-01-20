@@ -23,6 +23,7 @@ use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_rpc_types_eth::{Block, Filter, Log, Transaction, TransactionReceipt};
 use async_trait::async_trait;
 use cipherbft_execution::database::Provider;
+use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing::{debug, trace};
@@ -47,7 +48,7 @@ pub struct ProviderBasedRpcStorage<P: Provider> {
     /// Latest known block number (updated by consensus).
     latest_block: AtomicU64,
     /// Sync status tracking.
-    sync_state: std::sync::RwLock<SyncStateTracker>,
+    sync_state: RwLock<SyncStateTracker>,
 }
 
 /// Internal sync state tracker.
@@ -70,7 +71,7 @@ impl<P: Provider> ProviderBasedRpcStorage<P> {
             provider,
             chain_id,
             latest_block: AtomicU64::new(0),
-            sync_state: std::sync::RwLock::new(SyncStateTracker::default()),
+            sync_state: RwLock::new(SyncStateTracker::default()),
         }
     }
 
@@ -86,7 +87,7 @@ impl<P: Provider> ProviderBasedRpcStorage<P> {
 
     /// Update sync status (called by sync service).
     pub fn set_syncing(&self, starting: u64, current: u64, highest: u64) {
-        let mut state = self.sync_state.write().expect("sync_state lock poisoned");
+        let mut state = self.sync_state.write();
         state.is_syncing = true;
         state.starting_block = starting;
         state.current_block = current;
@@ -95,7 +96,7 @@ impl<P: Provider> ProviderBasedRpcStorage<P> {
 
     /// Mark sync as complete.
     pub fn set_synced(&self) {
-        let mut state = self.sync_state.write().expect("sync_state lock poisoned");
+        let mut state = self.sync_state.write();
         state.is_syncing = false;
     }
 
@@ -169,7 +170,7 @@ impl<P: Provider + 'static> RpcStorage for ProviderBasedRpcStorage<P> {
 
     async fn sync_status(&self) -> RpcResult<SyncStatus> {
         trace!("ProviderBasedRpcStorage::sync_status");
-        let state = self.sync_state.read().expect("sync_state lock poisoned");
+        let state = self.sync_state.read();
         if state.is_syncing {
             Ok(SyncStatus::Syncing {
                 starting_block: state.starting_block,

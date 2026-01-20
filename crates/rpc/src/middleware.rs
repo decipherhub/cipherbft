@@ -3,8 +3,10 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::num::NonZeroU32;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use parking_lot::RwLock;
 
 use governor::{Quota, RateLimiter};
 use tracing::{debug, info, warn};
@@ -46,12 +48,12 @@ impl IpRateLimiter {
     pub fn check(&self, ip: IpAddr) -> bool {
         // Get or create limiter for this IP
         let limiter = {
-            let limiters = self.limiters.read().expect("RwLock poisoned");
+            let limiters = self.limiters.read();
             if let Some(limiter) = limiters.get(&ip) {
                 Arc::clone(limiter)
             } else {
                 drop(limiters);
-                let mut limiters = self.limiters.write().expect("RwLock poisoned");
+                let mut limiters = self.limiters.write();
                 // Double-check after acquiring write lock
                 if let Some(limiter) = limiters.get(&ip) {
                     Arc::clone(limiter)
@@ -78,7 +80,7 @@ impl IpRateLimiter {
     /// Clean up stale entries (IPs that haven't been seen for a while).
     /// This should be called periodically to prevent memory leaks.
     pub fn cleanup_stale_entries(&self) {
-        let mut limiters = self.limiters.write().expect("RwLock poisoned");
+        let mut limiters = self.limiters.write();
         // Simple cleanup: remove entries with refcount == 1 (only our map holds them)
         limiters.retain(|_, limiter| Arc::strong_count(limiter) > 1);
     }
