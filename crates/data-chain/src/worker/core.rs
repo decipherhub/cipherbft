@@ -496,6 +496,9 @@ impl Worker {
 
                 let hash = batch.hash();
 
+                // Check if this is a new batch (not already stored)
+                let is_new = !self.state.has_batch(&hash);
+
                 // Persist to storage if available
                 if let Some(ref storage) = self.storage {
                     if let Err(e) = storage.put_batch(batch.clone()).await {
@@ -511,11 +514,15 @@ impl Worker {
                 // Store in local memory
                 self.state.store_batch(batch);
 
-                // Mark as synced if we were waiting for it
+                // Mark as synced if we were waiting for it (update synchronizer state)
                 if self.synchronizer.is_syncing(&hash) {
                     self.synchronizer.mark_synced(&hash);
+                }
 
-                    // Notify Primary
+                // Always notify Primary about new batches to mark them as available
+                // This fixes the race condition where batches received via proactive broadcast
+                // were not marked as available, causing Car attestation failures
+                if is_new {
                     let _ = self
                         .to_primary
                         .send(WorkerToPrimary::BatchSynced {
@@ -591,6 +598,9 @@ impl Worker {
                         return;
                     }
 
+                    // Check if this is a new batch (not already stored)
+                    let is_new = !self.state.has_batch(&digest);
+
                     // Persist to storage if available
                     if let Some(ref storage) = self.storage {
                         if let Err(e) = storage.put_batch(batch.clone()).await {
@@ -607,11 +617,13 @@ impl Worker {
                     // Store in local memory
                     self.state.store_batch(batch);
 
-                    // Mark as synced
+                    // Mark as synced if we were waiting for it (update synchronizer state)
                     if self.synchronizer.is_syncing(&digest) {
                         self.synchronizer.mark_synced(&digest);
+                    }
 
-                        // Notify Primary
+                    // Always notify Primary about new batches to mark them as available
+                    if is_new {
                         let _ = self
                             .to_primary
                             .send(WorkerToPrimary::BatchSynced {
