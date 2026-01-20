@@ -79,6 +79,14 @@ pub struct PrimaryHandle {
 }
 
 impl PrimaryHandle {
+    /// Get a clone of the worker sender for bridging
+    ///
+    /// This is used when spawning Workers in a separate task that needs
+    /// to forward messages to Primary.
+    pub fn worker_sender(&self) -> mpsc::Sender<WorkerToPrimary> {
+        self.worker_sender.clone()
+    }
+
     /// Send a message from Worker
     pub async fn send_from_worker(
         &self,
