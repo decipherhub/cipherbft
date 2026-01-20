@@ -23,4 +23,4 @@ pub use config::MempoolConfig;
 pub use error::MempoolError;
 pub use pool::CipherBftPool;
 pub use transaction::TransactionOrdering;
-pub use validator::CipherBftValidator;
+pub use validator::{CipherBftValidator, ExecutionLayerValidator, ExecutionValidationError};
