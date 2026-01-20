@@ -209,7 +209,7 @@ impl TcpPrimaryNetwork {
         debug!("Connecting to peer {:?} at {}", validator_id, addr);
 
         let stream = TcpStream::connect(addr).await?;
-        let (_, writer) = tokio::io::split(stream);
+        let (reader, writer) = tokio::io::split(stream);
 
         self.peers.write().await.insert(
             validator_id,
@@ -218,7 +218,78 @@ impl TcpPrimaryNetwork {
             },
         );
 
+        // Spawn a reader task to handle incoming messages on this outgoing connection.
+        // This is critical: without this, responses (e.g., attestations) sent back on
+        // this connection would never be read, causing attestation timeouts.
+        let incoming_tx = self.incoming_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = Self::handle_outgoing_connection_reader(reader, incoming_tx).await {
+                debug!("Outgoing connection reader ended: {}", e);
+            }
+        });
+
         info!("Connected to peer {:?}", validator_id);
+        Ok(())
+    }
+
+    /// Handle reading from an outgoing connection
+    ///
+    /// When we initiate a connection to a peer, we can send messages via the writer.
+    /// But we also need to read responses (e.g., attestations) that the peer sends back.
+    /// This reader task handles that incoming data.
+    async fn handle_outgoing_connection_reader(
+        mut reader: tokio::io::ReadHalf<TcpStream>,
+        incoming_tx: mpsc::Sender<(ValidatorId, DclMessage)>,
+    ) -> Result<()> {
+        let mut buf = BytesMut::with_capacity(4096);
+
+        loop {
+            // Read more data
+            let n = reader.read_buf(&mut buf).await?;
+            if n == 0 {
+                break; // Connection closed
+            }
+
+            // Try to parse messages
+            while buf.len() >= HEADER_SIZE {
+                let len = (&buf[..HEADER_SIZE]).get_u32() as usize;
+                if (len as u64) > MAX_MESSAGE_SIZE {
+                    anyhow::bail!("Message too large: {}", len);
+                }
+
+                if buf.len() < HEADER_SIZE + len {
+                    break; // Need more data
+                }
+
+                buf.advance(HEADER_SIZE);
+                let msg_bytes = buf.split_to(len);
+
+                match bincode::deserialize::<NetworkMessage>(&msg_bytes) {
+                    Ok(NetworkMessage::Dcl(dcl_msg)) => {
+                        let from = match dcl_msg.as_ref() {
+                            DclMessage::Car(car) => car.proposer,
+                            DclMessage::Attestation(att) => att.attester,
+                            _ => continue,
+                        };
+
+                        // Forward to handler
+                        if incoming_tx.send((from, *dcl_msg)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(_) => {
+                        warn!("Received non-DCL message on outgoing connection");
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to deserialize message on outgoing connection: {}",
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
