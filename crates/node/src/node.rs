@@ -776,6 +776,12 @@ impl Node {
                         cut.cars.len()
                     );
 
+                    // Notify Primary that consensus has decided on this height
+                    // This allows Primary to advance its state and produce cuts for the next height
+                    if let Err(e) = primary_handle.notify_decision(height.0).await {
+                        warn!("Failed to notify Primary of consensus decision: {:?}", e);
+                    }
+
                     // Execute Cut if execution layer is enabled
                     if let Some(ref bridge) = execution_bridge {
                         match bridge.execute_cut(cut).await {
