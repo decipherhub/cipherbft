@@ -9,8 +9,8 @@ use cipherbft_execution::{
     ExecutionEngine, ExecutionLayerTrait, ExecutionResult, GenesisValidatorData, InMemoryProvider,
     B256, U256,
 };
-use cipherbft_types::genesis::Genesis;
 use cipherbft_storage::DclStore;
+use cipherbft_types::genesis::Genesis;
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
 use tokio::sync::RwLock;
@@ -131,7 +131,8 @@ impl ExecutionBridge {
         );
 
         let provider = InMemoryProvider::new();
-        let execution = ExecutionEngine::with_genesis_validators(config, provider, genesis_validators);
+        let execution =
+            ExecutionEngine::with_genesis_validators(config, provider, genesis_validators);
 
         Ok(Self {
             execution: Arc::new(RwLock::new(execution)),

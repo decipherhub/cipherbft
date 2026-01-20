@@ -181,7 +181,9 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
                 validator_count = genesis_validators.len(),
                 "Initializing staking precompile from genesis validators"
             );
-            Arc::new(StakingPrecompile::from_genesis_validators(genesis_validators))
+            Arc::new(StakingPrecompile::from_genesis_validators(
+                genesis_validators,
+            ))
         };
 
         Self {
