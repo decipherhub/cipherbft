@@ -55,6 +55,7 @@ pub mod evm;
 pub mod genesis;
 pub mod inspector;
 pub mod mpt;
+pub mod proof;
 pub mod precompiles;
 pub mod receipts;
 pub mod rlp;
@@ -91,6 +92,9 @@ pub use inspector::{
     CallFrame, CallLog, CallTracer, CallTracerConfig, CallType, OpcodeStep, OpcodeTracer,
     OpcodeTracerConfig, TraceOptions, TraceResult,
 };
+
+// Re-export proof types for eth_getProof
+pub use proof::{generate_account_proof, AccountProof, StorageProof};
 pub use types::{
     BlockHeader, BlockInput, Car, ChainConfig, ConsensusBlock, Cut, ExecutionBlock,
     ExecutionResult, Log, Receipt, SealedBlock, TransactionReceipt, DELAYED_COMMITMENT_DEPTH,
