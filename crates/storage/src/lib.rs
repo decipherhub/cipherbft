@@ -58,6 +58,7 @@ pub mod error;
 pub mod evm;
 pub mod memory;
 pub mod pruning;
+pub mod receipts;
 pub mod staking;
 pub mod tables;
 pub mod wal;
@@ -72,11 +73,13 @@ pub use error::StorageError;
 pub use evm::{EvmAccount, EvmBytecode, EvmStore, EvmStoreResult};
 pub use memory::InMemoryStore;
 pub use pruning::{PruningConfig, PruningHandle, PruningTask};
+pub use receipts::{Log, Receipt, ReceiptStore, ReceiptStoreResult};
 pub use staking::{StakingStore, StakingStoreResult, StoredValidator};
 pub use wal::{Wal, WalEntry};
 
 // Re-export MDBX types when feature is enabled
 #[cfg(feature = "mdbx")]
 pub use mdbx::{
-    Database, DatabaseConfig, MdbxBatchStore, MdbxDclStore, MdbxEvmStore, MdbxStakingStore, MdbxWal,
+    Database, DatabaseConfig, MdbxBatchStore, MdbxDclStore, MdbxEvmStore, MdbxReceiptStore,
+    MdbxStakingStore, MdbxWal,
 };

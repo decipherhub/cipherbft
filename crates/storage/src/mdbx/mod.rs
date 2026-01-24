@@ -24,11 +24,13 @@ mod batch;
 mod database;
 mod evm;
 mod provider;
+mod receipts;
 mod staking;
 mod tables;
 mod wal;
 
 pub use batch::MdbxBatchStore;
+pub use receipts::MdbxReceiptStore;
 pub use database::{Database, DatabaseConfig, DatabaseEnv};
 pub use evm::MdbxEvmStore;
 pub use provider::{MdbxDclStore, MdbxDclStoreTx};
@@ -56,6 +58,9 @@ pub use tables::{
     HeightRoundKey,
     PendingCuts,
     Proposals,
+    // Receipt table types
+    Receipts,
+    ReceiptsByBlock,
     // Staking table types
     StakingMetadata,
     StakingValidators,
@@ -70,7 +75,10 @@ pub use tables::{
     StoredCarEntry,
     StoredConsensusState,
     StoredCut,
+    // Receipt value types
+    StoredLog,
     StoredProposal,
+    StoredReceipt,
     StoredStakingMetadata,
     StoredStorageValue,
     StoredValidator,

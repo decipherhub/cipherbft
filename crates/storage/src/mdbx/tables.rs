@@ -746,6 +746,58 @@ pub struct StoredBytecode {
     pub code: Vec<u8>,
 }
 
+// =============================================================================
+// Receipt Types (for RPC eth_getTransactionReceipt)
+// =============================================================================
+
+/// Stored transaction receipt
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredReceipt {
+    /// Transaction hash (32 bytes)
+    pub transaction_hash: [u8; 32],
+    /// Block number
+    pub block_number: u64,
+    /// Block hash (32 bytes)
+    pub block_hash: [u8; 32],
+    /// Transaction index within the block
+    pub transaction_index: u32,
+    /// Sender address (20 bytes)
+    pub from: [u8; 20],
+    /// Recipient address (20 bytes), None for contract creation
+    pub to: Option<[u8; 20]>,
+    /// Contract address created (20 bytes), if any
+    pub contract_address: Option<[u8; 20]>,
+    /// Gas used by this transaction
+    pub gas_used: u64,
+    /// Cumulative gas used in block up to and including this tx
+    pub cumulative_gas_used: u64,
+    /// Success status (1 = success, 0 = revert)
+    pub status: u8,
+    /// Logs emitted by this transaction
+    pub logs: Vec<StoredLog>,
+    /// Logs bloom filter (256 bytes)
+    pub logs_bloom: Vec<u8>,
+    /// Effective gas price used
+    pub effective_gas_price: u64,
+    /// Transaction type (0 = legacy, 1 = EIP-2930, 2 = EIP-1559)
+    pub transaction_type: u8,
+}
+
+/// Stored log entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredLog {
+    /// Contract address that emitted the log (20 bytes)
+    pub address: [u8; 20],
+    /// Indexed topics (up to 4, each 32 bytes)
+    pub topics: Vec<[u8; 32]>,
+    /// Non-indexed log data
+    pub data: Vec<u8>,
+    /// Log index within the block
+    pub log_index: u32,
+    /// Transaction index within the block
+    pub transaction_index: u32,
+}
+
 /// Stored storage value (32 bytes U256)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StoredStorageValue {
@@ -799,6 +851,34 @@ impl Table for EvmBlockHashes {
     const DUPSORT: bool = false;
     type Key = BlockNumberKey;
     type Value = HashKey;
+}
+
+// =============================================================================
+// Receipt Tables (for RPC eth_getTransactionReceipt)
+// =============================================================================
+
+/// Receipts table: TxHash -> StoredReceipt
+/// Stores transaction receipts indexed by transaction hash
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Receipts;
+
+impl Table for Receipts {
+    const NAME: &'static str = "Receipts";
+    const DUPSORT: bool = false;
+    type Key = HashKey;
+    type Value = BincodeValue<StoredReceipt>;
+}
+
+/// ReceiptsByBlock table: BlockNumber -> List of TxHashes
+/// Secondary index for looking up receipts by block
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ReceiptsByBlock;
+
+impl Table for ReceiptsByBlock {
+    const NAME: &'static str = "ReceiptsByBlock";
+    const DUPSORT: bool = false;
+    type Key = BlockNumberKey;
+    type Value = BincodeValue<Vec<[u8; 32]>>;
 }
 
 // =============================================================================
@@ -902,6 +982,9 @@ pub enum CipherBftTable {
     // Staking tables
     StakingValidators,
     StakingMetadata,
+    // Receipt tables
+    Receipts,
+    ReceiptsByBlock,
 }
 
 impl CipherBftTable {
@@ -927,6 +1010,9 @@ impl CipherBftTable {
         // Staking tables
         Self::StakingValidators,
         Self::StakingMetadata,
+        // Receipt tables
+        Self::Receipts,
+        Self::ReceiptsByBlock,
     ];
 }
 
@@ -950,6 +1036,8 @@ impl TableInfo for CipherBftTable {
             Self::EvmBlockHashes => EvmBlockHashes::NAME,
             Self::StakingValidators => StakingValidators::NAME,
             Self::StakingMetadata => StakingMetadata::NAME,
+            Self::Receipts => Receipts::NAME,
+            Self::ReceiptsByBlock => ReceiptsByBlock::NAME,
         }
     }
 
@@ -972,6 +1060,8 @@ impl TableInfo for CipherBftTable {
             Self::EvmBlockHashes => EvmBlockHashes::DUPSORT,
             Self::StakingValidators => StakingValidators::DUPSORT,
             Self::StakingMetadata => StakingMetadata::DUPSORT,
+            Self::Receipts => Receipts::DUPSORT,
+            Self::ReceiptsByBlock => ReceiptsByBlock::DUPSORT,
         }
     }
 }
@@ -1002,6 +1092,9 @@ impl Tables {
         // Staking tables
         StakingValidators::NAME,
         StakingMetadata::NAME,
+        // Receipt tables
+        Receipts::NAME,
+        ReceiptsByBlock::NAME,
     ];
 }
 
