@@ -32,10 +32,10 @@ mod wal;
 
 pub use batch::MdbxBatchStore;
 pub use blocks::MdbxBlockStore;
-pub use receipts::MdbxReceiptStore;
 pub use database::{Database, DatabaseConfig, DatabaseEnv};
 pub use evm::MdbxEvmStore;
 pub use provider::{MdbxDclStore, MdbxDclStoreTx};
+pub use receipts::MdbxReceiptStore;
 pub use staking::MdbxStakingStore;
 pub use tables::{
     // EVM table types
@@ -75,13 +75,13 @@ pub use tables::{
     StoredAggregatedAttestation,
     StoredBatch,
     StoredBatchDigest,
+    // Block value types
+    StoredBlock,
     StoredBytecode,
     StoredCar,
     StoredCarEntry,
     StoredConsensusState,
     StoredCut,
-    // Block value types
-    StoredBlock,
     // Receipt value types
     StoredLog,
     StoredProposal,

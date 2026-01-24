@@ -683,6 +683,9 @@ impl<P: Provider> EvmExecutionApi<P> {
         use revm::primitives::hardfork::SpecId;
         use revm::primitives::TxKind;
 
+        // Type alias to reduce complexity (satisfies clippy::type_complexity)
+        type EvmContext<DB> = Context<BlockEnv, TxEnv, CfgEnv, DB, Journal<DB>, ()>;
+
         // Create a database wrapper for state access
         let db = CipherBftDatabase::new(Arc::clone(&self.provider));
 
@@ -694,8 +697,7 @@ impl<P: Provider> EvmExecutionApi<P> {
             .as_secs();
 
         // Create context with database
-        let mut ctx: Context<BlockEnv, TxEnv, CfgEnv, CipherBftDatabase<Arc<P>>, Journal<CipherBftDatabase<Arc<P>>>, ()> =
-            Context::new(db, SpecId::CANCUN);
+        let mut ctx: EvmContext<CipherBftDatabase<Arc<P>>> = Context::new(db, SpecId::CANCUN);
 
         // Configure block environment
         ctx.block.number = alloy_primitives::U256::from(block_number);
@@ -788,7 +790,11 @@ impl<P: Provider + 'static> ExecutionApi for EvmExecutionApi<P> {
         let (output, gas_used) =
             self.execute_call_internal(from, to, gas, gas_price, value, data)?;
 
-        trace!("eth_call result: {} bytes, {} gas used", output.len(), gas_used);
+        trace!(
+            "eth_call result: {} bytes, {} gas used",
+            output.len(),
+            gas_used
+        );
         Ok(output)
     }
 
@@ -810,12 +816,15 @@ impl<P: Provider + 'static> ExecutionApi for EvmExecutionApi<P> {
             data.as_ref().map(|d| d.len())
         );
 
-        let (_, gas_used) =
-            self.execute_call_internal(from, to, gas, gas_price, value, data)?;
+        let (_, gas_used) = self.execute_call_internal(from, to, gas, gas_price, value, data)?;
 
         // Add a small buffer to the gas estimate (10%)
         let estimated = gas_used + (gas_used / 10);
-        trace!("eth_estimateGas result: {} (actual: {})", estimated, gas_used);
+        trace!(
+            "eth_estimateGas result: {} (actual: {})",
+            estimated,
+            gas_used
+        );
         Ok(estimated)
     }
 }

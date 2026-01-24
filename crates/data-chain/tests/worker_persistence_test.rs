@@ -9,7 +9,7 @@ use cipherbft_data_chain::error::DclError;
 use cipherbft_data_chain::messages::{WorkerMessage, WorkerToPrimary};
 use cipherbft_data_chain::storage::BatchStore as DclBatchStore;
 use cipherbft_data_chain::worker::{Worker, WorkerConfig, WorkerNetwork};
-use cipherbft_storage::mdbx::{DatabaseConfig, Database, MdbxBatchStore};
+use cipherbft_storage::mdbx::{Database, DatabaseConfig, MdbxBatchStore};
 use cipherbft_storage::BatchStore as StorageBatchStore;
 use cipherbft_types::{Hash, ValidatorId, VALIDATOR_ID_SIZE};
 use std::sync::Arc;
@@ -115,7 +115,10 @@ async fn test_worker_persists_batches_to_mdbx() {
     let mut handle = Worker::spawn_with_storage(config, Box::new(network), Some(adapter.clone()));
 
     // Wait for ready signal
-    let msg = handle.recv_from_worker().await.expect("Worker should send ready");
+    let msg = handle
+        .recv_from_worker()
+        .await
+        .expect("Worker should send ready");
     assert!(matches!(msg, WorkerToPrimary::Ready { worker_id: 0 }));
 
     // Submit 5 transactions to trigger batch creation
@@ -131,14 +134,21 @@ async fn test_worker_persists_batches_to_mdbx() {
 
     // Verify batch was broadcast
     let broadcast_batches = broadcasts.lock().await;
-    assert_eq!(broadcast_batches.len(), 1, "Should have broadcast one batch");
+    assert_eq!(
+        broadcast_batches.len(),
+        1,
+        "Should have broadcast one batch"
+    );
 
     let batch = &broadcast_batches[0];
     let batch_hash = batch.hash();
 
     // Verify batch is in storage
     assert!(
-        adapter.has_batch(&batch_hash).await.expect("has_batch failed"),
+        adapter
+            .has_batch(&batch_hash)
+            .await
+            .expect("has_batch failed"),
         "Batch should be persisted in MDBX storage"
     );
 
@@ -176,7 +186,10 @@ async fn test_worker_persists_peer_batches_to_mdbx() {
     let mut handle = Worker::spawn_with_storage(config, Box::new(network), Some(adapter.clone()));
 
     // Wait for ready signal
-    let msg = handle.recv_from_worker().await.expect("Worker should send ready");
+    let msg = handle
+        .recv_from_worker()
+        .await
+        .expect("Worker should send ready");
     assert!(matches!(msg, WorkerToPrimary::Ready { worker_id: 0 }));
 
     // Create a batch from a "peer"
@@ -195,7 +208,10 @@ async fn test_worker_persists_peer_batches_to_mdbx() {
 
     // Verify batch is in storage
     assert!(
-        adapter.has_batch(&batch_hash).await.expect("has_batch failed"),
+        adapter
+            .has_batch(&batch_hash)
+            .await
+            .expect("has_batch failed"),
         "Peer batch should be persisted in MDBX storage"
     );
 
@@ -229,7 +245,10 @@ async fn test_worker_without_storage() {
     let mut handle = Worker::spawn(config, Box::new(network));
 
     // Wait for ready signal
-    let msg = handle.recv_from_worker().await.expect("Worker should send ready");
+    let msg = handle
+        .recv_from_worker()
+        .await
+        .expect("Worker should send ready");
     assert!(matches!(msg, WorkerToPrimary::Ready { worker_id: 0 }));
 
     // Submit 5 transactions to trigger batch creation
@@ -245,7 +264,11 @@ async fn test_worker_without_storage() {
 
     // Verify batch was still broadcast (worker works without storage)
     let broadcast_batches = broadcasts.lock().await;
-    assert_eq!(broadcast_batches.len(), 1, "Should have broadcast one batch");
+    assert_eq!(
+        broadcast_batches.len(),
+        1,
+        "Should have broadcast one batch"
+    );
 
     // Shutdown worker
     handle.shutdown().await;

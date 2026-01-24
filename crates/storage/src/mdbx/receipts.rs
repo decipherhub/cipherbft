@@ -11,7 +11,7 @@ use reth_db_api::transaction::{DbTx, DbTxMut};
 
 use super::database::DatabaseEnv;
 use super::tables::{
-    BincodeValue, BlockNumberKey, HashKey, ReceiptsByBlock, Receipts, StoredLog, StoredReceipt,
+    BincodeValue, BlockNumberKey, HashKey, Receipts, ReceiptsByBlock, StoredLog, StoredReceipt,
 };
 use crate::error::StorageError;
 use crate::receipts::{Log, Receipt, ReceiptStore, ReceiptStoreResult};
@@ -206,9 +206,7 @@ impl ReceiptStore for MdbxReceiptStore {
         let key = HashKey(*tx_hash);
 
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
-        let result = tx
-            .get::<Receipts>(key)
-            .map_err(|e| db_err(e.to_string()))?;
+        let result = tx.get::<Receipts>(key).map_err(|e| db_err(e.to_string()))?;
 
         match result {
             Some(bincode_value) => {
@@ -250,9 +248,7 @@ impl ReceiptStore for MdbxReceiptStore {
         let key = HashKey(*tx_hash);
 
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
-        let result = tx
-            .get::<Receipts>(key)
-            .map_err(|e| db_err(e.to_string()))?;
+        let result = tx.get::<Receipts>(key).map_err(|e| db_err(e.to_string()))?;
 
         Ok(result.is_some())
     }

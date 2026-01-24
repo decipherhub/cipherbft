@@ -211,7 +211,10 @@ impl BlockStore for MdbxBlockStore {
         let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         // Get the block to find its hash
-        if let Some(stored) = tx.get::<Blocks>(number_key).map_err(|e| db_err(e.to_string()))? {
+        if let Some(stored) = tx
+            .get::<Blocks>(number_key)
+            .map_err(|e| db_err(e.to_string()))?
+        {
             let hash_key = HashKey(stored.0.hash);
 
             // Delete the hash index entry
@@ -321,11 +324,7 @@ mod tests {
         assert_eq!(number, 10);
 
         // Get full block by hash
-        let retrieved = store
-            .get_block_by_hash(&block_hash)
-            .await
-            .unwrap()
-            .unwrap();
+        let retrieved = store.get_block_by_hash(&block_hash).await.unwrap().unwrap();
         assert_eq!(retrieved.number, 10);
     }
 

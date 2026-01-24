@@ -66,7 +66,10 @@ fn create_signed_transaction(signer: &PrivateKeySigner, to: Address, nonce: u64)
 }
 
 /// Start a test RPC server and return the HTTP URL
-async fn start_test_server() -> (String, Arc<RpcServer<StubRpcStorage, StubMempoolApi, StubExecutionApi, StubNetworkApi>>) {
+async fn start_test_server() -> (
+    String,
+    Arc<RpcServer<StubRpcStorage, StubMempoolApi, StubExecutionApi, StubNetworkApi>>,
+) {
     let (http_port, ws_port) = get_test_ports();
 
     let mut config = RpcConfig::with_chain_id(CHAIN_ID);
@@ -161,7 +164,10 @@ async fn test_e2e_gas_price() {
     assert!(gas_price_value > 0);
 
     server.stop().await.expect("Failed to stop server");
-    println!("✅ eth_gasPrice test passed: gas_price = {} wei", gas_price_value);
+    println!(
+        "✅ eth_gasPrice test passed: gas_price = {} wei",
+        gas_price_value
+    );
 }
 
 /// Test eth_sendRawTransaction accepts a signed transaction
@@ -175,13 +181,18 @@ async fn test_e2e_send_raw_transaction() {
         .expect("Failed to create HTTP client");
 
     // Create a signed transaction
-    let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().expect("Failed to parse private key");
+    let signer: PrivateKeySigner = TEST_PRIVATE_KEY
+        .parse()
+        .expect("Failed to parse private key");
     let to = Address::repeat_byte(0x42);
     let tx_bytes = create_signed_transaction(&signer, to, 0);
 
     // Send via eth_sendRawTransaction
     let tx_hash: String = client
-        .request("eth_sendRawTransaction", rpc_params![format!("0x{}", hex::encode(&tx_bytes))])
+        .request(
+            "eth_sendRawTransaction",
+            rpc_params![format!("0x{}", hex::encode(&tx_bytes))],
+        )
         .await
         .expect("eth_sendRawTransaction failed");
 
@@ -190,7 +201,10 @@ async fn test_e2e_send_raw_transaction() {
     assert_eq!(tx_hash.len(), 66); // 0x + 64 hex chars
 
     server.stop().await.expect("Failed to stop server");
-    println!("✅ eth_sendRawTransaction test passed: tx_hash = {}", tx_hash);
+    println!(
+        "✅ eth_sendRawTransaction test passed: tx_hash = {}",
+        tx_hash
+    );
 }
 
 /// Test eth_getBalance returns balance for an address
@@ -318,19 +332,27 @@ async fn test_e2e_full_transaction_flow() {
     println!("  Step 3: Gas price = {}", gas_price);
 
     // Step 4: Create and send transaction
-    let signer: PrivateKeySigner = TEST_PRIVATE_KEY.parse().expect("Failed to parse private key");
+    let signer: PrivateKeySigner = TEST_PRIVATE_KEY
+        .parse()
+        .expect("Failed to parse private key");
     let to = Address::repeat_byte(0x42);
     let tx_bytes = create_signed_transaction(&signer, to, 0);
 
     let tx_hash: String = client
-        .request("eth_sendRawTransaction", rpc_params![format!("0x{}", hex::encode(&tx_bytes))])
+        .request(
+            "eth_sendRawTransaction",
+            rpc_params![format!("0x{}", hex::encode(&tx_bytes))],
+        )
         .await
         .expect("eth_sendRawTransaction failed");
     println!("  Step 4: Transaction submitted = {}", tx_hash);
 
     // Step 5: Query sender balance
     let sender_balance: String = client
-        .request("eth_getBalance", rpc_params![format!("{:?}", signer.address()), "latest"])
+        .request(
+            "eth_getBalance",
+            rpc_params![format!("{:?}", signer.address()), "latest"],
+        )
         .await
         .expect("eth_getBalance failed");
     println!("  Step 5: Sender balance = {}", sender_balance);
