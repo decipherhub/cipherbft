@@ -75,6 +75,8 @@
 //! - `eth_getUncleByBlockNumberAndIndex` - Get uncle by number (always null in PoS)
 //! - `eth_getUncleCountByBlockHash` - Get uncle count by hash (always 0 in PoS)
 //! - `eth_getUncleCountByBlockNumber` - Get uncle count by number (always 0 in PoS)
+//! - `eth_getProof` - Get account/storage proof (unsupported, returns error)
+//! - `eth_createAccessList` - Create access list for transaction (unsupported, returns error)
 //!
 //! ## web3_* namespace
 //!

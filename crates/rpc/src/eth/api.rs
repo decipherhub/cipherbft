@@ -6,8 +6,8 @@ use alloy_consensus::transaction::SignerRecoverable;
 use alloy_consensus::{Transaction as TxTrait, TxEnvelope};
 use alloy_primitives::{Address, Bytes, B256, U256, U64};
 use alloy_rpc_types_eth::{
-    Block, FeeHistory, Filter, Log, SyncInfo, SyncStatus as EthSyncStatus, Transaction,
-    TransactionReceipt,
+    transaction::AccessListResult, Block, EIP1186AccountProofResponse, FeeHistory, Filter, Log,
+    SyncInfo, SyncStatus as EthSyncStatus, Transaction, TransactionReceipt,
 };
 use jsonrpsee::core::RpcResult as JsonRpcResult;
 use jsonrpsee::proc_macros::rpc;
@@ -161,6 +161,36 @@ pub trait EthRpc {
     /// Always returns 0 for PoS chains (no uncles in CipherBFT).
     #[method(name = "getUncleCountByBlockNumber")]
     async fn get_uncle_count_by_block_number(&self, block: String) -> JsonRpcResult<U64>;
+
+    /// Returns the account and storage values including the Merkle proof.
+    ///
+    /// This method is defined in EIP-1186 and is used for light client verification.
+    /// Returns proof data for the account at the given address and storage keys.
+    ///
+    /// Note: This method returns an error as CipherBFT does not currently expose
+    /// state trie access for proof generation.
+    #[method(name = "getProof")]
+    async fn get_proof(
+        &self,
+        address: Address,
+        storage_keys: Vec<B256>,
+        block: Option<String>,
+    ) -> JsonRpcResult<EIP1186AccountProofResponse>;
+
+    /// Creates an access list for a transaction.
+    ///
+    /// This method simulates a transaction and returns the access list that
+    /// would be created during execution. The access list contains all addresses
+    /// and storage keys that would be accessed.
+    ///
+    /// Note: This method returns an error as CipherBFT does not currently expose
+    /// state access tracking for access list generation.
+    #[method(name = "createAccessList")]
+    async fn create_access_list(
+        &self,
+        call_request: CallRequest,
+        block: Option<String>,
+    ) -> JsonRpcResult<AccessListResult>;
 }
 
 /// Call request parameters for eth_call and eth_estimateGas.
@@ -785,5 +815,49 @@ where
         trace!("eth_getUncleCountByBlockNumber: block={}", block);
         // CipherBFT is a PoS chain - no uncles exist
         Ok(U64::ZERO)
+    }
+
+    async fn get_proof(
+        &self,
+        address: Address,
+        storage_keys: Vec<B256>,
+        block: Option<String>,
+    ) -> JsonRpcResult<EIP1186AccountProofResponse> {
+        trace!(
+            "eth_getProof: address={}, keys={:?}, block={:?}",
+            address,
+            storage_keys.len(),
+            block
+        );
+
+        // eth_getProof requires direct access to the state trie for Merkle proof generation.
+        // CipherBFT does not currently expose state trie access, so this method is unsupported.
+        // Many L2s and BFT chains similarly don't support this method.
+        Err(ErrorObjectOwned::owned(
+            -32601,
+            "eth_getProof is not supported by this node".to_string(),
+            None::<()>,
+        ))
+    }
+
+    async fn create_access_list(
+        &self,
+        call_request: CallRequest,
+        block: Option<String>,
+    ) -> JsonRpcResult<AccessListResult> {
+        trace!(
+            "eth_createAccessList: to={:?}, block={:?}",
+            call_request.to,
+            block
+        );
+
+        // eth_createAccessList requires simulating the transaction and tracking
+        // all state accesses. CipherBFT does not currently expose state access
+        // tracking, so this method is unsupported.
+        Err(ErrorObjectOwned::owned(
+            -32601,
+            "eth_createAccessList is not supported by this node".to_string(),
+            None::<()>,
+        ))
     }
 }
