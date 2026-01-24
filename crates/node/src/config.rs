@@ -68,6 +68,22 @@ fn default_key_name() -> String {
     DEFAULT_KEY_NAME.to_string()
 }
 
+/// Default RPC HTTP port (Ethereum standard)
+pub const DEFAULT_RPC_HTTP_PORT: u16 = 8545;
+
+/// Default RPC WebSocket port (Ethereum standard)
+pub const DEFAULT_RPC_WS_PORT: u16 = 8546;
+
+/// Serde default function for rpc_http_port
+fn default_rpc_http_port() -> u16 {
+    DEFAULT_RPC_HTTP_PORT
+}
+
+/// Serde default function for rpc_ws_port
+fn default_rpc_ws_port() -> u16 {
+    DEFAULT_RPC_WS_PORT
+}
+
 /// Peer configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerConfig {
@@ -163,6 +179,15 @@ pub struct NodeConfig {
     pub max_batch_txs: usize,
     /// Maximum batch size in bytes
     pub max_batch_bytes: usize,
+    /// Whether to enable the JSON-RPC server
+    #[serde(default)]
+    pub rpc_enabled: bool,
+    /// HTTP JSON-RPC port (default: 8545)
+    #[serde(default = "default_rpc_http_port")]
+    pub rpc_http_port: u16,
+    /// WebSocket JSON-RPC port (default: 8546)
+    #[serde(default = "default_rpc_ws_port")]
+    pub rpc_ws_port: u16,
 }
 
 /// Test configuration with keypairs for local testing
@@ -213,6 +238,9 @@ impl NodeConfig {
             car_interval_ms: 100,
             max_batch_txs: 100,
             max_batch_bytes: 1024 * 1024, // 1MB
+            rpc_enabled: false,
+            rpc_http_port: DEFAULT_RPC_HTTP_PORT + (index as u16),
+            rpc_ws_port: DEFAULT_RPC_WS_PORT + (index as u16),
         };
 
         LocalTestConfig {

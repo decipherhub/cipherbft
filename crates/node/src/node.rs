@@ -681,6 +681,46 @@ impl Node {
         .await?;
 
         info!("Consensus engine started");
+
+        // Start RPC server if enabled
+        if self.config.rpc_enabled {
+            use cipherbft_rpc::{
+                RpcConfig, RpcServer, StubExecutionApi, StubMempoolApi, StubNetworkApi,
+                StubRpcStorage,
+            };
+
+            let mut rpc_config = RpcConfig::with_chain_id(85300); // CipherBFT testnet chain ID
+            rpc_config.http_port = self.config.rpc_http_port;
+            rpc_config.ws_port = self.config.rpc_ws_port;
+
+            // For now, use stub implementations
+            // TODO: Wire real storage, mempool, and execution backends
+            let storage = Arc::new(StubRpcStorage::default());
+            let mempool = Arc::new(StubMempoolApi::new());
+            let executor = Arc::new(StubExecutionApi::new());
+            let network = Arc::new(StubNetworkApi::new());
+
+            let rpc_server = RpcServer::new(rpc_config, storage, mempool, executor, network);
+
+            let http_port = self.config.rpc_http_port;
+            let ws_port = self.config.rpc_ws_port;
+            let rpc_cancel_token = cancel_token.clone();
+            supervisor.spawn_cancellable("rpc-server", move |_token| async move {
+                info!(
+                    "Starting JSON-RPC server (HTTP: {}, WS: {})",
+                    http_port, ws_port
+                );
+                // Start the server - it runs until cancelled
+                if let Err(e) = rpc_server.start().await {
+                    if !rpc_cancel_token.is_cancelled() {
+                        error!("RPC server error: {}", e);
+                    }
+                }
+                info!("RPC server stopped");
+                Ok(())
+            });
+        }
+
         info!("Node started, entering main loop");
 
         // Clone execution bridge for use in event loop

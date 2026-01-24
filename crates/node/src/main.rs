@@ -519,6 +519,9 @@ fn cmd_init(
         car_interval_ms: 100,
         max_batch_txs: 100,
         max_batch_bytes: 1024 * 1024,
+        rpc_enabled: true,
+        rpc_http_port: cipherd::DEFAULT_RPC_HTTP_PORT,
+        rpc_ws_port: cipherd::DEFAULT_RPC_WS_PORT,
     };
 
     let config_path = config_dir.join("node.json");
@@ -855,6 +858,9 @@ fn cmd_testnet_init_files(
             car_interval_ms: 100,
             max_batch_txs: 100,
             max_batch_bytes: 1024 * 1024,
+            rpc_enabled: true,
+            rpc_http_port: cipherd::DEFAULT_RPC_HTTP_PORT + (i as u16),
+            rpc_ws_port: cipherd::DEFAULT_RPC_WS_PORT + (i as u16),
         };
 
         let config_path = config_dir.join("node.json");
