@@ -75,10 +75,12 @@ impl ExecutionCallback for TestExecutionCallback {
 }
 
 /// Test receipt store that records all stored receipts.
+#[allow(dead_code)]
 struct TestReceiptStore {
     receipts: RwLock<std::collections::HashMap<u64, Vec<u8>>>,
 }
 
+#[allow(dead_code)]
 impl TestReceiptStore {
     fn new() -> Self {
         Self {
