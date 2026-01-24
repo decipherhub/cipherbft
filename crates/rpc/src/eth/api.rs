@@ -6,7 +6,8 @@ use alloy_consensus::transaction::SignerRecoverable;
 use alloy_consensus::{Transaction as TxTrait, TxEnvelope};
 use alloy_primitives::{Address, Bytes, B256, U256, U64};
 use alloy_rpc_types_eth::{
-    Block, Filter, Log, SyncInfo, SyncStatus as EthSyncStatus, Transaction, TransactionReceipt,
+    Block, FeeHistory, Filter, Log, SyncInfo, SyncStatus as EthSyncStatus, Transaction,
+    TransactionReceipt,
 };
 use jsonrpsee::core::RpcResult as JsonRpcResult;
 use jsonrpsee::proc_macros::rpc;
@@ -110,6 +111,17 @@ pub trait EthRpc {
     /// Returns the current gas price in wei.
     #[method(name = "gasPrice")]
     async fn gas_price(&self) -> JsonRpcResult<U256>;
+
+    /// Returns historical gas information, allowing for better fee estimation.
+    ///
+    /// Introduced in EIP-1559.
+    #[method(name = "feeHistory")]
+    async fn fee_history(
+        &self,
+        block_count: U64,
+        newest_block: String,
+        reward_percentiles: Option<Vec<f64>>,
+    ) -> JsonRpcResult<FeeHistory>;
 }
 
 /// Call request parameters for eth_call and eth_estimateGas.
@@ -521,5 +533,155 @@ where
         // For now, return a fixed gas price of 1 gwei
         // TODO: Implement dynamic gas price estimation
         Ok(U256::from(1_000_000_000u64))
+    }
+
+    async fn fee_history(
+        &self,
+        block_count: U64,
+        newest_block: String,
+        reward_percentiles: Option<Vec<f64>>,
+    ) -> JsonRpcResult<FeeHistory> {
+        debug!(
+            "eth_feeHistory: block_count={}, newest_block={}, percentiles={:?}",
+            block_count, newest_block, reward_percentiles
+        );
+
+        let block_count = block_count.to::<u64>();
+
+        // Validate block count (max 1024 per Ethereum spec)
+        const MAX_BLOCK_COUNT: u64 = 1024;
+        if block_count > MAX_BLOCK_COUNT {
+            return Err(RpcError::InvalidParams(format!(
+                "Block count {} exceeds maximum of {}",
+                block_count, MAX_BLOCK_COUNT
+            ))
+            .into());
+        }
+
+        if block_count == 0 {
+            return Ok(FeeHistory::default());
+        }
+
+        // Validate reward percentiles
+        if let Some(ref percentiles) = reward_percentiles {
+            for p in percentiles {
+                if !p.is_finite() || *p < 0.0 || *p > 100.0 {
+                    return Err(RpcError::InvalidParams(format!(
+                        "Invalid percentile value: {}. Must be between 0 and 100",
+                        p
+                    ))
+                    .into());
+                }
+            }
+            // Check percentiles are monotonically increasing
+            for i in 1..percentiles.len() {
+                if percentiles[i] < percentiles[i - 1] {
+                    return Err(RpcError::InvalidParams(
+                        "Reward percentiles must be monotonically increasing".to_string(),
+                    )
+                    .into());
+                }
+            }
+        }
+
+        // Parse the newest block
+        let newest_block_tag = self.parse_block_number(Some(newest_block))?;
+        let newest_block_number = match newest_block_tag {
+            BlockNumberOrTag::Latest
+            | BlockNumberOrTag::Safe
+            | BlockNumberOrTag::Finalized
+            | BlockNumberOrTag::Pending => self
+                .storage
+                .latest_block_number()
+                .await
+                .map_err(Self::to_json_rpc_error)?,
+            BlockNumberOrTag::Earliest => 0,
+            BlockNumberOrTag::Number(n) => n,
+        };
+
+        // Calculate the block range
+        let oldest_block = newest_block_number.saturating_sub(block_count - 1);
+        let actual_block_count = newest_block_number - oldest_block + 1;
+
+        // Collect fee history data
+        let mut base_fee_per_gas: Vec<u128> = Vec::with_capacity((actual_block_count + 1) as usize);
+        let mut gas_used_ratio: Vec<f64> = Vec::with_capacity(actual_block_count as usize);
+        let mut reward: Option<Vec<Vec<u128>>> = if reward_percentiles.is_some() {
+            Some(Vec::with_capacity(actual_block_count as usize))
+        } else {
+            None
+        };
+
+        for block_num in oldest_block..=newest_block_number {
+            // Get block data
+            let block = self
+                .storage
+                .get_block_by_number(BlockNumberOrTag::Number(block_num), false)
+                .await
+                .map_err(Self::to_json_rpc_error)?;
+
+            match block {
+                Some(block) => {
+                    // Get base fee (0 for pre-EIP-1559 blocks)
+                    let base_fee = block.header.base_fee_per_gas.unwrap_or(0) as u128;
+                    base_fee_per_gas.push(base_fee);
+
+                    // Calculate gas used ratio
+                    let gas_limit = block.header.gas_limit;
+                    let gas_used = block.header.gas_used;
+                    let ratio = if gas_limit > 0 {
+                        gas_used as f64 / gas_limit as f64
+                    } else {
+                        0.0
+                    };
+                    gas_used_ratio.push(ratio);
+
+                    // Calculate reward percentiles if requested
+                    if let Some(ref percentiles) = reward_percentiles {
+                        // For simplicity, return zeros for now
+                        // A full implementation would need transaction priority fees
+                        let block_rewards: Vec<u128> = percentiles.iter().map(|_| 0u128).collect();
+                        if let Some(ref mut rewards) = reward {
+                            rewards.push(block_rewards);
+                        }
+                    }
+                }
+                None => {
+                    // Block not found, use defaults
+                    base_fee_per_gas.push(0);
+                    gas_used_ratio.push(0.0);
+                    if let Some(ref mut rewards) = reward {
+                        let percentile_count = reward_percentiles.as_ref().map(|p| p.len()).unwrap_or(0);
+                        rewards.push(vec![0u128; percentile_count]);
+                    }
+                }
+            }
+        }
+
+        // Add the next block's base fee estimate (simple calculation)
+        // In reality, this would use the EIP-1559 base fee adjustment formula
+        let last_base_fee = base_fee_per_gas.last().copied().unwrap_or(0);
+        let last_ratio = gas_used_ratio.last().copied().unwrap_or(0.5);
+
+        // Simple base fee estimation: increase if block was >50% full, decrease otherwise
+        let next_base_fee = if last_ratio > 0.5 {
+            // Block was more than 50% full, increase base fee
+            let increase = (last_base_fee as f64 * 0.125 * (last_ratio - 0.5) * 2.0) as u128;
+            last_base_fee.saturating_add(increase)
+        } else {
+            // Block was less than 50% full, decrease base fee
+            let decrease = (last_base_fee as f64 * 0.125 * (0.5 - last_ratio) * 2.0) as u128;
+            last_base_fee.saturating_sub(decrease)
+        };
+        base_fee_per_gas.push(next_base_fee);
+
+        Ok(FeeHistory {
+            oldest_block,
+            base_fee_per_gas,
+            gas_used_ratio,
+            base_fee_per_blob_gas: Vec::new(), // Not supporting blob transactions yet
+            blob_gas_used_ratio: Vec::new(),
+            reward,
+        })
     }
 }
