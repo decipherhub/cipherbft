@@ -26,7 +26,7 @@ use cipherbft_execution::database::Provider;
 use cipherbft_mempool::pool::RecoveredTx;
 use cipherbft_mempool::CipherBftPool;
 use cipherbft_storage::mdbx::{MdbxBlockStore, MdbxReceiptStore};
-use cipherbft_storage::BlockStore;
+use cipherbft_storage::{BlockStore, ReceiptStore};
 use parking_lot::RwLock;
 use reth_primitives::TransactionSigned;
 use reth_transaction_pool::{PoolTransaction, TransactionOrigin, TransactionPool};
@@ -502,6 +502,73 @@ impl<P: Provider> MdbxRpcStorage<P> {
             withdrawals: None,
         }
     }
+
+    /// Convert a storage receipt to an RPC transaction receipt.
+    fn storage_receipt_to_rpc(
+        &self,
+        storage_receipt: cipherbft_storage::receipts::Receipt,
+    ) -> TransactionReceipt {
+        use alloy_consensus::{Eip658Value, ReceiptEnvelope};
+
+        // Convert logs to RPC format
+        let logs: Vec<Log> = storage_receipt
+            .logs
+            .iter()
+            .enumerate()
+            .map(|(idx, storage_log)| {
+                Log {
+                    inner: alloy_primitives::Log {
+                        address: Address::from(storage_log.address),
+                        data: alloy_primitives::LogData::new(
+                            storage_log.topics.iter().map(|t| B256::from(*t)).collect(),
+                            Bytes::from(storage_log.data.clone()),
+                        )
+                        .unwrap_or_default(),
+                    },
+                    block_hash: Some(B256::from(storage_receipt.block_hash)),
+                    block_number: Some(storage_receipt.block_number),
+                    block_timestamp: None,
+                    transaction_hash: Some(B256::from(storage_receipt.transaction_hash)),
+                    transaction_index: Some(storage_receipt.transaction_index as u64),
+                    log_index: Some(idx as u64),
+                    removed: false,
+                }
+            })
+            .collect();
+
+        // Build receipt with logs
+        let inner_receipt = alloy_consensus::Receipt {
+            status: Eip658Value::Eip658(storage_receipt.status),
+            cumulative_gas_used: storage_receipt.cumulative_gas_used,
+            logs: logs.clone(),
+        };
+
+        // Create bloom from logs
+        let receipt_with_bloom = inner_receipt.with_bloom();
+
+        // Build receipt envelope based on transaction type
+        let receipt_envelope: ReceiptEnvelope<Log> = match storage_receipt.transaction_type {
+            0 => ReceiptEnvelope::Legacy(receipt_with_bloom),
+            1 => ReceiptEnvelope::Eip2930(receipt_with_bloom),
+            2 => ReceiptEnvelope::Eip1559(receipt_with_bloom),
+            _ => ReceiptEnvelope::Legacy(receipt_with_bloom),
+        };
+
+        TransactionReceipt {
+            inner: receipt_envelope,
+            transaction_hash: B256::from(storage_receipt.transaction_hash),
+            transaction_index: Some(storage_receipt.transaction_index as u64),
+            block_hash: Some(B256::from(storage_receipt.block_hash)),
+            block_number: Some(storage_receipt.block_number),
+            gas_used: storage_receipt.gas_used,
+            effective_gas_price: storage_receipt.effective_gas_price as u128,
+            blob_gas_used: None,
+            blob_gas_price: None,
+            from: Address::from(storage_receipt.from),
+            to: storage_receipt.to.map(Address::from),
+            contract_address: storage_receipt.contract_address.map(Address::from),
+        }
+    }
 }
 
 #[async_trait]
@@ -576,9 +643,28 @@ impl<P: Provider + 'static> RpcStorage for MdbxRpcStorage<P> {
 
     async fn get_transaction_receipt(&self, hash: B256) -> RpcResult<Option<TransactionReceipt>> {
         trace!("MdbxRpcStorage::get_transaction_receipt({})", hash);
-        // Receipt storage not yet implemented - return None
-        // TODO: Implement when receipt storage is added
-        Ok(None)
+
+        let hash_bytes: [u8; 32] = hash.into();
+
+        // Query the receipt store
+        match self.receipt_store.get_receipt(&hash_bytes).await {
+            Ok(Some(storage_receipt)) => {
+                debug!(
+                    "Found receipt for tx {} in block {}",
+                    hash, storage_receipt.block_number
+                );
+                let rpc_receipt = self.storage_receipt_to_rpc(storage_receipt);
+                Ok(Some(rpc_receipt))
+            }
+            Ok(None) => {
+                trace!("Receipt for tx {} not found", hash);
+                Ok(None)
+            }
+            Err(e) => {
+                debug!("Error getting receipt for tx {}: {}", hash, e);
+                Err(RpcError::Storage(e.to_string()))
+            }
+        }
     }
 
     async fn get_logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
