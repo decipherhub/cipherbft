@@ -391,10 +391,11 @@ impl Node {
         });
 
         // Create Primary configuration
+        // For devnet, allow unlimited empty cars so consensus can make progress without real transactions
         let primary_config =
             PrimaryConfig::new(self.validator_id, self.bls_keypair.secret_key.clone())
                 .with_car_interval(Duration::from_millis(self.config.car_interval_ms))
-                .with_max_empty_cars(3);
+                .with_max_empty_cars(u32::MAX);
 
         // Create channel for CutReady events to Consensus Host
         let (cut_tx, cut_rx) = mpsc::channel::<Cut>(100);
@@ -709,11 +710,22 @@ impl Node {
                     "Starting JSON-RPC server (HTTP: {}, WS: {})",
                     http_port, ws_port
                 );
-                // Start the server - it runs until cancelled
+                // Start the server
                 if let Err(e) = rpc_server.start().await {
                     if !rpc_cancel_token.is_cancelled() {
                         error!("RPC server error: {}", e);
                     }
+                    return Ok(());
+                }
+                info!("RPC server running");
+
+                // Keep the server alive until shutdown is requested
+                // The RpcServer holds the ServerHandles which keep the servers running
+                rpc_cancel_token.cancelled().await;
+
+                info!("RPC server stopping...");
+                if let Err(e) = rpc_server.stop().await {
+                    warn!("Error stopping RPC server: {}", e);
                 }
                 info!("RPC server stopped");
                 Ok(())
