@@ -93,6 +93,7 @@ pub mod adapters;
 pub mod config;
 pub mod error;
 pub mod eth;
+pub mod filters;
 pub mod metrics;
 pub mod middleware;
 pub mod net;
@@ -127,3 +128,6 @@ pub use middleware::{IpAllowlist, IpRateLimiter, RpcMiddleware};
 pub use pubsub::{
     EthPubSubApi, EthPubSubRpcServer, SubscriptionId, SubscriptionKind, SubscriptionManager,
 };
+
+// Filter management
+pub use filters::{FilterChanges, FilterManager, FilterType, DEFAULT_FILTER_TIMEOUT, MAX_FILTERS};
