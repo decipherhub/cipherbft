@@ -337,7 +337,7 @@ pub struct CallRequest {
 /// Ethereum namespace RPC handler.
 pub struct EthApi<S, M, E>
 where
-    S: RpcProofStorage,
+    S: RpcStorage,
     M: MempoolApi,
     E: ExecutionApi,
 {
@@ -355,7 +355,7 @@ where
 
 impl<S, M, E> EthApi<S, M, E>
 where
-    S: RpcProofStorage,
+    S: RpcStorage,
     M: MempoolApi,
     E: ExecutionApi,
 {
@@ -484,7 +484,7 @@ where
 #[async_trait::async_trait]
 impl<S, M, E> EthRpcServer for EthApi<S, M, E>
 where
-    S: RpcProofStorage + 'static,
+    S: RpcStorage + 'static,
     M: MempoolApi + 'static,
     E: ExecutionApi + 'static,
 {
@@ -1351,22 +1351,5 @@ where
     async fn uninstall_filter(&self, filter_id: U256) -> JsonRpcResult<bool> {
         trace!("eth_uninstallFilter: filter_id={}", filter_id);
         Ok(self.filter_manager.uninstall_filter(filter_id))
-    }
-
-    async fn get_proof(
-        &self,
-        address: Address,
-        storage_keys: Vec<U256>,
-        block: Option<String>,
-    ) -> JsonRpcResult<AccountProof> {
-        debug!(
-            "eth_getProof: address={}, keys={:?}, block={:?}",
-            address, storage_keys, block
-        );
-        let block_num = self.parse_block_number(block)?;
-        self.storage
-            .get_proof(address, storage_keys, block_num)
-            .await
-            .map_err(Self::to_json_rpc_error)
     }
 }
