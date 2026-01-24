@@ -352,30 +352,47 @@ impl Actor for CipherBftHost {
                     height = height.0,
                     round = round.as_i64(),
                     timeout = ?timeout,
-                    "Building proposal value"
+                    "Building proposal value (spawning background task)"
                 );
 
-                // The `round` from HostMsg is already a Round type (aliased as ConsensusRound)
-                match self.value_builder.build_value(height, round).await {
-                    Ok(value) => {
-                        info!(
-                            parent: &self.span,
-                            height = height.0,
-                            "Built proposal value"
-                        );
-                        if reply_to.send(value).is_err() {
-                            warn!(parent: &self.span, "Failed to send GetValue reply");
+                // CRITICAL: Spawn build_value in a background task to avoid blocking the Host actor.
+                // If we await build_value directly (which has a 30-second timeout), the Host actor
+                // cannot process other messages like StartedRound. This causes a deadlock where:
+                // 1. Consensus sends GetValue, Host blocks on build_value
+                // 2. Propose timeout fires, Consensus moves to next round
+                // 3. Consensus sends StartedRound (synchronous ractor::call!), blocks waiting for Host
+                // 4. Host is still blocked on build_value from the previous round
+                // 5. Both actors are stuck until build_value times out (~30 seconds per round)
+                //
+                // By spawning a background task, the Host actor can continue processing other messages
+                // while build_value runs asynchronously.
+                let value_builder = self.value_builder.clone();
+                let span = self.span.clone();
+
+                tokio::spawn(async move {
+                    match value_builder.build_value(height, round).await {
+                        Ok(value) => {
+                            info!(
+                                parent: &span,
+                                height = height.0,
+                                "Built proposal value"
+                            );
+                            if reply_to.send(value).is_err() {
+                                warn!(parent: &span, "Failed to send GetValue reply");
+                            }
+                        }
+                        Err(e) => {
+                            error!(
+                                parent: &span,
+                                height = height.0,
+                                error = %e,
+                                "Failed to build proposal value"
+                            );
+                            // Note: Not replying when build fails is intentional.
+                            // The propose timeout will fire and consensus will move forward.
                         }
                     }
-                    Err(e) => {
-                        error!(
-                            parent: &self.span,
-                            height = height.0,
-                            error = %e,
-                            "Failed to build proposal value"
-                        );
-                    }
-                }
+                });
             }
 
             HostMsg::ReceivedProposalPart {
