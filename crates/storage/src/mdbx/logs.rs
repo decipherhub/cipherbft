@@ -301,7 +301,7 @@ impl LogStore for MdbxLogStore {
                 .cursor_read::<Logs>()
                 .map_err(|e| db_err(e.to_string()))?;
 
-            if let Some(_) = cursor.seek(start_key).map_err(|e| db_err(e.to_string()))? {
+            if cursor.seek(start_key).map_err(|e| db_err(e.to_string()))?.is_some() {
                 loop {
                     let current = cursor.current().map_err(|e| db_err(e.to_string()))?;
                     match current {
