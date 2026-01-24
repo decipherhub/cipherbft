@@ -1848,12 +1848,27 @@ pub fn storage_block_to_rpc_block(
 ///
 /// This adapter provides placeholder implementations for debug tracing operations.
 /// Replace with actual revm tracing integration when ready.
-pub struct StubDebugExecutionApi;
+pub struct StubDebugExecutionApi {
+    /// Latest block number (for consistency with EvmDebugExecutionApi).
+    latest_block: AtomicU64,
+}
 
 impl StubDebugExecutionApi {
     /// Create a new stub debug execution adapter.
     pub fn new() -> Self {
-        Self
+        Self {
+            latest_block: AtomicU64::new(0),
+        }
+    }
+
+    /// Update the latest block number (called by consensus layer).
+    pub fn set_latest_block(&self, block: u64) {
+        self.latest_block.store(block, Ordering::SeqCst);
+    }
+
+    /// Get the latest block number.
+    pub fn get_latest_block(&self) -> u64 {
+        self.latest_block.load(Ordering::SeqCst)
     }
 }
 
