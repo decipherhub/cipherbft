@@ -8,6 +8,7 @@
 //! - [`Database`]: Main database wrapper around reth-db
 //! - [`Tables`]: Custom table definitions for DCL, EVM, and staking data
 //! - [`MdbxDclStore`]: Implementation of [`DclStore`] trait
+//! - [`MdbxBatchStore`]: Implementation of [`BatchStore`] trait for worker batches
 //! - [`MdbxEvmStore`]: Implementation of [`EvmStore`] trait
 //! - [`MdbxStakingStore`]: Implementation of [`StakingStore`] trait
 //! - [`MdbxWal`]: Persistent WAL implementation
@@ -19,6 +20,7 @@
 //! cipherbft-storage = { version = "0.1", features = ["mdbx"] }
 //! ```
 
+mod batch;
 mod database;
 mod evm;
 mod provider;
@@ -26,6 +28,7 @@ mod staking;
 mod tables;
 mod wal;
 
+pub use batch::MdbxBatchStore;
 pub use database::{Database, DatabaseConfig, DatabaseEnv};
 pub use evm::MdbxEvmStore;
 pub use provider::{MdbxDclStore, MdbxDclStoreTx};

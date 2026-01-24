@@ -11,8 +11,10 @@
 //!
 //! The storage layer uses trait-based abstractions to allow multiple backends:
 //! - [`DclStore`]: Main trait for DCL storage operations
+//! - [`BatchStore`]: Dedicated trait for batch persistence (used by execution layer)
 //! - [`InMemoryStore`]: In-memory implementation for testing
 //! - [`mdbx::MdbxDclStore`]: MDBX-backed implementation for production (requires `mdbx` feature)
+//! - [`mdbx::MdbxBatchStore`]: MDBX-backed batch store (requires `mdbx` feature)
 //!
 //! # Write-Ahead Log (WAL)
 //!
@@ -50,6 +52,7 @@
 //!
 //! - `mdbx`: Enables the MDBX storage backend using reth-db
 
+pub mod batch;
 pub mod dcl;
 pub mod error;
 pub mod evm;
@@ -63,6 +66,7 @@ pub mod wal;
 #[cfg(feature = "mdbx")]
 pub mod mdbx;
 
+pub use batch::{BatchStore, BatchStoreResult};
 pub use dcl::DclStore;
 pub use error::StorageError;
 pub use evm::{EvmAccount, EvmBytecode, EvmStore, EvmStoreResult};
@@ -73,4 +77,6 @@ pub use wal::{Wal, WalEntry};
 
 // Re-export MDBX types when feature is enabled
 #[cfg(feature = "mdbx")]
-pub use mdbx::{Database, DatabaseConfig, MdbxDclStore, MdbxEvmStore, MdbxStakingStore, MdbxWal};
+pub use mdbx::{
+    Database, DatabaseConfig, MdbxBatchStore, MdbxDclStore, MdbxEvmStore, MdbxStakingStore, MdbxWal,
+};
