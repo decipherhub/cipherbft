@@ -48,6 +48,16 @@ pub enum PrimaryEvent {
     },
 }
 
+/// Commands sent to the Primary from external sources
+#[derive(Debug)]
+pub enum PrimaryCommand {
+    /// Notify that consensus has decided on a height
+    ConsensusDecided {
+        /// The height that was decided
+        height: u64,
+    },
+}
+
 /// Network interface for Primary-to-Primary communication
 #[async_trait::async_trait]
 pub trait PrimaryNetwork: Send + Sync {
@@ -74,6 +84,8 @@ pub struct PrimaryHandle {
     worker_sender: mpsc::Sender<WorkerToPrimary>,
     /// Sender for network messages (from peer Primaries)
     network_sender: mpsc::Sender<(ValidatorId, DclMessage)>,
+    /// Sender for commands to the Primary
+    command_sender: mpsc::Sender<PrimaryCommand>,
     /// Receiver for Primary events
     event_receiver: mpsc::Receiver<PrimaryEvent>,
 }
@@ -124,6 +136,18 @@ impl PrimaryHandle {
     pub fn is_finished(&self) -> bool {
         self.handle.is_finished()
     }
+
+    /// Notify the Primary that consensus has decided on a height
+    ///
+    /// This triggers the Primary to advance its state and continue producing cuts.
+    pub async fn notify_decision(
+        &self,
+        height: u64,
+    ) -> Result<(), mpsc::error::SendError<PrimaryCommand>> {
+        self.command_sender
+            .send(PrimaryCommand::ConsensusDecided { height })
+            .await
+    }
 }
 
 /// Primary process - handles Car creation, attestation collection, and Cut formation
@@ -147,6 +171,8 @@ pub struct Primary {
     to_workers: Vec<mpsc::Sender<PrimaryToWorker>>,
     /// Channel to receive messages from peer Primaries
     from_network: mpsc::Receiver<(ValidatorId, DclMessage)>,
+    /// Channel to receive commands (e.g., consensus decisions)
+    from_commands: mpsc::Receiver<PrimaryCommand>,
     /// Network interface
     network: Box<dyn PrimaryNetwork>,
     /// Optional persistent storage for Cars and attestations
@@ -180,6 +206,7 @@ impl Primary {
     ) -> (PrimaryHandle, Vec<mpsc::Receiver<PrimaryToWorker>>) {
         let (from_workers_tx, from_workers_rx) = mpsc::channel(1024);
         let (from_network_tx, from_network_rx) = mpsc::channel(1024);
+        let (command_tx, command_rx) = mpsc::channel(64);
         let (event_tx, event_rx) = mpsc::channel(256);
 
         // Create worker channels
@@ -199,6 +226,7 @@ impl Primary {
                 from_workers_rx,
                 to_workers,
                 from_network_rx,
+                command_rx,
                 network,
                 event_tx,
                 storage,
@@ -210,6 +238,7 @@ impl Primary {
             handle,
             worker_sender: from_workers_tx,
             network_sender: from_network_tx,
+            command_sender: command_tx,
             event_receiver: event_rx,
         };
 
@@ -217,12 +246,14 @@ impl Primary {
     }
 
     /// Create a new Primary
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: PrimaryConfig,
         validator_pubkeys: HashMap<ValidatorId, BlsPublicKey>,
         from_workers: mpsc::Receiver<WorkerToPrimary>,
         to_workers: Vec<mpsc::Sender<PrimaryToWorker>>,
         from_network: mpsc::Receiver<(ValidatorId, DclMessage)>,
+        from_commands: mpsc::Receiver<PrimaryCommand>,
         network: Box<dyn PrimaryNetwork>,
         event_sender: mpsc::Sender<PrimaryEvent>,
     ) -> Self {
@@ -232,6 +263,7 @@ impl Primary {
             from_workers,
             to_workers,
             from_network,
+            from_commands,
             network,
             event_sender,
             None,
@@ -246,6 +278,7 @@ impl Primary {
         from_workers: mpsc::Receiver<WorkerToPrimary>,
         to_workers: Vec<mpsc::Sender<PrimaryToWorker>>,
         from_network: mpsc::Receiver<(ValidatorId, DclMessage)>,
+        from_commands: mpsc::Receiver<PrimaryCommand>,
         network: Box<dyn PrimaryNetwork>,
         event_sender: mpsc::Sender<PrimaryEvent>,
         storage: Option<Arc<dyn CarStore>>,
@@ -292,6 +325,7 @@ impl Primary {
             from_workers,
             to_workers,
             from_network,
+            from_commands,
             network,
             storage,
             event_sender,
@@ -336,6 +370,11 @@ impl Primary {
                 // Handle messages from peer Primaries
                 Some((peer, msg)) = self.from_network.recv() => {
                     self.handle_network_message(peer, msg).await;
+                }
+
+                // Handle commands (e.g., consensus decisions)
+                Some(cmd) = self.from_commands.recv() => {
+                    self.handle_command(cmd).await;
                 }
 
                 // Periodic Car creation
@@ -403,6 +442,28 @@ impl Primary {
 
             WorkerToPrimary::Ready { worker_id } => {
                 info!(worker_id, "Worker ready");
+            }
+        }
+    }
+
+    /// Handle commands from external sources (e.g., node)
+    async fn handle_command(&mut self, cmd: PrimaryCommand) {
+        match cmd {
+            PrimaryCommand::ConsensusDecided { height } => {
+                info!(
+                    height,
+                    validator = %self.config.validator_id,
+                    "Received consensus decision notification"
+                );
+
+                // Advance state to allow producing cuts for the next height
+                self.state.finalize_height(height);
+
+                debug!(
+                    new_height = self.state.current_height,
+                    last_finalized = self.state.last_finalized_height,
+                    "Primary state advanced after consensus decision"
+                );
             }
         }
     }
@@ -963,6 +1024,7 @@ mod tests {
 
         let (_from_workers_tx, from_workers_rx) = mpsc::channel(100);
         let (_from_network_tx, from_network_rx) = mpsc::channel(100);
+        let (_command_tx, command_rx) = mpsc::channel(64);
         let (event_tx, mut event_rx) = mpsc::channel(100);
 
         let network = MockNetwork::new();
@@ -974,6 +1036,7 @@ mod tests {
             from_workers_rx,
             vec![],
             from_network_rx,
+            command_rx,
             Box::new(network),
             event_tx,
         );
@@ -1037,6 +1100,7 @@ mod tests {
 
         let (_from_workers_tx, from_workers_rx) = mpsc::channel(100);
         let (_from_network_tx, from_network_rx) = mpsc::channel(100);
+        let (_command_tx, command_rx) = mpsc::channel(64);
         let (event_tx, mut event_rx) = mpsc::channel(100);
 
         let network = MockNetwork::new();
@@ -1048,6 +1112,7 @@ mod tests {
             from_workers_rx,
             vec![],
             from_network_rx,
+            command_rx,
             Box::new(network),
             event_tx,
         );
@@ -1093,6 +1158,7 @@ mod tests {
 
         let (_from_workers_tx, from_workers_rx) = mpsc::channel(100);
         let (_from_network_tx, from_network_rx) = mpsc::channel(100);
+        let (_command_tx, command_rx) = mpsc::channel(64);
         let (event_tx, mut event_rx) = mpsc::channel(100);
         let (to_worker_tx, mut to_worker_rx) = mpsc::channel::<PrimaryToWorker>(100);
 
@@ -1105,6 +1171,7 @@ mod tests {
             from_workers_rx,
             vec![to_worker_tx],
             from_network_rx,
+            command_rx,
             Box::new(network),
             event_tx,
             None,

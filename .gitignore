@@ -41,3 +41,6 @@ testnet/
 
 .serena
 .claude
+
+# Design plans (local only)
+docs/plans/

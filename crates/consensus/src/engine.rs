@@ -83,7 +83,10 @@ pub fn create_context(
 /// Create Malachite consensus params using our Context components.
 ///
 /// - `our_address` should match the validator's ConsensusAddress (derived from our Ed25519 key).
-/// - `value_payload` is set to `ProposalOnly` because we currently send single-part cuts.
+/// - `value_payload` is set to `ProposalAndParts` so that:
+///   - The proposer sends the full proposal message AND publishes proposal parts
+///   - Non-proposers receive proposal parts and store them via ReceivedProposalPart
+///   - This enables non-proposers to look up decided values from commit certificates
 pub fn default_consensus_params(
     ctx: &CipherBftContext,
     our_address: ConsensusAddress,
@@ -93,14 +96,17 @@ pub fn default_consensus_params(
         initial_validator_set: ctx.validator_set().clone(),
         address: our_address,
         threshold_params: ThresholdParams::default(),
-        value_payload: ValuePayload::ProposalOnly,
+        value_payload: ValuePayload::ProposalAndParts,
     }
 }
 
-/// Engine config tuned for single-part proposals (no proposal-part streaming).
+/// Engine config tuned for ProposalAndParts mode.
+///
+/// This mode sends both full proposal messages and proposal parts, enabling
+/// non-proposers to store received values for decision processing.
 pub fn default_engine_config_single_part() -> EngineConsensusConfig {
     EngineConsensusConfig {
-        value_payload: EngineValuePayload::ProposalOnly,
+        value_payload: EngineValuePayload::ProposalAndParts,
         ..Default::default()
     }
 }
@@ -108,6 +114,7 @@ pub fn default_engine_config_single_part() -> EngineConsensusConfig {
 /// Create engine config with timeouts from `ConsensusConfig`.
 ///
 /// This wires the CipherBFT consensus timeouts into the Malachite engine config.
+/// Uses ProposalAndParts mode to enable non-proposers to receive and store proposals.
 pub fn create_engine_config(config: &ConsensusConfig) -> EngineConsensusConfig {
     let timeout_config = TimeoutConfig {
         timeout_propose: config.propose_timeout,
@@ -117,7 +124,7 @@ pub fn create_engine_config(config: &ConsensusConfig) -> EngineConsensusConfig {
     };
 
     EngineConsensusConfig {
-        value_payload: EngineValuePayload::ProposalOnly,
+        value_payload: EngineValuePayload::ProposalAndParts,
         timeouts: timeout_config,
         ..Default::default()
     }
