@@ -657,7 +657,15 @@ impl Node {
         let wal_path = self.config.data_dir.join("wal");
         let wal = spawn_wal(&ctx, wal_path, metrics.clone()).await?;
 
-        let host = spawn_host(self.validator_id, ctx.clone(), cut_rx, Some(decided_tx)).await?;
+        // Pass network to host for ProposalAndParts mode (enables non-proposers to receive proposal parts)
+        let host = spawn_host(
+            self.validator_id,
+            ctx.clone(),
+            cut_rx,
+            Some(decided_tx),
+            Some(network.clone()),
+        )
+        .await?;
 
         // Build and spawn Consensus engine
         let _engine_handles = MalachiteEngineBuilder::new(
@@ -775,6 +783,12 @@ impl Node {
                         height,
                         cut.cars.len()
                     );
+
+                    // Notify Primary that consensus has decided on this height
+                    // This allows Primary to advance its state and produce cuts for the next height
+                    if let Err(e) = primary_handle.notify_decision(height.0).await {
+                        warn!("Failed to notify Primary of consensus decision: {:?}", e);
+                    }
 
                     // Execute Cut if execution layer is enabled
                     if let Some(ref bridge) = execution_bridge {
