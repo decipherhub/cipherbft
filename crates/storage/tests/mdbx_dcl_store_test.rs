@@ -3,6 +3,8 @@
 //! These tests verify that the MDBX-backed DCL storage implementation
 //! correctly implements the DclStore trait with persistence.
 
+#![cfg(feature = "mdbx")]
+
 use cipherbft_crypto::{BlsKeyPair, BlsSignature};
 use cipherbft_data_chain::{AggregatedAttestation, Batch, BatchDigest, Car, Cut};
 use cipherbft_storage::dcl::{DclStore, DclStoreExt, DclStoreTx};

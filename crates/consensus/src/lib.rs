@@ -35,6 +35,9 @@ pub mod vote;
 #[cfg(feature = "malachite")]
 pub mod wal;
 
+#[cfg(feature = "malachite")]
+pub mod execution_handler;
+
 pub use config::ConsensusConfig;
 pub use types::{ConsensusHeight, ConsensusRound, ConsensusValue};
 
@@ -48,7 +51,10 @@ pub use engine::{
     default_engine_config_single_part, EngineHandles, MalachiteEngineBuilder,
 };
 #[cfg(feature = "malachite")]
-pub use host::{spawn_host, spawn_host_actor, CipherBftHost, HostConfig};
+pub use host::{
+    spawn_host, spawn_host_actor, ChannelDecisionHandler, CipherBftHost, DecisionHandler,
+    HostConfig, ValueBuilder,
+};
 #[cfg(feature = "malachite")]
 pub use network::spawn_network;
 #[cfg(feature = "malachite")]
@@ -70,3 +76,8 @@ pub use validator_set_manager::{
 pub use vote::ConsensusVote;
 #[cfg(feature = "malachite")]
 pub use wal::spawn_wal;
+
+#[cfg(feature = "malachite")]
+pub use execution_handler::{
+    ExecutingDecisionHandler, ExecutionCallback, NoOpReceiptStore, ReceiptStore,
+};

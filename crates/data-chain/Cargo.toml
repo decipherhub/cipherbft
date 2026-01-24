@@ -38,7 +38,11 @@ criterion = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 rand = { workspace = true }
-cipherbft-storage = { path = "../storage" }
+cipherbft-storage = { path = "../storage", features = ["mdbx"] }
+
+[features]
+default = []
+mdbx = []
 
 [[bench]]
 name = "car_bench"

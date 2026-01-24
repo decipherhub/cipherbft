@@ -112,6 +112,9 @@ pub use traits::{BlockNumberOrTag, ExecutionApi, MempoolApi, NetworkApi, RpcStor
 // Stub implementations for testing and development
 pub use adapters::{StubExecutionApi, StubMempoolApi, StubNetworkApi, StubRpcStorage};
 
+// Real implementations backed by storage
+pub use adapters::{EvmExecutionApi, PoolMempoolApi, ProviderBasedRpcStorage};
+
 // RPC server traits (for method registration)
 pub use eth::EthRpcServer;
 pub use net::NetRpcServer;

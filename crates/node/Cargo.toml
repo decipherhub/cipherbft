@@ -18,6 +18,8 @@ cipherbft-data-chain = { path = "../data-chain" }
 cipherbft-storage = { path = "../storage" }
 cipherbft-execution = { path = "../execution" }
 cipherbft-consensus = { path = "../consensus", features = ["malachite"] }
+cipherbft-rpc = { path = "../rpc" }
+cipherbft-mempool = { path = "../mempool" }
 
 # Ethereum primitives (for genesis types in tests)
 alloy-primitives = { version = "1", features = ["serde"] }

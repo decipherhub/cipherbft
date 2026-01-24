@@ -18,7 +18,7 @@ use crate::primary::config::PrimaryConfig;
 use crate::primary::core::Core;
 use crate::primary::cut_former::CutFormer;
 use crate::primary::proposer::Proposer;
-use crate::primary::state::PrimaryState;
+use crate::primary::state::{PipelineStage, PrimaryState};
 use crate::storage::CarStore;
 use cipherbft_crypto::BlsPublicKey;
 use cipherbft_types::{Hash, ValidatorId};
@@ -885,7 +885,22 @@ impl Primary {
     }
 
     /// Try to form a Cut from attested Cars
+    ///
+    /// Uses pipeline stage to ensure we only produce one cut per consensus height.
+    /// We only form a new cut when in Collecting stage. After forming a cut,
+    /// we transition to Proposing stage and wait for consensus to decide before
+    /// producing the next cut (via finalize_height).
     async fn try_form_cut(&mut self) {
+        // Only form cuts when in Collecting stage (waiting for attestations)
+        // This prevents producing multiple cuts before consensus decides
+        if self.state.pipeline_stage != PipelineStage::Collecting {
+            trace!(
+                stage = ?self.state.pipeline_stage,
+                "Skipping cut formation - not in Collecting stage"
+            );
+            return;
+        }
+
         // Get attested cars from state (properly populated by mark_attested)
         let attested_cars = self.state.get_attested_cars();
 
@@ -896,8 +911,9 @@ impl Primary {
             return;
         }
 
-        // Form Cut
-        let height = self.state.current_height + 1;
+        // Form Cut at current_height (which is already the next height to produce)
+        // current_height is set to last_finalized_height + 1 by finalize_height()
+        let height = self.state.current_height;
 
         match self
             .cut_former
@@ -917,9 +933,16 @@ impl Primary {
                         .send(PrimaryEvent::CutReady(cut.clone()))
                         .await;
 
-                    // Update last cut
+                    // Update last cut and transition to Proposing stage
+                    // current_height is NOT updated here - it will be updated
+                    // by finalize_height when consensus decides on this cut
                     self.last_cut = Some(cut);
-                    self.state.current_height = height;
+                    self.state.pipeline_stage = PipelineStage::Proposing;
+
+                    debug!(
+                        height,
+                        "Transitioned to Proposing stage, awaiting consensus decision"
+                    );
                 }
             }
 

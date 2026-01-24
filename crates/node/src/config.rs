@@ -68,6 +68,22 @@ fn default_key_name() -> String {
     DEFAULT_KEY_NAME.to_string()
 }
 
+/// Default RPC HTTP port (Ethereum standard)
+pub const DEFAULT_RPC_HTTP_PORT: u16 = 8545;
+
+/// Default RPC WebSocket port (Ethereum standard)
+pub const DEFAULT_RPC_WS_PORT: u16 = 8546;
+
+/// Serde default function for rpc_http_port
+fn default_rpc_http_port() -> u16 {
+    DEFAULT_RPC_HTTP_PORT
+}
+
+/// Serde default function for rpc_ws_port
+fn default_rpc_ws_port() -> u16 {
+    DEFAULT_RPC_WS_PORT
+}
+
 /// Peer configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerConfig {
@@ -163,6 +179,15 @@ pub struct NodeConfig {
     pub max_batch_txs: usize,
     /// Maximum batch size in bytes
     pub max_batch_bytes: usize,
+    /// Whether to enable the JSON-RPC server
+    #[serde(default)]
+    pub rpc_enabled: bool,
+    /// HTTP JSON-RPC port (default: 8545)
+    #[serde(default = "default_rpc_http_port")]
+    pub rpc_http_port: u16,
+    /// WebSocket JSON-RPC port (default: 8546)
+    #[serde(default = "default_rpc_ws_port")]
+    pub rpc_ws_port: u16,
 }
 
 /// Test configuration with keypairs for local testing
@@ -185,7 +210,7 @@ impl NodeConfig {
     pub fn for_local_test(index: usize, _total: usize) -> LocalTestConfig {
         let bls_keypair = BlsKeyPair::generate(&mut rand::thread_rng());
         let ed25519_keypair = Ed25519KeyPair::generate(&mut rand::thread_rng());
-        let validator_id = crate::util::validator_id_from_bls(&bls_keypair.public_key);
+        let validator_id = ed25519_keypair.public_key.validator_id();
 
         let base_port = 9000 + (index * 10) as u16;
 
@@ -213,6 +238,9 @@ impl NodeConfig {
             car_interval_ms: 100,
             max_batch_txs: 100,
             max_batch_bytes: 1024 * 1024, // 1MB
+            rpc_enabled: false,
+            rpc_http_port: DEFAULT_RPC_HTTP_PORT + (index as u16),
+            rpc_ws_port: DEFAULT_RPC_WS_PORT + (index as u16),
         };
 
         LocalTestConfig {
@@ -534,9 +562,8 @@ mod tests {
         // Verify keypairs are generated
         assert_eq!(test_config.bls_keypair.public_key.to_bytes().len(), 48);
         assert_eq!(test_config.ed25519_keypair.public_key.to_bytes().len(), 32);
-        // Verify validator ID matches BLS public key
-        let expected_validator_id =
-            crate::util::validator_id_from_bls(&test_config.bls_keypair.public_key);
+        // Verify validator ID matches Ed25519 public key
+        let expected_validator_id = test_config.ed25519_keypair.public_key.validator_id();
         assert_eq!(test_config.config.validator_id, Some(expected_validator_id));
     }
 

@@ -23,10 +23,14 @@ use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_rpc_types_eth::{Block, Filter, Log, Transaction, TransactionReceipt};
 use async_trait::async_trait;
 use cipherbft_execution::database::Provider;
+use cipherbft_mempool::pool::RecoveredTx;
+use cipherbft_mempool::CipherBftPool;
 use parking_lot::RwLock;
+use reth_primitives::TransactionSigned;
+use reth_transaction_pool::{PoolTransaction, TransactionOrigin, TransactionPool};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 use crate::error::{RpcError, RpcResult};
 use crate::traits::{
@@ -320,9 +324,12 @@ impl<P: Provider + 'static> RpcStorage for ProviderBasedRpcStorage<P> {
 ///
 /// This adapter provides placeholder implementations for RPC storage operations.
 /// Used for testing or when the real storage backend is not available.
+///
+/// Uses `AtomicU64` for `latest_block` to allow thread-safe updates from the
+/// consensus event loop while the storage is behind an `Arc`.
 pub struct StubRpcStorage {
-    /// Latest block number (for testing).
-    latest_block: u64,
+    /// Latest block number (atomic for thread-safe updates).
+    latest_block: AtomicU64,
     /// Chain ID (reserved for future use).
     #[allow(dead_code)]
     chain_id: u64,
@@ -332,14 +339,17 @@ impl StubRpcStorage {
     /// Create a new stub storage adapter.
     pub fn new(chain_id: u64) -> Self {
         Self {
-            latest_block: 0,
+            latest_block: AtomicU64::new(0),
             chain_id,
         }
     }
 
-    /// Set the latest block number (for testing).
-    pub fn set_latest_block(&mut self, block: u64) {
-        self.latest_block = block;
+    /// Set the latest block number.
+    ///
+    /// Thread-safe: can be called from the consensus event loop while
+    /// the storage is behind an `Arc`.
+    pub fn set_latest_block(&self, block: u64) {
+        self.latest_block.store(block, Ordering::SeqCst);
     }
 }
 
@@ -386,7 +396,7 @@ impl RpcStorage for StubRpcStorage {
 
     async fn latest_block_number(&self) -> RpcResult<u64> {
         trace!("StubRpcStorage::latest_block_number");
-        Ok(self.latest_block)
+        Ok(self.latest_block.load(Ordering::SeqCst))
     }
 
     async fn sync_status(&self) -> RpcResult<SyncStatus> {
@@ -462,6 +472,76 @@ impl MempoolApi for StubMempoolApi {
     }
 }
 
+/// Real mempool adapter backed by CipherBftPool.
+///
+/// This adapter implements the MempoolApi trait using an actual transaction pool.
+/// It wraps a `CipherBftPool` and delegates transaction submission and queries
+/// to the underlying pool.
+pub struct PoolMempoolApi<P: TransactionPool> {
+    /// The underlying CipherBFT transaction pool.
+    pool: Arc<CipherBftPool<P>>,
+}
+
+impl<P: TransactionPool> PoolMempoolApi<P> {
+    /// Create a new mempool adapter wrapping a CipherBftPool.
+    pub fn new(pool: Arc<CipherBftPool<P>>) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl<P> MempoolApi for PoolMempoolApi<P>
+where
+    P: TransactionPool + Send + Sync + 'static,
+    P::Transaction: PoolTransaction<Consensus = TransactionSigned> + TryFrom<RecoveredTx>,
+    <P::Transaction as TryFrom<RecoveredTx>>::Error: std::fmt::Display,
+{
+    async fn submit_transaction(&self, tx_bytes: Bytes) -> RpcResult<B256> {
+        debug!(
+            "PoolMempoolApi::submit_transaction({} bytes)",
+            tx_bytes.len()
+        );
+
+        // Decode the transaction to get its hash
+        use alloy_rlp::Decodable;
+        let tx = TransactionSigned::decode(&mut tx_bytes.as_ref()).map_err(|e| {
+            warn!("Failed to decode transaction: {}", e);
+            RpcError::InvalidParams(format!("Invalid transaction encoding: {e}"))
+        })?;
+
+        // Get the transaction hash before submitting
+        let tx_hash = *tx.tx_hash();
+
+        // Submit to the pool
+        self.pool
+            .add_signed_transaction(TransactionOrigin::External, tx)
+            .await
+            .map_err(|e| {
+                warn!("Failed to submit transaction: {}", e);
+                RpcError::Execution(format!("Transaction submission failed: {e}"))
+            })?;
+
+        debug!("Transaction submitted successfully: {}", tx_hash);
+        Ok(tx_hash)
+    }
+
+    async fn get_pending_transactions(&self) -> RpcResult<Vec<B256>> {
+        trace!("PoolMempoolApi::get_pending_transactions");
+
+        // Get all transaction hashes from the pool (pending + queued)
+        let all_txs = self.pool.pool().all_transactions();
+        let hashes: Vec<B256> = all_txs
+            .pending
+            .iter()
+            .chain(all_txs.queued.iter())
+            .map(|tx| *tx.hash())
+            .collect();
+
+        debug!("Found {} transactions in pool", hashes.len());
+        Ok(hashes)
+    }
+}
+
 /// Stub execution adapter.
 ///
 /// This adapter provides placeholder implementations for execution operations.
@@ -527,6 +607,231 @@ impl ExecutionApi for StubExecutionApi {
         let base_gas = 21_000u64;
         let data_gas = data.map(|d| d.len() as u64 * 16).unwrap_or(0);
         Ok(base_gas + data_gas)
+    }
+}
+
+// ============================================================================
+// Real EVM Execution Implementation
+// ============================================================================
+
+/// Real EVM execution adapter using revm.
+///
+/// This adapter executes `eth_call` and `eth_estimateGas` requests using
+/// the revm EVM implementation against the current blockchain state.
+pub struct EvmExecutionApi<P: Provider> {
+    /// Provider for reading state.
+    provider: Arc<P>,
+    /// Chain ID for this network.
+    chain_id: u64,
+    /// Block gas limit.
+    block_gas_limit: u64,
+    /// Base fee per gas.
+    base_fee_per_gas: u64,
+    /// Latest block number (for execution context).
+    latest_block: AtomicU64,
+}
+
+impl<P: Provider> EvmExecutionApi<P> {
+    /// Default block gas limit (30 million).
+    const DEFAULT_BLOCK_GAS_LIMIT: u64 = 30_000_000;
+    /// Default base fee (1 gwei).
+    const DEFAULT_BASE_FEE: u64 = 1_000_000_000;
+    /// Default gas limit for calls.
+    const DEFAULT_CALL_GAS: u64 = 30_000_000;
+
+    /// Create a new EVM execution adapter.
+    pub fn new(provider: Arc<P>, chain_id: u64) -> Self {
+        Self {
+            provider,
+            chain_id,
+            block_gas_limit: Self::DEFAULT_BLOCK_GAS_LIMIT,
+            base_fee_per_gas: Self::DEFAULT_BASE_FEE,
+            latest_block: AtomicU64::new(0),
+        }
+    }
+
+    /// Create with custom configuration.
+    pub fn with_config(
+        provider: Arc<P>,
+        chain_id: u64,
+        block_gas_limit: u64,
+        base_fee_per_gas: u64,
+    ) -> Self {
+        Self {
+            provider,
+            chain_id,
+            block_gas_limit,
+            base_fee_per_gas,
+            latest_block: AtomicU64::new(0),
+        }
+    }
+
+    /// Update the latest block number.
+    pub fn set_latest_block(&self, block: u64) {
+        self.latest_block.store(block, Ordering::SeqCst);
+    }
+
+    /// Execute a call and return the result.
+    fn execute_call_internal(
+        &self,
+        from: Option<Address>,
+        to: Option<Address>,
+        gas: Option<u64>,
+        gas_price: Option<U256>,
+        value: Option<U256>,
+        data: Option<Bytes>,
+    ) -> RpcResult<(Bytes, u64)> {
+        use cipherbft_execution::database::CipherBftDatabase;
+        use revm::context::{BlockEnv, CfgEnv, Context, Evm, FrameStack, Journal, TxEnv};
+        use revm::context_interface::result::{ExecutionResult, Output};
+        use revm::handler::instructions::EthInstructions;
+        use revm::handler::EthPrecompiles;
+        use revm::primitives::hardfork::SpecId;
+        use revm::primitives::TxKind;
+
+        // Type alias to reduce complexity (satisfies clippy::type_complexity)
+        type EvmContext<DB> = Context<BlockEnv, TxEnv, CfgEnv, DB, Journal<DB>, ()>;
+
+        // Create a database wrapper for state access
+        let db = CipherBftDatabase::new(Arc::clone(&self.provider));
+
+        // Build the EVM context
+        let block_number = self.latest_block.load(Ordering::SeqCst);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Create context with database
+        let mut ctx: EvmContext<CipherBftDatabase<Arc<P>>> = Context::new(db, SpecId::CANCUN);
+
+        // Configure block environment
+        ctx.block.number = alloy_primitives::U256::from(block_number);
+        ctx.block.timestamp = alloy_primitives::U256::from(timestamp);
+        ctx.block.gas_limit = self.block_gas_limit;
+        ctx.block.basefee = self.base_fee_per_gas;
+
+        // Configure chain settings
+        ctx.cfg.chain_id = self.chain_id;
+
+        // Set up transaction environment
+        ctx.tx.caller = from.unwrap_or(Address::ZERO);
+        ctx.tx.gas_limit = gas.unwrap_or(Self::DEFAULT_CALL_GAS);
+        ctx.tx.gas_price = gas_price
+            .map(|p| p.try_into().unwrap_or(self.base_fee_per_gas as u128))
+            .unwrap_or(self.base_fee_per_gas as u128);
+        ctx.tx.kind = match to {
+            Some(addr) => TxKind::Call(addr),
+            None => TxKind::Create,
+        };
+        ctx.tx.value = value.unwrap_or(U256::ZERO);
+        ctx.tx.data = data.unwrap_or_default();
+        ctx.tx.nonce = 0; // For calls, nonce doesn't matter
+
+        // Build the EVM with standard precompiles
+        let mut evm = Evm {
+            ctx,
+            inspector: (),
+            instruction: EthInstructions::default(),
+            precompiles: EthPrecompiles::default(),
+            frame_stack: FrameStack::new_prealloc(8),
+        };
+
+        // Clone tx_env before passing to transact
+        let tx_env = evm.ctx.tx.clone();
+
+        // Execute the transaction
+        use revm::handler::ExecuteEvm;
+        let result = evm.transact(tx_env).map_err(|e| {
+            debug!("EVM execution error: {:?}", e);
+            RpcError::Execution(format!("EVM execution failed: {e:?}"))
+        })?;
+
+        // Process the result (result is ExecResultAndState, access .result for ExecutionResult)
+        let gas_used = result.result.gas_used();
+        let output = match result.result {
+            ExecutionResult::Success { output, .. } => match output {
+                Output::Call(data) => data,
+                Output::Create(_, addr) => {
+                    // For contract creation, encode the address as bytes
+                    addr.map(|a: Address| Bytes::copy_from_slice(a.as_slice()))
+                        .unwrap_or_default()
+                }
+            },
+            ExecutionResult::Revert { output, .. } => {
+                return Err(RpcError::Execution(format!(
+                    "Execution reverted: 0x{}",
+                    hex::encode(&output)
+                )));
+            }
+            ExecutionResult::Halt { reason, .. } => {
+                return Err(RpcError::Execution(format!("Execution halted: {reason:?}")));
+            }
+        };
+
+        Ok((output, gas_used))
+    }
+}
+
+#[async_trait]
+impl<P: Provider + 'static> ExecutionApi for EvmExecutionApi<P> {
+    async fn call(
+        &self,
+        from: Option<Address>,
+        to: Option<Address>,
+        gas: Option<u64>,
+        gas_price: Option<U256>,
+        value: Option<U256>,
+        data: Option<Bytes>,
+        _block: BlockNumberOrTag,
+    ) -> RpcResult<Bytes> {
+        debug!(
+            "EvmExecutionApi::call(from={:?}, to={:?}, gas={:?}, data_len={:?})",
+            from,
+            to,
+            gas,
+            data.as_ref().map(|d| d.len())
+        );
+
+        let (output, gas_used) =
+            self.execute_call_internal(from, to, gas, gas_price, value, data)?;
+
+        trace!(
+            "eth_call result: {} bytes, {} gas used",
+            output.len(),
+            gas_used
+        );
+        Ok(output)
+    }
+
+    async fn estimate_gas(
+        &self,
+        from: Option<Address>,
+        to: Option<Address>,
+        gas: Option<u64>,
+        gas_price: Option<U256>,
+        value: Option<U256>,
+        data: Option<Bytes>,
+        _block: BlockNumberOrTag,
+    ) -> RpcResult<u64> {
+        debug!(
+            "EvmExecutionApi::estimate_gas(from={:?}, to={:?}, gas={:?}, data_len={:?})",
+            from,
+            to,
+            gas,
+            data.as_ref().map(|d| d.len())
+        );
+
+        let (_, gas_used) = self.execute_call_internal(from, to, gas, gas_price, value, data)?;
+
+        // Add a small buffer to the gas estimate (10%)
+        let estimated = gas_used + (gas_used / 10);
+        trace!(
+            "eth_estimateGas result: {} (actual: {})",
+            estimated,
+            gas_used
+        );
+        Ok(estimated)
     }
 }
 

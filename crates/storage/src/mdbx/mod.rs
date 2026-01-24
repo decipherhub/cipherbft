@@ -8,6 +8,7 @@
 //! - [`Database`]: Main database wrapper around reth-db
 //! - [`Tables`]: Custom table definitions for DCL, EVM, and staking data
 //! - [`MdbxDclStore`]: Implementation of [`DclStore`] trait
+//! - [`MdbxBatchStore`]: Implementation of [`BatchStore`] trait for worker batches
 //! - [`MdbxEvmStore`]: Implementation of [`EvmStore`] trait
 //! - [`MdbxStakingStore`]: Implementation of [`StakingStore`] trait
 //! - [`MdbxWal`]: Persistent WAL implementation
@@ -19,16 +20,22 @@
 //! cipherbft-storage = { version = "0.1", features = ["mdbx"] }
 //! ```
 
+mod batch;
+mod blocks;
 mod database;
 mod evm;
 mod provider;
+mod receipts;
 mod staking;
 mod tables;
 mod wal;
 
+pub use batch::MdbxBatchStore;
+pub use blocks::MdbxBlockStore;
 pub use database::{Database, DatabaseConfig, DatabaseEnv};
 pub use evm::MdbxEvmStore;
 pub use provider::{MdbxDclStore, MdbxDclStoreTx};
+pub use receipts::MdbxReceiptStore;
 pub use staking::MdbxStakingStore;
 pub use tables::{
     // EVM table types
@@ -37,6 +44,9 @@ pub use tables::{
     Attestations,
     Batches,
     BlockNumberKey,
+    // Block table types
+    Blocks,
+    BlocksByHash,
     // Key types
     CarTableKey,
     Cars,
@@ -53,6 +63,9 @@ pub use tables::{
     HeightRoundKey,
     PendingCuts,
     Proposals,
+    // Receipt table types
+    Receipts,
+    ReceiptsByBlock,
     // Staking table types
     StakingMetadata,
     StakingValidators,
@@ -62,12 +75,17 @@ pub use tables::{
     StoredAggregatedAttestation,
     StoredBatch,
     StoredBatchDigest,
+    // Block value types
+    StoredBlock,
     StoredBytecode,
     StoredCar,
     StoredCarEntry,
     StoredConsensusState,
     StoredCut,
+    // Receipt value types
+    StoredLog,
     StoredProposal,
+    StoredReceipt,
     StoredStakingMetadata,
     StoredStorageValue,
     StoredValidator,

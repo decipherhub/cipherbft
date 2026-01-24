@@ -86,7 +86,7 @@ pub enum PipelineStage {
 pub struct PrimaryState {
     /// Our validator identity
     pub our_id: ValidatorId,
-    /// Current consensus height
+    /// Next height to produce (= last_finalized_height + 1)
     pub current_height: u64,
     /// Pending batch digests from Workers (to be included in next Car)
     pub pending_digests: Vec<BatchDigest>,
@@ -146,7 +146,9 @@ impl PrimaryState {
     pub fn new(our_id: ValidatorId, equivocation_retention: u64) -> Self {
         Self {
             our_id,
-            current_height: 0,
+            // Start at height 1 (first height to produce after genesis)
+            // Invariant: current_height = last_finalized_height + 1
+            current_height: 1,
             pending_digests: Vec::new(),
             available_batches: std::collections::HashSet::new(),
             our_position: 0,
