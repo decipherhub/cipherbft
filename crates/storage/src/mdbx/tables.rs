@@ -1052,6 +1052,213 @@ impl Decompress for BlockNumberKey {
 }
 
 // =============================================================================
+// Log Tables (for RPC eth_getLogs)
+// =============================================================================
+
+/// Key for Logs table: (block_number, log_index)
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, Serialize, Deserialize,
+)]
+pub struct LogKey {
+    /// Block number
+    pub block_number: u64,
+    /// Log index within the block
+    pub log_index: u32,
+}
+
+impl LogKey {
+    /// Create a new LogKey
+    pub fn new(block_number: u64, log_index: u32) -> Self {
+        Self {
+            block_number,
+            log_index,
+        }
+    }
+
+    /// Total encoded size: 8 + 4 = 12 bytes
+    pub const ENCODED_SIZE: usize = 12;
+}
+
+impl Encode for LogKey {
+    type Encoded = [u8; LogKey::ENCODED_SIZE];
+
+    fn encode(self) -> Self::Encoded {
+        let mut buf = [0u8; Self::ENCODED_SIZE];
+        buf[..8].copy_from_slice(&self.block_number.to_be_bytes());
+        buf[8..12].copy_from_slice(&self.log_index.to_be_bytes());
+        buf
+    }
+}
+
+impl Decode for LogKey {
+    fn decode(value: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
+        if value.len() < Self::ENCODED_SIZE {
+            return Err(reth_db_api::DatabaseError::Decode);
+        }
+        let block_number = u64::from_be_bytes(
+            value[..8]
+                .try_into()
+                .map_err(|_| reth_db_api::DatabaseError::Decode)?,
+        );
+        let log_index = u32::from_be_bytes(
+            value[8..12]
+                .try_into()
+                .map_err(|_| reth_db_api::DatabaseError::Decode)?,
+        );
+        Ok(Self {
+            block_number,
+            log_index,
+        })
+    }
+}
+
+/// Key for LogsByAddress table: (address, block_number, log_index)
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, Serialize, Deserialize,
+)]
+pub struct AddressLogKey {
+    /// Contract address
+    pub address: [u8; 20],
+    /// Block number
+    pub block_number: u64,
+    /// Log index within the block
+    pub log_index: u32,
+}
+
+impl AddressLogKey {
+    /// Create a new AddressLogKey
+    pub fn new(address: [u8; 20], block_number: u64, log_index: u32) -> Self {
+        Self {
+            address,
+            block_number,
+            log_index,
+        }
+    }
+
+    /// Total encoded size: 20 + 8 + 4 = 32 bytes
+    pub const ENCODED_SIZE: usize = 32;
+}
+
+impl Encode for AddressLogKey {
+    type Encoded = [u8; AddressLogKey::ENCODED_SIZE];
+
+    fn encode(self) -> Self::Encoded {
+        let mut buf = [0u8; Self::ENCODED_SIZE];
+        buf[..20].copy_from_slice(&self.address);
+        buf[20..28].copy_from_slice(&self.block_number.to_be_bytes());
+        buf[28..32].copy_from_slice(&self.log_index.to_be_bytes());
+        buf
+    }
+}
+
+impl Decode for AddressLogKey {
+    fn decode(value: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
+        if value.len() < Self::ENCODED_SIZE {
+            return Err(reth_db_api::DatabaseError::Decode);
+        }
+        let mut address = [0u8; 20];
+        address.copy_from_slice(&value[..20]);
+        let block_number = u64::from_be_bytes(
+            value[20..28]
+                .try_into()
+                .map_err(|_| reth_db_api::DatabaseError::Decode)?,
+        );
+        let log_index = u32::from_be_bytes(
+            value[28..32]
+                .try_into()
+                .map_err(|_| reth_db_api::DatabaseError::Decode)?,
+        );
+        Ok(Self {
+            address,
+            block_number,
+            log_index,
+        })
+    }
+}
+
+/// Stored log entry for the Logs table (includes block context)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredLogEntry {
+    /// Contract address that emitted the log (20 bytes)
+    pub address: [u8; 20],
+    /// Indexed topics (up to 4, each 32 bytes)
+    pub topics: Vec<[u8; 32]>,
+    /// Non-indexed log data
+    pub data: Vec<u8>,
+    /// Block hash (32 bytes)
+    pub block_hash: [u8; 32],
+    /// Transaction hash (32 bytes)
+    pub transaction_hash: [u8; 32],
+    /// Transaction index within the block
+    pub transaction_index: u32,
+    /// Whether this log was removed (reorg)
+    pub removed: bool,
+}
+
+/// Stored bloom filter for a block (256 bytes)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredBloom {
+    /// The bloom filter bytes (256 bytes / 2048 bits)
+    /// Stored as Vec<u8> since serde doesn't support [u8; 256] by default
+    pub bloom: Vec<u8>,
+}
+
+/// Logs table: (BlockNumber, LogIndex) -> StoredLogEntry
+/// Stores transaction logs indexed by block and log index
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Logs;
+
+impl Table for Logs {
+    const NAME: &'static str = "Logs";
+    const DUPSORT: bool = false;
+    type Key = LogKey;
+    type Value = BincodeValue<StoredLogEntry>;
+}
+
+/// LogsByAddress table: (Address, BlockNumber, LogIndex) -> ()
+/// Secondary index for looking up logs by emitting contract address
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LogsByAddress;
+
+impl Table for LogsByAddress {
+    const NAME: &'static str = "LogsByAddress";
+    const DUPSORT: bool = false;
+    type Key = AddressLogKey;
+    type Value = UnitKey; // Just a marker, the key contains all info needed
+}
+
+/// BlockBlooms table: BlockNumber -> StoredBloom
+/// Stores logs bloom filters for each block (for fast negative lookups)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BlockBlooms;
+
+impl Table for BlockBlooms {
+    const NAME: &'static str = "BlockBlooms";
+    const DUPSORT: bool = false;
+    type Key = BlockNumberKey;
+    type Value = BincodeValue<StoredBloom>;
+}
+
+// UnitKey needs Compress/Decompress for use as a Value
+impl Compress for UnitKey {
+    type Compressed = Vec<u8>;
+
+    fn compress(self) -> Self::Compressed {
+        vec![0]
+    }
+
+    fn compress_to_buf<B: bytes::BufMut + AsMut<[u8]>>(&self, buf: &mut B) {
+        buf.put_slice(&[0]);
+    }
+}
+
+impl Decompress for UnitKey {
+    fn decompress(_value: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
+        Ok(Self)
+    }
+}
+
+// =============================================================================
 // TableInfo and TableSet implementation for CipherBFT custom tables
 // =============================================================================
 
@@ -1084,6 +1291,10 @@ pub enum CipherBftTable {
     // Block tables
     Blocks,
     BlocksByHash,
+    // Log tables
+    Logs,
+    LogsByAddress,
+    BlockBlooms,
 }
 
 impl CipherBftTable {
@@ -1115,6 +1326,10 @@ impl CipherBftTable {
         // Block tables
         Self::Blocks,
         Self::BlocksByHash,
+        // Log tables
+        Self::Logs,
+        Self::LogsByAddress,
+        Self::BlockBlooms,
     ];
 }
 
@@ -1142,6 +1357,9 @@ impl TableInfo for CipherBftTable {
             Self::ReceiptsByBlock => ReceiptsByBlock::NAME,
             Self::Blocks => Blocks::NAME,
             Self::BlocksByHash => BlocksByHash::NAME,
+            Self::Logs => Logs::NAME,
+            Self::LogsByAddress => LogsByAddress::NAME,
+            Self::BlockBlooms => BlockBlooms::NAME,
         }
     }
 
@@ -1168,6 +1386,9 @@ impl TableInfo for CipherBftTable {
             Self::ReceiptsByBlock => ReceiptsByBlock::DUPSORT,
             Self::Blocks => Blocks::DUPSORT,
             Self::BlocksByHash => BlocksByHash::DUPSORT,
+            Self::Logs => Logs::DUPSORT,
+            Self::LogsByAddress => LogsByAddress::DUPSORT,
+            Self::BlockBlooms => BlockBlooms::DUPSORT,
         }
     }
 }
@@ -1204,6 +1425,10 @@ impl Tables {
         // Block tables
         Blocks::NAME,
         BlocksByHash::NAME,
+        // Log tables
+        Logs::NAME,
+        LogsByAddress::NAME,
+        BlockBlooms::NAME,
     ];
 }
 

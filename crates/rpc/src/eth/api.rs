@@ -6,7 +6,8 @@ use alloy_consensus::transaction::SignerRecoverable;
 use alloy_consensus::{Transaction as TxTrait, TxEnvelope};
 use alloy_primitives::{Address, Bytes, B256, U256, U64};
 use alloy_rpc_types_eth::{
-    Block, Filter, Log, SyncInfo, SyncStatus as EthSyncStatus, Transaction, TransactionReceipt,
+    transaction::AccessListResult, Block, EIP1186AccountProofResponse, FeeHistory, Filter, Log,
+    SyncInfo, SyncStatus as EthSyncStatus, Transaction, TransactionReceipt,
 };
 use jsonrpsee::core::RpcResult as JsonRpcResult;
 use jsonrpsee::proc_macros::rpc;
@@ -15,6 +16,7 @@ use tracing::{debug, trace, warn};
 
 use crate::config::RpcConfig;
 use crate::error::RpcError;
+use crate::filters::{FilterManager, FilterType};
 use crate::traits::{BlockNumberOrTag, ExecutionApi, MempoolApi, RpcStorage, SyncStatus};
 
 /// Ethereum namespace RPC trait.
@@ -87,6 +89,18 @@ pub trait EthRpc {
         hash: B256,
     ) -> JsonRpcResult<Option<TransactionReceipt>>;
 
+    /// Returns all transaction receipts for a given block.
+    ///
+    /// This is more efficient than calling `eth_getTransactionReceipt` for each
+    /// transaction in the block. Returns `None` if the block doesn't exist.
+    ///
+    /// The `block` parameter accepts block number or tag ("latest", "earliest", "pending", "safe", "finalized").
+    #[method(name = "getBlockReceipts")]
+    async fn get_block_receipts(
+        &self,
+        block: String,
+    ) -> JsonRpcResult<Option<Vec<TransactionReceipt>>>;
+
     /// Returns an array of all logs matching a given filter object.
     #[method(name = "getLogs")]
     async fn get_logs(&self, filter: Filter) -> JsonRpcResult<Vec<Log>>;
@@ -110,6 +124,189 @@ pub trait EthRpc {
     /// Returns the current gas price in wei.
     #[method(name = "gasPrice")]
     async fn gas_price(&self) -> JsonRpcResult<U256>;
+
+    /// Returns historical gas information, allowing for better fee estimation.
+    ///
+    /// Introduced in EIP-1559.
+    #[method(name = "feeHistory")]
+    async fn fee_history(
+        &self,
+        block_count: U64,
+        newest_block: String,
+        reward_percentiles: Option<Vec<f64>>,
+    ) -> JsonRpcResult<FeeHistory>;
+
+    /// Returns all pending transactions in the transaction pool.
+    ///
+    /// This is a non-standard method supported by Reth and Geth.
+    /// Returns a flat list of all pending transactions.
+    #[method(name = "pendingTransactions")]
+    async fn pending_transactions(&self) -> JsonRpcResult<Vec<Transaction>>;
+
+    /// Returns the number of transactions in a block from a block matching the given hash.
+    #[method(name = "getBlockTransactionCountByHash")]
+    async fn get_block_transaction_count_by_hash(
+        &self,
+        block_hash: B256,
+    ) -> JsonRpcResult<Option<U64>>;
+
+    /// Returns the number of transactions in a block from a block matching the given number.
+    #[method(name = "getBlockTransactionCountByNumber")]
+    async fn get_block_transaction_count_by_number(
+        &self,
+        block: String,
+    ) -> JsonRpcResult<Option<U64>>;
+
+    /// Returns a transaction by block hash and transaction index position.
+    #[method(name = "getTransactionByBlockHashAndIndex")]
+    async fn get_transaction_by_block_hash_and_index(
+        &self,
+        block_hash: B256,
+        index: U64,
+    ) -> JsonRpcResult<Option<Transaction>>;
+
+    /// Returns a transaction by block number and transaction index position.
+    #[method(name = "getTransactionByBlockNumberAndIndex")]
+    async fn get_transaction_by_block_number_and_index(
+        &self,
+        block: String,
+        index: U64,
+    ) -> JsonRpcResult<Option<Transaction>>;
+
+    /// Returns the current maximum priority fee per gas in wei.
+    ///
+    /// This is used by EIP-1559 wallets to determine a suggested priority fee.
+    #[method(name = "maxPriorityFeePerGas")]
+    async fn max_priority_fee_per_gas(&self) -> JsonRpcResult<U256>;
+
+    /// Returns a list of addresses owned by this node.
+    ///
+    /// For external signing (the common case), this returns an empty list.
+    /// Validators may return their validator address.
+    #[method(name = "accounts")]
+    async fn accounts(&self) -> JsonRpcResult<Vec<Address>>;
+
+    /// Returns the client coinbase address (validator/block producer address).
+    ///
+    /// Returns the zero address if not configured as a validator.
+    #[method(name = "coinbase")]
+    async fn coinbase(&self) -> JsonRpcResult<Address>;
+
+    /// Returns true if client is actively mining new blocks.
+    ///
+    /// Always returns false for PoS chains like CipherBFT.
+    #[method(name = "mining")]
+    async fn mining(&self) -> JsonRpcResult<bool>;
+
+    /// Returns the number of hashes per second that the node is mining with.
+    ///
+    /// Always returns 0 for PoS chains like CipherBFT.
+    #[method(name = "hashrate")]
+    async fn hashrate(&self) -> JsonRpcResult<U256>;
+
+    /// Returns information about an uncle by block hash and uncle index.
+    ///
+    /// Always returns null for PoS chains (no uncles in CipherBFT).
+    #[method(name = "getUncleByBlockHashAndIndex")]
+    async fn get_uncle_by_block_hash_and_index(
+        &self,
+        block_hash: B256,
+        index: U64,
+    ) -> JsonRpcResult<Option<Block>>;
+
+    /// Returns information about an uncle by block number and uncle index.
+    ///
+    /// Always returns null for PoS chains (no uncles in CipherBFT).
+    #[method(name = "getUncleByBlockNumberAndIndex")]
+    async fn get_uncle_by_block_number_and_index(
+        &self,
+        block: String,
+        index: U64,
+    ) -> JsonRpcResult<Option<Block>>;
+
+    /// Returns the number of uncles in a block from a block matching the given hash.
+    ///
+    /// Always returns 0 for PoS chains (no uncles in CipherBFT).
+    #[method(name = "getUncleCountByBlockHash")]
+    async fn get_uncle_count_by_block_hash(&self, block_hash: B256) -> JsonRpcResult<U64>;
+
+    /// Returns the number of uncles in a block from a block matching the given number.
+    ///
+    /// Always returns 0 for PoS chains (no uncles in CipherBFT).
+    #[method(name = "getUncleCountByBlockNumber")]
+    async fn get_uncle_count_by_block_number(&self, block: String) -> JsonRpcResult<U64>;
+
+    /// Returns the account and storage values including the Merkle proof.
+    ///
+    /// This method is defined in EIP-1186 and is used for light client verification.
+    /// Returns proof data for the account at the given address and storage keys.
+    ///
+    /// Note: This method returns an error as CipherBFT does not currently expose
+    /// state trie access for proof generation.
+    #[method(name = "getProof")]
+    async fn get_proof(
+        &self,
+        address: Address,
+        storage_keys: Vec<B256>,
+        block: Option<String>,
+    ) -> JsonRpcResult<EIP1186AccountProofResponse>;
+
+    /// Creates an access list for a transaction.
+    ///
+    /// This method simulates a transaction and returns the access list that
+    /// would be created during execution. The access list contains all addresses
+    /// and storage keys that would be accessed.
+    ///
+    /// Note: This method returns an error as CipherBFT does not currently expose
+    /// state access tracking for access list generation.
+    #[method(name = "createAccessList")]
+    async fn create_access_list(
+        &self,
+        call_request: CallRequest,
+        block: Option<String>,
+    ) -> JsonRpcResult<AccessListResult>;
+
+    // ===== Filter Methods =====
+
+    /// Creates a new log filter.
+    ///
+    /// Returns a filter ID that can be used with `eth_getFilterChanges` and
+    /// `eth_getFilterLogs` to poll for matching logs.
+    #[method(name = "newFilter")]
+    async fn new_filter(&self, filter: Filter) -> JsonRpcResult<U256>;
+
+    /// Creates a new block filter.
+    ///
+    /// Returns a filter ID that can be used with `eth_getFilterChanges` to
+    /// poll for new block hashes.
+    #[method(name = "newBlockFilter")]
+    async fn new_block_filter(&self) -> JsonRpcResult<U256>;
+
+    /// Creates a new pending transaction filter.
+    ///
+    /// Returns a filter ID that can be used with `eth_getFilterChanges` to
+    /// poll for new pending transaction hashes.
+    #[method(name = "newPendingTransactionFilter")]
+    async fn new_pending_transaction_filter(&self) -> JsonRpcResult<U256>;
+
+    /// Returns an array of logs or hashes that match the filter since last poll.
+    ///
+    /// For log filters, returns logs. For block filters, returns block hashes.
+    /// For pending transaction filters, returns transaction hashes.
+    #[method(name = "getFilterChanges")]
+    async fn get_filter_changes(&self, filter_id: U256) -> JsonRpcResult<serde_json::Value>;
+
+    /// Returns all logs matching the filter criteria.
+    ///
+    /// Only works for log filters. Returns an error for block or pending tx filters.
+    #[method(name = "getFilterLogs")]
+    async fn get_filter_logs(&self, filter_id: U256) -> JsonRpcResult<Vec<Log>>;
+
+    /// Uninstalls a filter with the given ID.
+    ///
+    /// Returns true if the filter was successfully uninstalled.
+    #[method(name = "uninstallFilter")]
+    async fn uninstall_filter(&self, filter_id: U256) -> JsonRpcResult<bool>;
 }
 
 /// Call request parameters for eth_call and eth_estimateGas.
@@ -150,6 +347,8 @@ where
     executor: Arc<E>,
     /// RPC configuration.
     config: Arc<RpcConfig>,
+    /// Filter manager for eth_newFilter etc.
+    filter_manager: Arc<FilterManager>,
 }
 
 impl<S, M, E> EthApi<S, M, E>
@@ -165,7 +364,30 @@ where
             mempool,
             executor,
             config,
+            filter_manager: Arc::new(FilterManager::new()),
         }
+    }
+
+    /// Create a new EthApi instance with a shared filter manager.
+    pub fn with_filter_manager(
+        storage: Arc<S>,
+        mempool: Arc<M>,
+        executor: Arc<E>,
+        config: Arc<RpcConfig>,
+        filter_manager: Arc<FilterManager>,
+    ) -> Self {
+        Self {
+            storage,
+            mempool,
+            executor,
+            config,
+            filter_manager,
+        }
+    }
+
+    /// Get a reference to the filter manager.
+    pub fn filter_manager(&self) -> &Arc<FilterManager> {
+        &self.filter_manager
     }
 
     /// Parse a block number or tag from a string.
@@ -396,7 +618,19 @@ where
 
     async fn get_transaction_by_hash(&self, hash: B256) -> JsonRpcResult<Option<Transaction>> {
         trace!("eth_getTransactionByHash: hash={}", hash);
-        self.storage
+
+        // First, try to find the transaction in storage (finalized/on-chain)
+        match self.storage.get_transaction_by_hash(hash).await {
+            Ok(Some(tx)) => return Ok(Some(tx)),
+            Ok(None) => {
+                // Transaction not in storage, check mempool for pending transactions
+                trace!("Transaction {} not in storage, checking mempool", hash);
+            }
+            Err(e) => return Err(Self::to_json_rpc_error(e)),
+        }
+
+        // Fallback: check the mempool for pending transactions
+        self.mempool
             .get_transaction_by_hash(hash)
             .await
             .map_err(Self::to_json_rpc_error)
@@ -409,6 +643,19 @@ where
         trace!("eth_getTransactionReceipt: hash={}", hash);
         self.storage
             .get_transaction_receipt(hash)
+            .await
+            .map_err(Self::to_json_rpc_error)
+    }
+
+    async fn get_block_receipts(
+        &self,
+        block: String,
+    ) -> JsonRpcResult<Option<Vec<TransactionReceipt>>> {
+        let block_tag = self.parse_block_number(Some(block))?;
+        debug!("eth_getBlockReceipts: block={:?}", block_tag);
+
+        self.storage
+            .get_block_receipts(block_tag)
             .await
             .map_err(Self::to_json_rpc_error)
     }
@@ -506,8 +753,610 @@ where
 
     async fn gas_price(&self) -> JsonRpcResult<U256> {
         trace!("eth_gasPrice");
-        // For now, return a fixed gas price of 1 gwei
-        // TODO: Implement dynamic gas price estimation
-        Ok(U256::from(1_000_000_000u64))
+
+        // Default values
+        const DEFAULT_GAS_PRICE: u64 = 1_000_000_000; // 1 gwei
+        const DEFAULT_PRIORITY_FEE: u64 = 1_000_000_000; // 1 gwei
+
+        // Try to get the latest block's base fee for EIP-1559 chains
+        let latest_block = self
+            .storage
+            .get_block_by_number(BlockNumberOrTag::Latest, false)
+            .await
+            .map_err(Self::to_json_rpc_error)?;
+
+        if let Some(block) = latest_block {
+            // For EIP-1559 chains, return base_fee + priority_fee
+            if let Some(base_fee) = block.header.base_fee_per_gas {
+                // Suggest base fee + 1 gwei priority fee
+                let suggested_price = base_fee.saturating_add(DEFAULT_PRIORITY_FEE);
+                debug!(
+                    "eth_gasPrice: base_fee={}, suggested_price={}",
+                    base_fee, suggested_price
+                );
+                return Ok(U256::from(suggested_price));
+            }
+        }
+
+        // Fall back to default gas price (pre-EIP-1559 or no blocks)
+        debug!("eth_gasPrice: returning default {}", DEFAULT_GAS_PRICE);
+        Ok(U256::from(DEFAULT_GAS_PRICE))
+    }
+
+    async fn fee_history(
+        &self,
+        block_count: U64,
+        newest_block: String,
+        reward_percentiles: Option<Vec<f64>>,
+    ) -> JsonRpcResult<FeeHistory> {
+        debug!(
+            "eth_feeHistory: block_count={}, newest_block={}, percentiles={:?}",
+            block_count, newest_block, reward_percentiles
+        );
+
+        let block_count = block_count.to::<u64>();
+
+        // Validate block count (max 1024 per Ethereum spec)
+        const MAX_BLOCK_COUNT: u64 = 1024;
+        if block_count > MAX_BLOCK_COUNT {
+            return Err(RpcError::InvalidParams(format!(
+                "Block count {} exceeds maximum of {}",
+                block_count, MAX_BLOCK_COUNT
+            ))
+            .into());
+        }
+
+        if block_count == 0 {
+            return Ok(FeeHistory::default());
+        }
+
+        // Validate reward percentiles
+        if let Some(ref percentiles) = reward_percentiles {
+            for p in percentiles {
+                if !p.is_finite() || *p < 0.0 || *p > 100.0 {
+                    return Err(RpcError::InvalidParams(format!(
+                        "Invalid percentile value: {}. Must be between 0 and 100",
+                        p
+                    ))
+                    .into());
+                }
+            }
+            // Check percentiles are monotonically increasing
+            for i in 1..percentiles.len() {
+                if percentiles[i] < percentiles[i - 1] {
+                    return Err(RpcError::InvalidParams(
+                        "Reward percentiles must be monotonically increasing".to_string(),
+                    )
+                    .into());
+                }
+            }
+        }
+
+        // Parse the newest block
+        let newest_block_tag = self.parse_block_number(Some(newest_block))?;
+        let newest_block_number = match newest_block_tag {
+            BlockNumberOrTag::Latest
+            | BlockNumberOrTag::Safe
+            | BlockNumberOrTag::Finalized
+            | BlockNumberOrTag::Pending => self
+                .storage
+                .latest_block_number()
+                .await
+                .map_err(Self::to_json_rpc_error)?,
+            BlockNumberOrTag::Earliest => 0,
+            BlockNumberOrTag::Number(n) => n,
+        };
+
+        // Calculate the block range
+        let oldest_block = newest_block_number.saturating_sub(block_count - 1);
+        let actual_block_count = newest_block_number - oldest_block + 1;
+
+        // Collect fee history data
+        let mut base_fee_per_gas: Vec<u128> = Vec::with_capacity((actual_block_count + 1) as usize);
+        let mut gas_used_ratio: Vec<f64> = Vec::with_capacity(actual_block_count as usize);
+        let mut reward: Option<Vec<Vec<u128>>> = if reward_percentiles.is_some() {
+            Some(Vec::with_capacity(actual_block_count as usize))
+        } else {
+            None
+        };
+
+        for block_num in oldest_block..=newest_block_number {
+            // Get block data
+            let block = self
+                .storage
+                .get_block_by_number(BlockNumberOrTag::Number(block_num), false)
+                .await
+                .map_err(Self::to_json_rpc_error)?;
+
+            match block {
+                Some(block) => {
+                    // Get base fee (0 for pre-EIP-1559 blocks)
+                    let base_fee = block.header.base_fee_per_gas.unwrap_or(0) as u128;
+                    base_fee_per_gas.push(base_fee);
+
+                    // Calculate gas used ratio
+                    let gas_limit = block.header.gas_limit;
+                    let gas_used = block.header.gas_used;
+                    let ratio = if gas_limit > 0 {
+                        gas_used as f64 / gas_limit as f64
+                    } else {
+                        0.0
+                    };
+                    gas_used_ratio.push(ratio);
+
+                    // Calculate reward percentiles if requested
+                    if let Some(ref percentiles) = reward_percentiles {
+                        // For simplicity, return zeros for now
+                        // A full implementation would need transaction priority fees
+                        let block_rewards: Vec<u128> = percentiles.iter().map(|_| 0u128).collect();
+                        if let Some(ref mut rewards) = reward {
+                            rewards.push(block_rewards);
+                        }
+                    }
+                }
+                None => {
+                    // Block not found, use defaults
+                    base_fee_per_gas.push(0);
+                    gas_used_ratio.push(0.0);
+                    if let Some(ref mut rewards) = reward {
+                        let percentile_count =
+                            reward_percentiles.as_ref().map(|p| p.len()).unwrap_or(0);
+                        rewards.push(vec![0u128; percentile_count]);
+                    }
+                }
+            }
+        }
+
+        // Add the next block's base fee estimate (simple calculation)
+        // In reality, this would use the EIP-1559 base fee adjustment formula
+        let last_base_fee = base_fee_per_gas.last().copied().unwrap_or(0);
+        let last_ratio = gas_used_ratio.last().copied().unwrap_or(0.5);
+
+        // Simple base fee estimation: increase if block was >50% full, decrease otherwise
+        let next_base_fee = if last_ratio > 0.5 {
+            // Block was more than 50% full, increase base fee
+            let increase = (last_base_fee as f64 * 0.125 * (last_ratio - 0.5) * 2.0) as u128;
+            last_base_fee.saturating_add(increase)
+        } else {
+            // Block was less than 50% full, decrease base fee
+            let decrease = (last_base_fee as f64 * 0.125 * (0.5 - last_ratio) * 2.0) as u128;
+            last_base_fee.saturating_sub(decrease)
+        };
+        base_fee_per_gas.push(next_base_fee);
+
+        Ok(FeeHistory {
+            oldest_block,
+            base_fee_per_gas,
+            gas_used_ratio,
+            base_fee_per_blob_gas: Vec::new(), // Not supporting blob transactions yet
+            blob_gas_used_ratio: Vec::new(),
+            reward,
+        })
+    }
+
+    async fn pending_transactions(&self) -> JsonRpcResult<Vec<Transaction>> {
+        trace!("eth_pendingTransactions");
+
+        // Get pending transactions from mempool
+        let pending_by_sender = self
+            .mempool
+            .get_pending_content()
+            .await
+            .map_err(Self::to_json_rpc_error)?;
+
+        // Flatten into a single list
+        let mut transactions: Vec<Transaction> = Vec::new();
+        for (_sender, txs) in pending_by_sender {
+            transactions.extend(txs);
+        }
+
+        debug!(
+            "eth_pendingTransactions: returning {} transactions",
+            transactions.len()
+        );
+        Ok(transactions)
+    }
+
+    async fn get_block_transaction_count_by_hash(
+        &self,
+        block_hash: B256,
+    ) -> JsonRpcResult<Option<U64>> {
+        trace!("eth_getBlockTransactionCountByHash: hash={}", block_hash);
+
+        let block = self
+            .storage
+            .get_block_by_hash(block_hash, false)
+            .await
+            .map_err(Self::to_json_rpc_error)?;
+
+        Ok(block.map(|b| U64::from(b.transactions.len())))
+    }
+
+    async fn get_block_transaction_count_by_number(
+        &self,
+        block: String,
+    ) -> JsonRpcResult<Option<U64>> {
+        trace!("eth_getBlockTransactionCountByNumber: block={}", block);
+
+        let block_tag = self.parse_block_number(Some(block))?;
+        let block = self
+            .storage
+            .get_block_by_number(block_tag, false)
+            .await
+            .map_err(Self::to_json_rpc_error)?;
+
+        Ok(block.map(|b| U64::from(b.transactions.len())))
+    }
+
+    async fn get_transaction_by_block_hash_and_index(
+        &self,
+        block_hash: B256,
+        index: U64,
+    ) -> JsonRpcResult<Option<Transaction>> {
+        trace!(
+            "eth_getTransactionByBlockHashAndIndex: hash={}, index={}",
+            block_hash,
+            index
+        );
+
+        // Get block with full transactions
+        let block = self
+            .storage
+            .get_block_by_hash(block_hash, true)
+            .await
+            .map_err(Self::to_json_rpc_error)?;
+
+        let Some(block) = block else {
+            return Ok(None);
+        };
+
+        // Get transaction at index
+        let idx = index.to::<usize>();
+        match &block.transactions {
+            alloy_rpc_types_eth::BlockTransactions::Full(txs) => Ok(txs.get(idx).cloned()),
+            alloy_rpc_types_eth::BlockTransactions::Hashes(hashes) => {
+                // If we only have hashes, try to fetch the transaction by hash
+                if let Some(hash) = hashes.get(idx) {
+                    self.storage
+                        .get_transaction_by_hash(*hash)
+                        .await
+                        .map_err(Self::to_json_rpc_error)
+                } else {
+                    Ok(None)
+                }
+            }
+            alloy_rpc_types_eth::BlockTransactions::Uncle => Ok(None),
+        }
+    }
+
+    async fn get_transaction_by_block_number_and_index(
+        &self,
+        block: String,
+        index: U64,
+    ) -> JsonRpcResult<Option<Transaction>> {
+        trace!(
+            "eth_getTransactionByBlockNumberAndIndex: block={}, index={}",
+            block,
+            index
+        );
+
+        let block_tag = self.parse_block_number(Some(block))?;
+
+        // Get block with full transactions
+        let block = self
+            .storage
+            .get_block_by_number(block_tag, true)
+            .await
+            .map_err(Self::to_json_rpc_error)?;
+
+        let Some(block) = block else {
+            return Ok(None);
+        };
+
+        // Get transaction at index
+        let idx = index.to::<usize>();
+        match &block.transactions {
+            alloy_rpc_types_eth::BlockTransactions::Full(txs) => Ok(txs.get(idx).cloned()),
+            alloy_rpc_types_eth::BlockTransactions::Hashes(hashes) => {
+                // If we only have hashes, try to fetch the transaction by hash
+                if let Some(hash) = hashes.get(idx) {
+                    self.storage
+                        .get_transaction_by_hash(*hash)
+                        .await
+                        .map_err(Self::to_json_rpc_error)
+                } else {
+                    Ok(None)
+                }
+            }
+            alloy_rpc_types_eth::BlockTransactions::Uncle => Ok(None),
+        }
+    }
+
+    async fn max_priority_fee_per_gas(&self) -> JsonRpcResult<U256> {
+        trace!("eth_maxPriorityFeePerGas");
+
+        // Get the latest block to determine a reasonable priority fee
+        let latest_block = self
+            .storage
+            .get_block_by_number(BlockNumberOrTag::Latest, false)
+            .await
+            .map_err(Self::to_json_rpc_error)?;
+
+        // Default priority fee suggestion: 1 gwei
+        // In production, this would analyze recent blocks and pending transactions
+        const DEFAULT_PRIORITY_FEE: u128 = 1_000_000_000; // 1 gwei
+
+        if let Some(block) = latest_block {
+            // If the block has base fee, we're on EIP-1559
+            if block.header.base_fee_per_gas.is_some() {
+                // Return a reasonable default priority fee
+                // More sophisticated implementations would look at recent priority fees
+                return Ok(U256::from(DEFAULT_PRIORITY_FEE));
+            }
+        }
+
+        // For pre-EIP-1559 blocks or if block not found, return default
+        Ok(U256::from(DEFAULT_PRIORITY_FEE))
+    }
+
+    async fn accounts(&self) -> JsonRpcResult<Vec<Address>> {
+        trace!("eth_accounts");
+        // CipherBFT nodes don't manage private keys directly
+        // External signing is expected, so return empty list
+        Ok(Vec::new())
+    }
+
+    async fn coinbase(&self) -> JsonRpcResult<Address> {
+        trace!("eth_coinbase");
+        // Return zero address - validators would override this in production
+        // to return their validator address
+        Ok(Address::ZERO)
+    }
+
+    async fn mining(&self) -> JsonRpcResult<bool> {
+        trace!("eth_mining");
+        // CipherBFT is a PoS chain - never "mining" in the PoW sense
+        Ok(false)
+    }
+
+    async fn hashrate(&self) -> JsonRpcResult<U256> {
+        trace!("eth_hashrate");
+        // CipherBFT is a PoS chain - no hashrate
+        Ok(U256::ZERO)
+    }
+
+    async fn get_uncle_by_block_hash_and_index(
+        &self,
+        block_hash: B256,
+        index: U64,
+    ) -> JsonRpcResult<Option<Block>> {
+        trace!(
+            "eth_getUncleByBlockHashAndIndex: hash={}, index={}",
+            block_hash,
+            index
+        );
+        // CipherBFT is a PoS chain - no uncles exist
+        Ok(None)
+    }
+
+    async fn get_uncle_by_block_number_and_index(
+        &self,
+        block: String,
+        index: U64,
+    ) -> JsonRpcResult<Option<Block>> {
+        trace!(
+            "eth_getUncleByBlockNumberAndIndex: block={}, index={}",
+            block,
+            index
+        );
+        // CipherBFT is a PoS chain - no uncles exist
+        Ok(None)
+    }
+
+    async fn get_uncle_count_by_block_hash(&self, block_hash: B256) -> JsonRpcResult<U64> {
+        trace!("eth_getUncleCountByBlockHash: hash={}", block_hash);
+        // CipherBFT is a PoS chain - no uncles exist
+        Ok(U64::ZERO)
+    }
+
+    async fn get_uncle_count_by_block_number(&self, block: String) -> JsonRpcResult<U64> {
+        trace!("eth_getUncleCountByBlockNumber: block={}", block);
+        // CipherBFT is a PoS chain - no uncles exist
+        Ok(U64::ZERO)
+    }
+
+    async fn get_proof(
+        &self,
+        address: Address,
+        storage_keys: Vec<B256>,
+        block: Option<String>,
+    ) -> JsonRpcResult<EIP1186AccountProofResponse> {
+        trace!(
+            "eth_getProof: address={}, keys={:?}, block={:?}",
+            address,
+            storage_keys.len(),
+            block
+        );
+
+        // eth_getProof requires direct access to the state trie for Merkle proof generation.
+        // CipherBFT does not currently expose state trie access, so this method is unsupported.
+        // Many L2s and BFT chains similarly don't support this method.
+        Err(ErrorObjectOwned::owned(
+            -32601,
+            "eth_getProof is not supported by this node".to_string(),
+            None::<()>,
+        ))
+    }
+
+    async fn create_access_list(
+        &self,
+        call_request: CallRequest,
+        block: Option<String>,
+    ) -> JsonRpcResult<AccessListResult> {
+        trace!(
+            "eth_createAccessList: to={:?}, block={:?}",
+            call_request.to,
+            block
+        );
+
+        // eth_createAccessList requires simulating the transaction and tracking
+        // all state accesses. CipherBFT does not currently expose state access
+        // tracking, so this method is unsupported.
+        Err(ErrorObjectOwned::owned(
+            -32601,
+            "eth_createAccessList is not supported by this node".to_string(),
+            None::<()>,
+        ))
+    }
+
+    // ===== Filter Methods Implementation =====
+
+    async fn new_filter(&self, filter: Filter) -> JsonRpcResult<U256> {
+        trace!("eth_newFilter: {:?}", filter);
+
+        let current_block = self
+            .storage
+            .latest_block_number()
+            .await
+            .map_err(Self::to_json_rpc_error)?;
+
+        self.filter_manager
+            .new_log_filter(filter, current_block)
+            .ok_or_else(|| {
+                RpcError::ResourceLimit("Maximum number of filters reached".to_string()).into()
+            })
+    }
+
+    async fn new_block_filter(&self) -> JsonRpcResult<U256> {
+        trace!("eth_newBlockFilter");
+
+        let current_block = self
+            .storage
+            .latest_block_number()
+            .await
+            .map_err(Self::to_json_rpc_error)?;
+
+        self.filter_manager
+            .new_block_filter(current_block)
+            .ok_or_else(|| {
+                RpcError::ResourceLimit("Maximum number of filters reached".to_string()).into()
+            })
+    }
+
+    async fn new_pending_transaction_filter(&self) -> JsonRpcResult<U256> {
+        trace!("eth_newPendingTransactionFilter");
+
+        let current_block = self
+            .storage
+            .latest_block_number()
+            .await
+            .map_err(Self::to_json_rpc_error)?;
+
+        self.filter_manager
+            .new_pending_transaction_filter(current_block)
+            .ok_or_else(|| {
+                RpcError::ResourceLimit("Maximum number of filters reached".to_string()).into()
+            })
+    }
+
+    async fn get_filter_changes(&self, filter_id: U256) -> JsonRpcResult<serde_json::Value> {
+        trace!("eth_getFilterChanges: filter_id={}", filter_id);
+
+        let filter_type = self
+            .filter_manager
+            .get_filter_type(filter_id)
+            .ok_or_else(|| RpcError::InvalidParams(format!("Filter not found: {}", filter_id)))?;
+
+        match filter_type {
+            FilterType::Log(filter) => {
+                // Get last seen block for this filter
+                let from_block = self
+                    .filter_manager
+                    .get_last_block(filter_id)
+                    .map(|b| b + 1) // Start from block after last seen
+                    .unwrap_or(0);
+
+                let current_block = self
+                    .storage
+                    .latest_block_number()
+                    .await
+                    .map_err(Self::to_json_rpc_error)?;
+
+                // Create a new filter with the updated block range
+                // Dereference the boxed filter to clone its contents
+                let mut updated_filter = (*filter).clone();
+                updated_filter.block_option = alloy_rpc_types_eth::FilterBlockOption::Range {
+                    from_block: Some(from_block.into()),
+                    to_block: Some(current_block.into()),
+                };
+
+                let logs = self
+                    .storage
+                    .get_logs(updated_filter)
+                    .await
+                    .map_err(Self::to_json_rpc_error)?;
+
+                // Update filter state with new block position
+                let last_log_index = logs.last().map(|l| l.log_index.unwrap_or(0)).unwrap_or(0);
+                self.filter_manager.update_log_filter(
+                    filter_id,
+                    current_block,
+                    last_log_index as u32,
+                );
+
+                Ok(serde_json::to_value(&logs).unwrap_or_default())
+            }
+            FilterType::Block => {
+                let hashes = self
+                    .filter_manager
+                    .take_block_hashes(filter_id)
+                    .ok_or_else(|| {
+                        RpcError::InvalidParams(format!("Filter not found: {}", filter_id))
+                    })?;
+
+                Ok(serde_json::to_value(&hashes).unwrap_or_default())
+            }
+            FilterType::PendingTransaction => {
+                let hashes = self
+                    .filter_manager
+                    .take_pending_tx_hashes(filter_id)
+                    .ok_or_else(|| {
+                        RpcError::InvalidParams(format!("Filter not found: {}", filter_id))
+                    })?;
+
+                Ok(serde_json::to_value(&hashes).unwrap_or_default())
+            }
+        }
+    }
+
+    async fn get_filter_logs(&self, filter_id: U256) -> JsonRpcResult<Vec<Log>> {
+        trace!("eth_getFilterLogs: filter_id={}", filter_id);
+
+        let filter_type = self
+            .filter_manager
+            .get_filter_type(filter_id)
+            .ok_or_else(|| RpcError::InvalidParams(format!("Filter not found: {}", filter_id)))?;
+
+        match filter_type {
+            FilterType::Log(filter) => {
+                // Dereference the boxed filter
+                let logs = self
+                    .storage
+                    .get_logs((*filter).clone())
+                    .await
+                    .map_err(Self::to_json_rpc_error)?;
+
+                Ok(logs)
+            }
+            _ => Err(RpcError::InvalidParams(
+                "eth_getFilterLogs is only valid for log filters".to_string(),
+            )
+            .into()),
+        }
+    }
+
+    async fn uninstall_filter(&self, filter_id: U256) -> JsonRpcResult<bool> {
+        trace!("eth_uninstallFilter: filter_id={}", filter_id);
+        Ok(self.filter_manager.uninstall_filter(filter_id))
     }
 }

@@ -5,6 +5,8 @@
 //! - Swappable backends
 //! - Clean separation between RPC layer and node internals
 
+use std::collections::HashMap;
+
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_rpc_types_eth::{Block, Filter, Log, Transaction, TransactionReceipt};
 use async_trait::async_trait;
@@ -81,6 +83,14 @@ pub trait RpcStorage: Send + Sync {
     /// Get a transaction receipt by transaction hash.
     async fn get_transaction_receipt(&self, hash: B256) -> RpcResult<Option<TransactionReceipt>>;
 
+    /// Get all transaction receipts for a block.
+    ///
+    /// Returns `None` if the block doesn't exist, or an empty `Vec` if the block has no transactions.
+    async fn get_block_receipts(
+        &self,
+        block: BlockNumberOrTag,
+    ) -> RpcResult<Option<Vec<TransactionReceipt>>>;
+
     /// Get logs matching the given filter.
     async fn get_logs(&self, filter: Filter) -> RpcResult<Vec<Log>>;
 
@@ -121,6 +131,27 @@ pub trait MempoolApi: Send + Sync {
 
     /// Get pending transaction hashes from the mempool.
     async fn get_pending_transactions(&self) -> RpcResult<Vec<B256>>;
+
+    /// Get a transaction by its hash from the mempool.
+    ///
+    /// Returns the transaction if it exists in the pending or queued pool.
+    /// This is used as a fallback when a transaction is not found in storage.
+    async fn get_transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction>>;
+
+    /// Get the count of pending and queued transactions.
+    ///
+    /// Returns (pending_count, queued_count).
+    async fn get_pool_status(&self) -> RpcResult<(usize, usize)>;
+
+    /// Get all pending transactions grouped by sender address.
+    ///
+    /// Returns a map of sender -> list of transactions.
+    async fn get_pending_content(&self) -> RpcResult<HashMap<Address, Vec<Transaction>>>;
+
+    /// Get all queued transactions grouped by sender address.
+    ///
+    /// Returns a map of sender -> list of transactions.
+    async fn get_queued_content(&self) -> RpcResult<HashMap<Address, Vec<Transaction>>>;
 }
 
 /// Execution interface for eth_call and gas estimation.

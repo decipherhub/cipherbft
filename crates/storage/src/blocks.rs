@@ -134,6 +134,18 @@ pub trait BlockStore: Send + Sync {
     /// * `Err(...)` if the storage operation fails
     async fn get_latest_block_number(&self) -> BlockStoreResult<Option<u64>>;
 
+    /// Get the earliest block number.
+    ///
+    /// This returns the lowest block number stored in the database.
+    /// For nodes that store the full chain, this will be 0 (genesis).
+    /// For nodes with pruning enabled, this will be the oldest available block.
+    ///
+    /// # Returns
+    /// * `Ok(Some(number))` if any block exists
+    /// * `Ok(None)` if no blocks exist
+    /// * `Err(...)` if the storage operation fails
+    async fn get_earliest_block_number(&self) -> BlockStoreResult<Option<u64>>;
+
     /// Check if a block exists by number.
     ///
     /// This is a lightweight operation that does not deserialize the block.

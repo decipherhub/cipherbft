@@ -11,6 +11,7 @@ description = "CipherBFT JSON-RPC Server - Ethereum-compatible RPC interface"
 cipherbft-types = { path = "../types" }
 cipherbft-execution = { path = "../execution" }
 cipherbft-mempool = { path = "../mempool" }
+cipherbft-storage = { path = "../storage", features = ["mdbx"] }
 
 # Async runtime
 tokio = { workspace = true, features = ["full", "sync"] }
@@ -29,6 +30,7 @@ alloy-consensus = { workspace = true }
 
 # Reth primitives for Ethereum compatibility
 reth-primitives = { workspace = true }
+reth-primitives-traits = { workspace = true }
 reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.10.0" }
 
 # EVM execution (revm 33.x uses modular crates)

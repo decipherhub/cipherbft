@@ -57,6 +57,7 @@ pub mod blocks;
 pub mod dcl;
 pub mod error;
 pub mod evm;
+pub mod logs;
 pub mod memory;
 pub mod pruning;
 pub mod receipts;
@@ -73,6 +74,7 @@ pub use blocks::{Block, BlockStore, BlockStoreResult};
 pub use dcl::DclStore;
 pub use error::StorageError;
 pub use evm::{EvmAccount, EvmBytecode, EvmStore, EvmStoreResult};
+pub use logs::{LogFilter, LogStore, LogStoreResult, StoredLog};
 pub use memory::InMemoryStore;
 pub use pruning::{PruningConfig, PruningHandle, PruningTask};
 pub use receipts::{Log, Receipt, ReceiptStore, ReceiptStoreResult};
@@ -83,5 +85,5 @@ pub use wal::{Wal, WalEntry};
 #[cfg(feature = "mdbx")]
 pub use mdbx::{
     Database, DatabaseConfig, MdbxBatchStore, MdbxBlockStore, MdbxDclStore, MdbxEvmStore,
-    MdbxReceiptStore, MdbxStakingStore, MdbxWal,
+    MdbxLogStore, MdbxReceiptStore, MdbxStakingStore, MdbxWal,
 };
