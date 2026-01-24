@@ -65,3 +65,7 @@ parking_lot = "0.12"
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio-test = "0.4"
+
+# E2E test dependencies
+alloy-signer = "1"
+alloy-signer-local = "1"
