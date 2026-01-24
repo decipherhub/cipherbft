@@ -47,6 +47,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod bridge;
 pub mod database;
 pub mod engine;
 pub mod error;
@@ -60,6 +61,7 @@ pub mod state;
 pub mod types;
 
 // Re-export main types for convenience
+pub use bridge::{BatchFetcher, ExecutionBridge};
 pub use database::{Account, CipherBftDatabase, InMemoryProvider, Provider};
 pub use engine::{ExecutionEngine, ExecutionLayer as ExecutionLayerTrait};
 pub use error::{DatabaseError, ExecutionError, Result};

@@ -9,6 +9,7 @@ license.workspace = true
 # Internal dependencies
 cipherbft-types = { path = "../types" }
 cipherbft-crypto = { path = "../crypto" }
+cipherbft-data-chain = { path = "../data-chain" }
 cipherbft-storage = { path = "../storage", optional = true }
 
 # EVM execution (revm 33.x uses modular crates)
