@@ -81,6 +81,12 @@
 //! - `net_listening` - Returns listening status
 //! - `net_peerCount` - Returns peer count
 //!
+//! ## txpool_* namespace
+//!
+//! - `txpool_status` - Returns pending and queued transaction counts
+//! - `txpool_content` - Returns all transactions in the pool grouped by sender
+//! - `txpool_inspect` - Returns a text summary of transactions in the pool
+//!
 //! ## Subscriptions (WebSocket)
 //!
 //! - `eth_subscribe("newHeads")` - New block headers
@@ -100,6 +106,7 @@ pub mod net;
 pub mod pubsub;
 pub mod server;
 pub mod traits;
+pub mod txpool;
 pub mod web3;
 
 // Core types
@@ -119,7 +126,11 @@ pub use adapters::{EvmExecutionApi, MdbxRpcStorage, PoolMempoolApi, ProviderBase
 // RPC server traits (for method registration)
 pub use eth::EthRpcServer;
 pub use net::NetRpcServer;
+pub use txpool::TxPoolRpcServer;
 pub use web3::Web3RpcServer;
+
+// TxPool API types
+pub use txpool::TxPoolApi;
 
 // Middleware components
 pub use middleware::{IpAllowlist, IpRateLimiter, RpcMiddleware};

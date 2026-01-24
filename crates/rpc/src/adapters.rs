@@ -976,6 +976,25 @@ impl MempoolApi for StubMempoolApi {
         // Stub implementation: no transactions in mempool
         Ok(None)
     }
+
+    async fn get_pool_status(&self) -> RpcResult<(usize, usize)> {
+        trace!("StubMempoolApi::get_pool_status");
+        Ok((0, 0))
+    }
+
+    async fn get_pending_content(
+        &self,
+    ) -> RpcResult<std::collections::HashMap<Address, Vec<Transaction>>> {
+        trace!("StubMempoolApi::get_pending_content");
+        Ok(std::collections::HashMap::new())
+    }
+
+    async fn get_queued_content(
+        &self,
+    ) -> RpcResult<std::collections::HashMap<Address, Vec<Transaction>>> {
+        trace!("StubMempoolApi::get_queued_content");
+        Ok(std::collections::HashMap::new())
+    }
 }
 
 /// Convert a signed transaction to an RPC Transaction.
@@ -1166,6 +1185,62 @@ where
                 Ok(None)
             }
         }
+    }
+
+    async fn get_pool_status(&self) -> RpcResult<(usize, usize)> {
+        trace!("PoolMempoolApi::get_pool_status");
+
+        let all_txs = self.pool.pool().all_transactions();
+        let pending_count = all_txs.pending.len();
+        let queued_count = all_txs.queued.len();
+
+        debug!(
+            "Pool status: {} pending, {} queued",
+            pending_count, queued_count
+        );
+        Ok((pending_count, queued_count))
+    }
+
+    async fn get_pending_content(
+        &self,
+    ) -> RpcResult<std::collections::HashMap<Address, Vec<Transaction>>> {
+        trace!("PoolMempoolApi::get_pending_content");
+
+        let all_txs = self.pool.pool().all_transactions();
+        let mut result: std::collections::HashMap<Address, Vec<Transaction>> =
+            std::collections::HashMap::new();
+
+        for pool_tx in all_txs.pending {
+            let sender = pool_tx.sender();
+            let signed_tx = pool_tx.transaction.clone_into_consensus().into_inner();
+            let rpc_tx = signed_tx_to_rpc_tx(&signed_tx, sender);
+
+            result.entry(sender).or_default().push(rpc_tx);
+        }
+
+        debug!("Pending content: {} senders", result.len());
+        Ok(result)
+    }
+
+    async fn get_queued_content(
+        &self,
+    ) -> RpcResult<std::collections::HashMap<Address, Vec<Transaction>>> {
+        trace!("PoolMempoolApi::get_queued_content");
+
+        let all_txs = self.pool.pool().all_transactions();
+        let mut result: std::collections::HashMap<Address, Vec<Transaction>> =
+            std::collections::HashMap::new();
+
+        for pool_tx in all_txs.queued {
+            let sender = pool_tx.sender();
+            let signed_tx = pool_tx.transaction.clone_into_consensus().into_inner();
+            let rpc_tx = signed_tx_to_rpc_tx(&signed_tx, sender);
+
+            result.entry(sender).or_default().push(rpc_tx);
+        }
+
+        debug!("Queued content: {} senders", result.len());
+        Ok(result)
     }
 }
 

@@ -5,6 +5,8 @@
 //! - Swappable backends
 //! - Clean separation between RPC layer and node internals
 
+use std::collections::HashMap;
+
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_rpc_types_eth::{Block, Filter, Log, Transaction, TransactionReceipt};
 use async_trait::async_trait;
@@ -127,6 +129,21 @@ pub trait MempoolApi: Send + Sync {
     /// Returns the transaction if it exists in the pending or queued pool.
     /// This is used as a fallback when a transaction is not found in storage.
     async fn get_transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction>>;
+
+    /// Get the count of pending and queued transactions.
+    ///
+    /// Returns (pending_count, queued_count).
+    async fn get_pool_status(&self) -> RpcResult<(usize, usize)>;
+
+    /// Get all pending transactions grouped by sender address.
+    ///
+    /// Returns a map of sender -> list of transactions.
+    async fn get_pending_content(&self) -> RpcResult<HashMap<Address, Vec<Transaction>>>;
+
+    /// Get all queued transactions grouped by sender address.
+    ///
+    /// Returns a map of sender -> list of transactions.
+    async fn get_queued_content(&self) -> RpcResult<HashMap<Address, Vec<Transaction>>>;
 }
 
 /// Execution interface for eth_call and gas estimation.
