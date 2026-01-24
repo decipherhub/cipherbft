@@ -863,7 +863,7 @@ impl ChannelValueBuilder {
             height,
             round,
             Round::Nil, // Fresh proposal, not a re-proposal
-            our_address.clone(),
+            *our_address,
             cut.clone(),
         );
 
