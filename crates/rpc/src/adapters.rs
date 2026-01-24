@@ -1984,6 +1984,7 @@ impl<P: Provider> EvmDebugExecutionApi<P> {
     }
 
     /// Execute a call with CallTracer and return the trace result.
+    #[allow(clippy::too_many_arguments)]
     fn trace_call_with_call_tracer(
         &self,
         from: Option<Address>,
@@ -2093,6 +2094,7 @@ impl<P: Provider> EvmDebugExecutionApi<P> {
     }
 
     /// Execute a call with OpcodeTracer and return the trace result.
+    #[allow(clippy::too_many_arguments)]
     fn trace_call_with_opcode_tracer(
         &self,
         from: Option<Address>,
