@@ -24,6 +24,7 @@ mod batch;
 mod blocks;
 mod database;
 mod evm;
+mod logs;
 mod provider;
 mod receipts;
 mod staking;
@@ -34,6 +35,7 @@ pub use batch::MdbxBatchStore;
 pub use blocks::MdbxBlockStore;
 pub use database::{Database, DatabaseConfig, DatabaseEnv};
 pub use evm::MdbxEvmStore;
+pub use logs::MdbxLogStore;
 pub use provider::{MdbxDclStore, MdbxDclStoreTx};
 pub use receipts::MdbxReceiptStore;
 pub use staking::MdbxStakingStore;
@@ -47,6 +49,14 @@ pub use tables::{
     // Block table types
     Blocks,
     BlocksByHash,
+    // Log table types
+    AddressLogKey,
+    BlockBlooms,
+    LogKey,
+    Logs,
+    LogsByAddress,
+    StoredBloom,
+    StoredLogEntry,
     // Key types
     CarTableKey,
     Cars,

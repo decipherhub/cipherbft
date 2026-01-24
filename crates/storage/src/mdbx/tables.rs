@@ -1199,7 +1199,8 @@ pub struct StoredLogEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredBloom {
     /// The bloom filter bytes (256 bytes / 2048 bits)
-    pub bloom: [u8; 256],
+    /// Stored as Vec<u8> since serde doesn't support [u8; 256] by default
+    pub bloom: Vec<u8>,
 }
 
 /// Logs table: (BlockNumber, LogIndex) -> StoredLogEntry

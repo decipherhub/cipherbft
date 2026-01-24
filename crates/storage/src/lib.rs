@@ -85,5 +85,5 @@ pub use wal::{Wal, WalEntry};
 #[cfg(feature = "mdbx")]
 pub use mdbx::{
     Database, DatabaseConfig, MdbxBatchStore, MdbxBlockStore, MdbxDclStore, MdbxEvmStore,
-    MdbxReceiptStore, MdbxStakingStore, MdbxWal,
+    MdbxLogStore, MdbxReceiptStore, MdbxStakingStore, MdbxWal,
 };
