@@ -324,9 +324,12 @@ impl<P: Provider + 'static> RpcStorage for ProviderBasedRpcStorage<P> {
 ///
 /// This adapter provides placeholder implementations for RPC storage operations.
 /// Used for testing or when the real storage backend is not available.
+///
+/// Uses `AtomicU64` for `latest_block` to allow thread-safe updates from the
+/// consensus event loop while the storage is behind an `Arc`.
 pub struct StubRpcStorage {
-    /// Latest block number (for testing).
-    latest_block: u64,
+    /// Latest block number (atomic for thread-safe updates).
+    latest_block: AtomicU64,
     /// Chain ID (reserved for future use).
     #[allow(dead_code)]
     chain_id: u64,
@@ -336,14 +339,17 @@ impl StubRpcStorage {
     /// Create a new stub storage adapter.
     pub fn new(chain_id: u64) -> Self {
         Self {
-            latest_block: 0,
+            latest_block: AtomicU64::new(0),
             chain_id,
         }
     }
 
-    /// Set the latest block number (for testing).
-    pub fn set_latest_block(&mut self, block: u64) {
-        self.latest_block = block;
+    /// Set the latest block number.
+    ///
+    /// Thread-safe: can be called from the consensus event loop while
+    /// the storage is behind an `Arc`.
+    pub fn set_latest_block(&self, block: u64) {
+        self.latest_block.store(block, Ordering::SeqCst);
     }
 }
 
@@ -390,7 +396,7 @@ impl RpcStorage for StubRpcStorage {
 
     async fn latest_block_number(&self) -> RpcResult<u64> {
         trace!("StubRpcStorage::latest_block_number");
-        Ok(self.latest_block)
+        Ok(self.latest_block.load(Ordering::SeqCst))
     }
 
     async fn sync_status(&self) -> RpcResult<SyncStatus> {

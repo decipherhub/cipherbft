@@ -33,7 +33,7 @@ fn test_component_creation() {
 /// Integration test: Full query flow through storage.
 #[tokio::test]
 async fn test_storage_query_flow() {
-    let mut storage = StubRpcStorage::new(12345);
+    let storage = StubRpcStorage::new(12345);
 
     // Query latest block
     let block = storage.latest_block_number().await.unwrap();

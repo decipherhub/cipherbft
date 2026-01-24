@@ -682,11 +682,19 @@ impl Node {
 
         info!("Consensus engine started");
 
+        // RPC storage reference - used to update block number when consensus decides
+        // Moved outside the `if` block so it can be passed to run_event_loop
+        use cipherbft_rpc::StubRpcStorage;
+        let rpc_storage: Option<Arc<StubRpcStorage>> = if self.config.rpc_enabled {
+            Some(Arc::new(StubRpcStorage::default()))
+        } else {
+            None
+        };
+
         // Start RPC server if enabled
-        if self.config.rpc_enabled {
+        if let Some(ref storage) = rpc_storage {
             use cipherbft_rpc::{
                 RpcConfig, RpcServer, StubExecutionApi, StubMempoolApi, StubNetworkApi,
-                StubRpcStorage,
             };
 
             let mut rpc_config = RpcConfig::with_chain_id(85300); // CipherBFT testnet chain ID
@@ -695,12 +703,12 @@ impl Node {
 
             // For now, use stub implementations
             // TODO: Wire real storage, mempool, and execution backends
-            let storage = Arc::new(StubRpcStorage::default());
             let mempool = Arc::new(StubMempoolApi::new());
             let executor = Arc::new(StubExecutionApi::new());
             let network = Arc::new(StubNetworkApi::new());
 
-            let rpc_server = RpcServer::new(rpc_config, storage, mempool, executor, network);
+            let rpc_server =
+                RpcServer::new(rpc_config, storage.clone(), mempool, executor, network);
 
             let http_port = self.config.rpc_http_port;
             let ws_port = self.config.rpc_ws_port;
@@ -745,6 +753,7 @@ impl Node {
             &cut_tx,
             &mut decided_rx,
             execution_bridge,
+            rpc_storage,
         )
         .await;
 
@@ -773,6 +782,7 @@ impl Node {
         cut_tx: &mpsc::Sender<Cut>,
         decided_rx: &mut mpsc::Receiver<(ConsensusHeight, Cut)>,
         execution_bridge: Option<Arc<ExecutionBridge>>,
+        rpc_storage: Option<Arc<cipherbft_rpc::StubRpcStorage>>,
     ) -> Result<()> {
         loop {
             tokio::select! {
@@ -839,6 +849,13 @@ impl Node {
                     // This allows Primary to advance its state and produce cuts for the next height
                     if let Err(e) = primary_handle.notify_decision(height.0).await {
                         warn!("Failed to notify Primary of consensus decision: {:?}", e);
+                    }
+
+                    // Update RPC layer with the new block height
+                    // This enables eth_blockNumber to return the actual consensus height
+                    if let Some(ref storage) = rpc_storage {
+                        storage.set_latest_block(height.0);
+                        debug!("Updated RPC block number to {}", height.0);
                     }
 
                     // Execute Cut if execution layer is enabled

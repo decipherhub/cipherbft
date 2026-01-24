@@ -43,7 +43,7 @@ fn test_config_validation() {
 /// Test stub storage behavior.
 #[tokio::test]
 async fn test_stub_storage_latest_block() {
-    let mut storage = StubRpcStorage::new(85300);
+    let storage = StubRpcStorage::new(85300);
 
     // Default should be 0
     let block = storage.latest_block_number().await.unwrap();
