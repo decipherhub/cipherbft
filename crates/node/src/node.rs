@@ -19,7 +19,6 @@ use crate::config::NodeConfig;
 use crate::execution_bridge::ExecutionBridge;
 use crate::network::{TcpPrimaryNetwork, TcpWorkerNetwork};
 use crate::supervisor::NodeSupervisor;
-use crate::util::validator_id_from_bls;
 use anyhow::{Context, Result};
 use cipherbft_consensus::{
     create_context, default_consensus_params, default_engine_config_single_part, spawn_host,
@@ -111,10 +110,10 @@ impl Node {
         bls_keypair: BlsKeyPair,
         ed25519_keypair: Ed25519KeyPair,
     ) -> Result<Self> {
-        let validator_id = validator_id_from_bls(&bls_keypair.public_key);
+        // Derive validator ID from Ed25519 public key (matches genesis)
+        let validator_id = ed25519_keypair.public_key.validator_id();
 
         // Verify validator ID matches if configured
-        // If not configured, we derive it from the BLS key
         if let Some(config_vid) = config.validator_id {
             if validator_id != config_vid {
                 anyhow::bail!(
@@ -236,8 +235,8 @@ impl Node {
                 anyhow::anyhow!("Invalid BLS public key for {}: {:?}", validator.address, e)
             })?;
 
-            // Derive validator ID from BLS public key
-            let validator_id = validator_id_from_bls(&bls_pubkey);
+            // Derive validator ID from Ed25519 public key (matches genesis)
+            let validator_id = ed25519_pubkey.validator_id();
 
             // Calculate voting power from stake (proportional to total stake)
             // Scale to reasonable voting power values (avoid overflow)

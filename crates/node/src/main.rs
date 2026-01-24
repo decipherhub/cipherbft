@@ -712,8 +712,8 @@ async fn cmd_start(
         .map_err(|e| anyhow::anyhow!("Invalid BLS key: {:?}", e))?;
     let bls_keypair = BlsKeyPair::from_secret_key(bls_secret);
 
-    // Derive validator ID from BLS public key
-    let validator_id = cipherd::util::validator_id_from_bls(&bls_keypair.public_key);
+    // Derive validator ID from Ed25519 public key (consistent with genesis)
+    let validator_id = ed25519_keypair.public_key.validator_id();
     info!("Derived validator ID: {:?}", validator_id);
 
     // Override genesis path if provided via CLI

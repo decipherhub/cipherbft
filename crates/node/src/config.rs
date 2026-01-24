@@ -210,7 +210,7 @@ impl NodeConfig {
     pub fn for_local_test(index: usize, _total: usize) -> LocalTestConfig {
         let bls_keypair = BlsKeyPair::generate(&mut rand::thread_rng());
         let ed25519_keypair = Ed25519KeyPair::generate(&mut rand::thread_rng());
-        let validator_id = crate::util::validator_id_from_bls(&bls_keypair.public_key);
+        let validator_id = ed25519_keypair.public_key.validator_id();
 
         let base_port = 9000 + (index * 10) as u16;
 
@@ -562,9 +562,8 @@ mod tests {
         // Verify keypairs are generated
         assert_eq!(test_config.bls_keypair.public_key.to_bytes().len(), 48);
         assert_eq!(test_config.ed25519_keypair.public_key.to_bytes().len(), 32);
-        // Verify validator ID matches BLS public key
-        let expected_validator_id =
-            crate::util::validator_id_from_bls(&test_config.bls_keypair.public_key);
+        // Verify validator ID matches Ed25519 public key
+        let expected_validator_id = test_config.ed25519_keypair.public_key.validator_id();
         assert_eq!(test_config.config.validator_id, Some(expected_validator_id));
     }
 
