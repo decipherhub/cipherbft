@@ -10,8 +10,10 @@ use std::collections::HashMap;
 /// Type of call operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[derive(Default)]
 pub enum CallType {
     /// Regular call (CALL opcode).
+    #[default]
     Call,
     /// Delegate call (DELEGATECALL opcode).
     DelegateCall,
@@ -25,11 +27,6 @@ pub enum CallType {
     Create2,
 }
 
-impl Default for CallType {
-    fn default() -> Self {
-        Self::Call
-    }
-}
 
 /// A single call frame in the execution trace.
 ///

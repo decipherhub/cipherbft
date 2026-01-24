@@ -11,9 +11,7 @@ use super::types::{CallFrame, CallLog, CallTracerConfig, CallType};
 use alloy_primitives::{Address, Bytes, U256};
 use revm::{
     context_interface::JournalTr,
-    interpreter::{
-        CallInputs, CallOutcome, CreateInputs, CreateOutcome, InterpreterTypes,
-    },
+    interpreter::{CallInputs, CallOutcome, CreateInputs, CreateOutcome, InterpreterTypes},
     Inspector,
 };
 

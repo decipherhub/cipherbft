@@ -76,8 +76,7 @@ where
     let storage = storage_getter(address)?;
 
     // Compute storage root and storage proofs
-    let (storage_hash, storage_proofs) =
-        generate_storage_proofs(&storage, &storage_keys);
+    let (storage_hash, storage_proofs) = generate_storage_proofs(&storage, &storage_keys);
 
     // Generate account proof
     let account_proof = generate_state_proof(accounts, &storage_getter, address)?;
@@ -116,7 +115,7 @@ where
 
     // The target key in the state trie
     let target_key = keccak256(target_address);
-    let target_nibbles = Nibbles::unpack(&target_key);
+    let target_nibbles = Nibbles::unpack(target_key);
 
     // Create proof retainer for the target account
     let retainer = ProofRetainer::new(vec![target_nibbles]);
@@ -161,10 +160,8 @@ where
     let proof_nodes = builder.take_proof_nodes();
 
     // Convert proof nodes to sorted proof bytes
-    let mut proof: Vec<(Nibbles, Bytes)> = proof_nodes
-        .iter()
-        .map(|(k, v)| (*k, v.clone()))
-        .collect();
+    let mut proof: Vec<(Nibbles, Bytes)> =
+        proof_nodes.iter().map(|(k, v)| (*k, v.clone())).collect();
     proof.sort_by(|a, b| a.0.cmp(&b.0));
 
     Ok(proof.into_iter().map(|(_, bytes)| bytes).collect())
@@ -184,7 +181,7 @@ fn generate_storage_proofs(
         .iter()
         .map(|key| {
             let hashed = keccak256(key.to_be_bytes::<32>());
-            Nibbles::unpack(&hashed)
+            Nibbles::unpack(hashed)
         })
         .collect();
 
@@ -229,7 +226,7 @@ fn generate_storage_proofs(
         .iter()
         .map(|key| {
             let hashed = keccak256(key.to_be_bytes::<32>());
-            let target = Nibbles::unpack(&hashed);
+            let target = Nibbles::unpack(hashed);
 
             // Get the value (default to zero if not found)
             let value = storage.get(key).copied().unwrap_or(U256::ZERO);
@@ -290,8 +287,8 @@ mod tests {
         let accounts = BTreeMap::new();
         let addr = address!("1111111111111111111111111111111111111111");
 
-        let proof = generate_account_proof(&accounts, |_| Ok(BTreeMap::new()), addr, vec![])
-            .unwrap();
+        let proof =
+            generate_account_proof(&accounts, |_| Ok(BTreeMap::new()), addr, vec![]).unwrap();
 
         // Empty state should return default account
         assert_eq!(proof.address, addr);
@@ -315,8 +312,8 @@ mod tests {
             },
         );
 
-        let proof = generate_account_proof(&accounts, |_| Ok(BTreeMap::new()), addr, vec![])
-            .unwrap();
+        let proof =
+            generate_account_proof(&accounts, |_| Ok(BTreeMap::new()), addr, vec![]).unwrap();
 
         assert_eq!(proof.address, addr);
         assert_eq!(proof.balance, U256::from(1000u64));

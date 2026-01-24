@@ -268,12 +268,7 @@ where
 
         // Build stack if enabled
         let stack = if self.config.enable_stack {
-            interp
-                .stack
-                .data()
-                .iter()
-                .map(|v: &U256| *v)
-                .collect()
+            interp.stack.data().iter().copied().collect()
         } else {
             Vec::new()
         };

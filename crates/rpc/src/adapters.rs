@@ -40,7 +40,8 @@ use cipherbft_execution::AccountProof;
 
 use crate::error::{RpcError, RpcResult};
 use crate::traits::{
-    BlockNumberOrTag, DebugExecutionApi, ExecutionApi, MempoolApi, NetworkApi, RpcProofStorage, RpcStorage, SyncStatus,
+    BlockNumberOrTag, ExecutionApi, MempoolApi, NetworkApi, RpcProofStorage,
+    RpcStorage, SyncStatus,
 };
 use crate::types::RpcBlock;
 
@@ -348,21 +349,32 @@ impl<P: Provider + 'static> RpcProofStorage for ProviderBasedRpcStorage<P> {
         );
 
         // Get all accounts from provider
-        let accounts = self.provider.get_all_accounts().map_err(|e| {
-            RpcError::Storage(format!("Failed to get accounts: {}", e))
-        })?;
+        let accounts = self
+            .provider
+            .get_all_accounts()
+            .map_err(|e| RpcError::Storage(format!("Failed to get accounts: {}", e)))?;
 
         // Storage getter function
         let provider = Arc::clone(&self.provider);
-        let storage_getter = move |addr: Address| -> cipherbft_execution::Result<std::collections::BTreeMap<U256, U256>> {
+        let storage_getter = move |addr: Address| -> cipherbft_execution::Result<
+            std::collections::BTreeMap<U256, U256>,
+        > {
             provider.get_all_storage(addr).map_err(|e| {
-                cipherbft_execution::ExecutionError::Internal(format!("Failed to get storage: {}", e))
+                cipherbft_execution::ExecutionError::Internal(format!(
+                    "Failed to get storage: {}",
+                    e
+                ))
             })
         };
 
         // Generate the proof
-        cipherbft_execution::generate_account_proof(&accounts, storage_getter, address, storage_keys)
-            .map_err(|e| RpcError::Storage(format!("Failed to generate proof: {}", e)))
+        cipherbft_execution::generate_account_proof(
+            &accounts,
+            storage_getter,
+            address,
+            storage_keys,
+        )
+        .map_err(|e| RpcError::Storage(format!("Failed to generate proof: {}", e)))
     }
 }
 
@@ -1126,10 +1138,9 @@ impl RpcProofStorage for StubRpcStorage {
         // Return a minimal stub proof
         use cipherbft_execution::StorageProof;
         const EMPTY_ROOT_HASH: B256 = B256::new([
-            0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6,
-            0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0, 0xf8, 0x6e,
-            0x5b, 0x48, 0xe0, 0x1b, 0x99, 0x6c, 0xad, 0xc0,
-            0x01, 0x62, 0x2f, 0xb5, 0xe3, 0x63, 0xb4, 0x21,
+            0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6, 0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0,
+            0xf8, 0x6e, 0x5b, 0x48, 0xe0, 0x1b, 0x99, 0x6c, 0xad, 0xc0, 0x01, 0x62, 0x2f, 0xb5,
+            0xe3, 0x63, 0xb4, 0x21,
         ]);
 
         let storage_proofs: Vec<StorageProof> = storage_keys
@@ -2008,7 +2019,8 @@ impl<P: Provider> EvmDebugExecutionApi<P> {
             .as_secs();
 
         // Create context with database
-        let mut ctx: EvmContextWithTracer<CipherBftDatabase<Arc<P>>> = Context::new(db, SpecId::CANCUN);
+        let mut ctx: EvmContextWithTracer<CipherBftDatabase<Arc<P>>> =
+            Context::new(db, SpecId::CANCUN);
 
         // Configure block environment
         ctx.block.number = alloy_primitives::U256::from(block_number);
@@ -2061,10 +2073,9 @@ impl<P: Provider> EvmDebugExecutionApi<P> {
             ExecutionResult::Success { output, .. } => {
                 let output_bytes = match output {
                     Output::Call(data) => data,
-                    Output::Create(_, addr) => {
-                        addr.map(|a| Bytes::copy_from_slice(a.as_slice()))
-                            .unwrap_or_default()
-                    }
+                    Output::Create(_, addr) => addr
+                        .map(|a| Bytes::copy_from_slice(a.as_slice()))
+                        .unwrap_or_default(),
                 };
                 (false, Some(output_bytes))
             }
@@ -2117,7 +2128,8 @@ impl<P: Provider> EvmDebugExecutionApi<P> {
             .as_secs();
 
         // Create context with database
-        let mut ctx: EvmContextWithTracer<CipherBftDatabase<Arc<P>>> = Context::new(db, SpecId::CANCUN);
+        let mut ctx: EvmContextWithTracer<CipherBftDatabase<Arc<P>>> =
+            Context::new(db, SpecId::CANCUN);
 
         // Configure block environment
         ctx.block.number = alloy_primitives::U256::from(block_number);
@@ -2170,10 +2182,9 @@ impl<P: Provider> EvmDebugExecutionApi<P> {
             ExecutionResult::Success { output, .. } => {
                 let output_bytes = match output {
                     Output::Call(data) => data,
-                    Output::Create(_, addr) => {
-                        addr.map(|a| Bytes::copy_from_slice(a.as_slice()))
-                            .unwrap_or_default()
-                    }
+                    Output::Create(_, addr) => addr
+                        .map(|a| Bytes::copy_from_slice(a.as_slice()))
+                        .unwrap_or_default(),
                 };
                 (false, Some(output_bytes))
             }
@@ -2210,7 +2221,8 @@ impl<P: Provider + 'static> crate::traits::DebugExecutionApi for EvmDebugExecuti
         // Since we don't have full block indexing yet, return an error
         Err(RpcError::MethodNotSupported(
             "debug_traceTransaction requires block indexing which is not yet implemented. \
-             Use debug_traceCall instead.".to_string()
+             Use debug_traceCall instead."
+                .to_string(),
         ))
     }
 
@@ -2234,9 +2246,7 @@ impl<P: Provider + 'static> crate::traits::DebugExecutionApi for EvmDebugExecuti
         );
 
         // Determine tracer type from options
-        let tracer_type = options
-            .as_ref()
-            .and_then(|o| o.tracer.as_deref());
+        let tracer_type = options.as_ref().and_then(|o| o.tracer.as_deref());
 
         match tracer_type {
             Some("callTracer") => {
@@ -2244,7 +2254,10 @@ impl<P: Provider + 'static> crate::traits::DebugExecutionApi for EvmDebugExecuti
                 let config = options
                     .as_ref()
                     .and_then(|o| o.tracer_config.as_ref())
-                    .and_then(|v| serde_json::from_value::<cipherbft_execution::CallTracerConfig>(v.clone()).ok())
+                    .and_then(|v| {
+                        serde_json::from_value::<cipherbft_execution::CallTracerConfig>(v.clone())
+                            .ok()
+                    })
                     .unwrap_or_default();
 
                 self.trace_call_with_call_tracer(from, to, gas, gas_price, value, data, config)
@@ -2254,7 +2267,10 @@ impl<P: Provider + 'static> crate::traits::DebugExecutionApi for EvmDebugExecuti
                 let config = options
                     .as_ref()
                     .and_then(|o| o.tracer_config.as_ref())
-                    .and_then(|v| serde_json::from_value::<cipherbft_execution::OpcodeTracerConfig>(v.clone()).ok())
+                    .and_then(|v| {
+                        serde_json::from_value::<cipherbft_execution::OpcodeTracerConfig>(v.clone())
+                            .ok()
+                    })
                     .unwrap_or_default();
 
                 self.trace_call_with_opcode_tracer(from, to, gas, gas_price, value, data, config)
@@ -2276,7 +2292,8 @@ impl<P: Provider + 'static> crate::traits::DebugExecutionApi for EvmDebugExecuti
         // Since we don't have full block indexing yet, return an error
         Err(RpcError::MethodNotSupported(
             "debug_traceBlockByNumber/Hash requires block indexing which is not yet implemented. \
-             Use debug_traceCall instead.".to_string()
+             Use debug_traceCall instead."
+                .to_string(),
         ))
     }
 }
