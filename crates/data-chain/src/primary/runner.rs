@@ -911,8 +911,9 @@ impl Primary {
             return;
         }
 
-        // Form Cut for the next height
-        let height = self.state.current_height + 1;
+        // Form Cut at current_height (which is already the next height to produce)
+        // current_height is set to last_finalized_height + 1 by finalize_height()
+        let height = self.state.current_height;
 
         match self
             .cut_former
