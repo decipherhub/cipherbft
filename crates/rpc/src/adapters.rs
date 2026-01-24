@@ -1912,6 +1912,375 @@ impl crate::traits::DebugExecutionApi for StubDebugExecutionApi {
         Ok(vec![])
 }
 
+// ============================================================================
+// Real EVM Debug Execution Implementation
+// ============================================================================
+
+/// Real EVM debug execution adapter using revm with inspector support.
+///
+/// This adapter executes debug/trace operations using the revm EVM
+/// implementation with actual Inspector integration for tracing.
+pub struct EvmDebugExecutionApi<P: Provider> {
+    /// Provider for reading state.
+    provider: Arc<P>,
+    /// Chain ID for this network.
+    chain_id: u64,
+    /// Block gas limit.
+    block_gas_limit: u64,
+    /// Base fee per gas.
+    base_fee_per_gas: u64,
+    /// Latest block number (for execution context).
+    latest_block: AtomicU64,
+}
+
+impl<P: Provider> EvmDebugExecutionApi<P> {
+    /// Default block gas limit (30 million).
+    const DEFAULT_BLOCK_GAS_LIMIT: u64 = 30_000_000;
+    /// Default base fee (1 gwei).
+    const DEFAULT_BASE_FEE: u64 = 1_000_000_000;
+    /// Default gas limit for calls.
+    const DEFAULT_CALL_GAS: u64 = 30_000_000;
+
+    /// Create a new EVM debug execution adapter.
+    pub fn new(provider: Arc<P>, chain_id: u64) -> Self {
+        Self {
+            provider,
+            chain_id,
+            block_gas_limit: Self::DEFAULT_BLOCK_GAS_LIMIT,
+            base_fee_per_gas: Self::DEFAULT_BASE_FEE,
+            latest_block: AtomicU64::new(0),
+        }
+    }
+
+    /// Create with custom configuration.
+    pub fn with_config(
+        provider: Arc<P>,
+        chain_id: u64,
+        block_gas_limit: u64,
+        base_fee_per_gas: u64,
+    ) -> Self {
+        Self {
+            provider,
+            chain_id,
+            block_gas_limit,
+            base_fee_per_gas,
+            latest_block: AtomicU64::new(0),
+        }
+    }
+
+    /// Update the latest block number.
+    pub fn set_latest_block(&self, block: u64) {
+        self.latest_block.store(block, Ordering::SeqCst);
+    }
+
+    /// Execute a call with CallTracer and return the trace result.
+    fn trace_call_with_call_tracer(
+        &self,
+        from: Option<Address>,
+        to: Option<Address>,
+        gas: Option<u64>,
+        gas_price: Option<U256>,
+        value: Option<U256>,
+        data: Option<Bytes>,
+        config: cipherbft_execution::CallTracerConfig,
+    ) -> RpcResult<cipherbft_execution::TraceResult> {
+        use cipherbft_execution::database::CipherBftDatabase;
+        use cipherbft_execution::CallTracer;
+        use revm::context::{BlockEnv, CfgEnv, Context, Evm, FrameStack, Journal, TxEnv};
+        use revm::context_interface::result::{ExecutionResult, Output};
+        use revm::handler::instructions::EthInstructions;
+        use revm::handler::EthPrecompiles;
+        use revm::primitives::hardfork::SpecId;
+        use revm::primitives::TxKind;
+
+        // Type alias for EVM context with CallTracer
+        type EvmContextWithTracer<DB> = Context<BlockEnv, TxEnv, CfgEnv, DB, Journal<DB>, ()>;
+
+        // Create database and tracer
+        let db = CipherBftDatabase::new(Arc::clone(&self.provider));
+        let tracer = CallTracer::with_config(config);
+
+        // Build the EVM context
+        let block_number = self.latest_block.load(Ordering::SeqCst);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Create context with database
+        let mut ctx: EvmContextWithTracer<CipherBftDatabase<Arc<P>>> = Context::new(db, SpecId::CANCUN);
+
+        // Configure block environment
+        ctx.block.number = alloy_primitives::U256::from(block_number);
+        ctx.block.timestamp = alloy_primitives::U256::from(timestamp);
+        ctx.block.gas_limit = self.block_gas_limit;
+        ctx.block.basefee = self.base_fee_per_gas;
+
+        // Configure chain settings
+        ctx.cfg.chain_id = self.chain_id;
+
+        // Set up transaction environment
+        ctx.tx.caller = from.unwrap_or(Address::ZERO);
+        ctx.tx.gas_limit = gas.unwrap_or(Self::DEFAULT_CALL_GAS);
+        ctx.tx.gas_price = gas_price
+            .map(|p| p.try_into().unwrap_or(self.base_fee_per_gas as u128))
+            .unwrap_or(self.base_fee_per_gas as u128);
+        ctx.tx.kind = match to {
+            Some(addr) => TxKind::Call(addr),
+            None => TxKind::Create,
+        };
+        ctx.tx.value = value.unwrap_or(U256::ZERO);
+        ctx.tx.data = data.unwrap_or_default();
+        ctx.tx.nonce = 0;
+
+        // Build the EVM with tracer as inspector
+        let mut evm = Evm {
+            ctx,
+            inspector: tracer,
+            instruction: EthInstructions::default(),
+            precompiles: EthPrecompiles::default(),
+            frame_stack: FrameStack::new_prealloc(8),
+        };
+
+        // Clone tx_env before passing to transact
+        let tx_env = evm.ctx.tx.clone();
+
+        // Execute the transaction with tracing
+        use revm::handler::ExecuteEvm;
+        let result = evm.transact(tx_env).map_err(|e| {
+            debug!("EVM trace execution error: {:?}", e);
+            RpcError::Execution(format!("EVM trace execution failed: {e:?}"))
+        })?;
+
+        // Extract trace from inspector
+        let call_trace = evm.inspector.into_trace();
+
+        // Build trace result
+        let gas_used = result.result.gas_used();
+        let (failed, return_value) = match result.result {
+            ExecutionResult::Success { output, .. } => {
+                let output_bytes = match output {
+                    Output::Call(data) => data,
+                    Output::Create(_, addr) => {
+                        addr.map(|a| Bytes::copy_from_slice(a.as_slice()))
+                            .unwrap_or_default()
+                    }
+                };
+                (false, Some(output_bytes))
+            }
+            ExecutionResult::Revert { output, .. } => (true, Some(output)),
+            ExecutionResult::Halt { .. } => (true, None),
+        };
+
+        Ok(cipherbft_execution::TraceResult {
+            call_trace,
+            struct_logs: None,
+            state_diff: None,
+            failed,
+            gas: gas_used,
+            return_value,
+        })
+    }
+
+    /// Execute a call with OpcodeTracer and return the trace result.
+    fn trace_call_with_opcode_tracer(
+        &self,
+        from: Option<Address>,
+        to: Option<Address>,
+        gas: Option<u64>,
+        gas_price: Option<U256>,
+        value: Option<U256>,
+        data: Option<Bytes>,
+        config: cipherbft_execution::OpcodeTracerConfig,
+    ) -> RpcResult<cipherbft_execution::TraceResult> {
+        use cipherbft_execution::database::CipherBftDatabase;
+        use cipherbft_execution::OpcodeTracer;
+        use revm::context::{BlockEnv, CfgEnv, Context, Evm, FrameStack, Journal, TxEnv};
+        use revm::context_interface::result::{ExecutionResult, Output};
+        use revm::handler::instructions::EthInstructions;
+        use revm::handler::EthPrecompiles;
+        use revm::primitives::hardfork::SpecId;
+        use revm::primitives::TxKind;
+
+        // Type alias for EVM context
+        type EvmContextWithTracer<DB> = Context<BlockEnv, TxEnv, CfgEnv, DB, Journal<DB>, ()>;
+
+        // Create database and tracer
+        let db = CipherBftDatabase::new(Arc::clone(&self.provider));
+        let tracer = OpcodeTracer::with_config(config);
+
+        // Build the EVM context
+        let block_number = self.latest_block.load(Ordering::SeqCst);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Create context with database
+        let mut ctx: EvmContextWithTracer<CipherBftDatabase<Arc<P>>> = Context::new(db, SpecId::CANCUN);
+
+        // Configure block environment
+        ctx.block.number = alloy_primitives::U256::from(block_number);
+        ctx.block.timestamp = alloy_primitives::U256::from(timestamp);
+        ctx.block.gas_limit = self.block_gas_limit;
+        ctx.block.basefee = self.base_fee_per_gas;
+
+        // Configure chain settings
+        ctx.cfg.chain_id = self.chain_id;
+
+        // Set up transaction environment
+        ctx.tx.caller = from.unwrap_or(Address::ZERO);
+        ctx.tx.gas_limit = gas.unwrap_or(Self::DEFAULT_CALL_GAS);
+        ctx.tx.gas_price = gas_price
+            .map(|p| p.try_into().unwrap_or(self.base_fee_per_gas as u128))
+            .unwrap_or(self.base_fee_per_gas as u128);
+        ctx.tx.kind = match to {
+            Some(addr) => TxKind::Call(addr),
+            None => TxKind::Create,
+        };
+        ctx.tx.value = value.unwrap_or(U256::ZERO);
+        ctx.tx.data = data.unwrap_or_default();
+        ctx.tx.nonce = 0;
+
+        // Build the EVM with tracer as inspector
+        let mut evm = Evm {
+            ctx,
+            inspector: tracer,
+            instruction: EthInstructions::default(),
+            precompiles: EthPrecompiles::default(),
+            frame_stack: FrameStack::new_prealloc(8),
+        };
+
+        // Clone tx_env before passing to transact
+        let tx_env = evm.ctx.tx.clone();
+
+        // Execute the transaction with tracing
+        use revm::handler::ExecuteEvm;
+        let result = evm.transact(tx_env).map_err(|e| {
+            debug!("EVM trace execution error: {:?}", e);
+            RpcError::Execution(format!("EVM trace execution failed: {e:?}"))
+        })?;
+
+        // Extract trace from inspector
+        let struct_logs = evm.inspector.into_steps();
+
+        // Build trace result
+        let gas_used = result.result.gas_used();
+        let (failed, return_value) = match result.result {
+            ExecutionResult::Success { output, .. } => {
+                let output_bytes = match output {
+                    Output::Call(data) => data,
+                    Output::Create(_, addr) => {
+                        addr.map(|a| Bytes::copy_from_slice(a.as_slice()))
+                            .unwrap_or_default()
+                    }
+                };
+                (false, Some(output_bytes))
+            }
+            ExecutionResult::Revert { output, .. } => (true, Some(output)),
+            ExecutionResult::Halt { .. } => (true, None),
+        };
+
+        Ok(cipherbft_execution::TraceResult {
+            call_trace: None,
+            struct_logs: Some(struct_logs),
+            state_diff: None,
+            failed,
+            gas: gas_used,
+            return_value,
+        })
+    }
+}
+
+#[async_trait]
+impl<P: Provider + 'static> crate::traits::DebugExecutionApi for EvmDebugExecutionApi<P> {
+    async fn trace_transaction(
+        &self,
+        tx_hash: B256,
+        _block: BlockNumberOrTag,
+        _options: Option<cipherbft_execution::TraceOptions>,
+    ) -> RpcResult<cipherbft_execution::TraceResult> {
+        debug!("EvmDebugExecutionApi::trace_transaction(hash={})", tx_hash);
+
+        // Transaction tracing requires:
+        // 1. Finding the transaction in a block (requires block indexing)
+        // 2. Re-executing all previous transactions in the block
+        // 3. Then executing the target transaction with tracing
+        //
+        // Since we don't have full block indexing yet, return an error
+        Err(RpcError::MethodNotSupported(
+            "debug_traceTransaction requires block indexing which is not yet implemented. \
+             Use debug_traceCall instead.".to_string()
+        ))
+    }
+
+    async fn trace_call(
+        &self,
+        from: Option<Address>,
+        to: Option<Address>,
+        gas: Option<u64>,
+        gas_price: Option<U256>,
+        value: Option<U256>,
+        data: Option<Bytes>,
+        _block: BlockNumberOrTag,
+        options: Option<cipherbft_execution::TraceOptions>,
+    ) -> RpcResult<cipherbft_execution::TraceResult> {
+        debug!(
+            "EvmDebugExecutionApi::trace_call(from={:?}, to={:?}, gas={:?}, data_len={:?})",
+            from,
+            to,
+            gas,
+            data.as_ref().map(|d| d.len())
+        );
+
+        // Determine tracer type from options
+        let tracer_type = options
+            .as_ref()
+            .and_then(|o| o.tracer.as_deref());
+
+        match tracer_type {
+            Some("callTracer") => {
+                // Parse callTracer config
+                let config = options
+                    .as_ref()
+                    .and_then(|o| o.tracer_config.as_ref())
+                    .and_then(|v| serde_json::from_value::<cipherbft_execution::CallTracerConfig>(v.clone()).ok())
+                    .unwrap_or_default();
+
+                self.trace_call_with_call_tracer(from, to, gas, gas_price, value, data, config)
+            }
+            _ => {
+                // Default to opcode tracer (struct logs)
+                let config = options
+                    .as_ref()
+                    .and_then(|o| o.tracer_config.as_ref())
+                    .and_then(|v| serde_json::from_value::<cipherbft_execution::OpcodeTracerConfig>(v.clone()).ok())
+                    .unwrap_or_default();
+
+                self.trace_call_with_opcode_tracer(from, to, gas, gas_price, value, data, config)
+            }
+        }
+    }
+
+    async fn trace_block(
+        &self,
+        block: BlockNumberOrTag,
+        _options: Option<cipherbft_execution::TraceOptions>,
+    ) -> RpcResult<Vec<cipherbft_execution::TraceResult>> {
+        debug!("EvmDebugExecutionApi::trace_block(block={:?})", block);
+
+        // Block tracing requires:
+        // 1. Getting all transactions in the block (requires block indexing)
+        // 2. Re-executing each transaction with tracing
+        //
+        // Since we don't have full block indexing yet, return an error
+        Err(RpcError::MethodNotSupported(
+            "debug_traceBlockByNumber/Hash requires block indexing which is not yet implemented. \
+             Use debug_traceCall instead.".to_string()
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -167,7 +167,7 @@ pub use traits::{BlockNumberOrTag, DebugExecutionApi, ExecutionApi, MempoolApi, 
 pub use adapters::{StubDebugExecutionApi, StubExecutionApi, StubMempoolApi, StubNetworkApi, StubRpcStorage};
 
 // Real implementations backed by storage
-pub use adapters::{EvmExecutionApi, MdbxRpcStorage, PoolMempoolApi, ProviderBasedRpcStorage};
+pub use adapters::{EvmDebugExecutionApi, EvmExecutionApi, MdbxRpcStorage, PoolMempoolApi, ProviderBasedRpcStorage};
 
 // Block conversion utilities for subscription broadcasting
 pub use adapters::storage_block_to_rpc_block;
