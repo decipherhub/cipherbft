@@ -93,7 +93,8 @@ enum Commands {
         keyring_backend: Option<KeyringBackendArg>,
     },
 
-    /// Generate testnet configuration files for local multi-validator testing
+    /// Generate testnet/devnet configuration files for local multi-validator testing
+    #[command(alias = "devnet")]
     Testnet {
         #[command(subcommand)]
         command: TestnetCommands,
@@ -859,8 +860,9 @@ fn cmd_testnet_init_files(
             max_batch_txs: 100,
             max_batch_bytes: 1024 * 1024,
             rpc_enabled: true,
-            rpc_http_port: cipherd::DEFAULT_RPC_HTTP_PORT + (i as u16),
-            rpc_ws_port: cipherd::DEFAULT_RPC_WS_PORT + (i as u16),
+            // Each validator gets HTTP and WS ports spaced by 10 to avoid conflicts
+            rpc_http_port: cipherd::DEFAULT_RPC_HTTP_PORT + (i as u16 * 10),
+            rpc_ws_port: cipherd::DEFAULT_RPC_WS_PORT + (i as u16 * 10),
         };
 
         let config_path = config_dir.join("node.json");
