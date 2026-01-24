@@ -20,13 +20,17 @@
 //! - `StubNetworkApi`: Placeholder until P2P integration
 
 use alloy_primitives::{Address, Bytes, B256, U256};
-use alloy_rpc_types_eth::{Block, BlockTransactions, Filter, Header, Log, Transaction, TransactionReceipt};
+use alloy_rpc_types_eth::{
+    Block, BlockTransactions, Filter, Header, Log, Transaction, TransactionReceipt,
+};
 use async_trait::async_trait;
 use cipherbft_execution::database::Provider;
 use cipherbft_mempool::pool::RecoveredTx;
 use cipherbft_mempool::CipherBftPool;
 use cipherbft_storage::mdbx::{MdbxBlockStore, MdbxLogStore, MdbxReceiptStore};
-use cipherbft_storage::{BlockStore, LogFilter as StorageLogFilter, LogStore, ReceiptStore, StoredLog};
+use cipherbft_storage::{
+    BlockStore, LogFilter as StorageLogFilter, LogStore, ReceiptStore, StoredLog,
+};
 use parking_lot::RwLock;
 use reth_primitives::TransactionSigned;
 use reth_transaction_pool::{PoolTransaction, TransactionOrigin, TransactionPool};
@@ -588,24 +592,22 @@ impl<P: Provider> MdbxRpcStorage<P> {
             .logs
             .iter()
             .enumerate()
-            .map(|(idx, storage_log)| {
-                Log {
-                    inner: alloy_primitives::Log {
-                        address: Address::from(storage_log.address),
-                        data: alloy_primitives::LogData::new(
-                            storage_log.topics.iter().map(|t| B256::from(*t)).collect(),
-                            Bytes::from(storage_log.data.clone()),
-                        )
-                        .unwrap_or_default(),
-                    },
-                    block_hash: Some(B256::from(storage_receipt.block_hash)),
-                    block_number: Some(storage_receipt.block_number),
-                    block_timestamp: None,
-                    transaction_hash: Some(B256::from(storage_receipt.transaction_hash)),
-                    transaction_index: Some(storage_receipt.transaction_index as u64),
-                    log_index: Some(idx as u64),
-                    removed: false,
-                }
+            .map(|(idx, storage_log)| Log {
+                inner: alloy_primitives::Log {
+                    address: Address::from(storage_log.address),
+                    data: alloy_primitives::LogData::new(
+                        storage_log.topics.iter().map(|t| B256::from(*t)).collect(),
+                        Bytes::from(storage_log.data.clone()),
+                    )
+                    .unwrap_or_default(),
+                },
+                block_hash: Some(B256::from(storage_receipt.block_hash)),
+                block_number: Some(storage_receipt.block_number),
+                block_timestamp: None,
+                transaction_hash: Some(B256::from(storage_receipt.transaction_hash)),
+                transaction_index: Some(storage_receipt.transaction_index as u64),
+                log_index: Some(idx as u64),
+                removed: false,
             })
             .collect();
 
@@ -650,11 +652,7 @@ impl<P: Provider> MdbxRpcStorage<P> {
         let block_hash = filter.get_block_hash().map(|h| h.0);
 
         // Convert addresses: FilterSet<Address> -> Vec<[u8; 20]>
-        let addresses: Vec<[u8; 20]> = filter
-            .address
-            .iter()
-            .map(|addr| addr.0 .0)
-            .collect();
+        let addresses: Vec<[u8; 20]> = filter.address.iter().map(|addr| addr.0 .0).collect();
 
         // Convert topics: [Topic; 4] -> Vec<Option<Vec<[u8; 32]>>>
         // Topic is FilterSet<B256>, and each position can match any of the topics in the set
@@ -726,7 +724,10 @@ impl<P: Provider + 'static> RpcStorage for MdbxRpcStorage<P> {
         // Query the block store
         match self.block_store.get_block_by_number(resolved).await {
             Ok(Some(storage_block)) => {
-                debug!("Found block {} with hash {:?}", resolved, storage_block.hash);
+                debug!(
+                    "Found block {} with hash {:?}",
+                    resolved, storage_block.hash
+                );
                 let rpc_block = self.storage_block_to_rpc(storage_block, full_transactions);
                 Ok(Some(rpc_block))
             }
@@ -753,11 +754,7 @@ impl<P: Provider + 'static> RpcStorage for MdbxRpcStorage<P> {
         // Query the block store
         match self.block_store.get_block_by_hash(&hash_bytes).await {
             Ok(Some(storage_block)) => {
-                debug!(
-                    "Found block {} with hash {}",
-                    storage_block.number,
-                    hash
-                );
+                debug!("Found block {} with hash {}", storage_block.number, hash);
                 let rpc_block = self.storage_block_to_rpc(storage_block, full_transactions);
                 Ok(Some(rpc_block))
             }
@@ -871,10 +868,7 @@ impl<P: Provider + 'static> RpcStorage for MdbxRpcStorage<P> {
         // Query logs from storage
         match log_store.get_logs(&storage_filter, MAX_LOG_RESULTS).await {
             Ok(stored_logs) => {
-                debug!(
-                    "MdbxRpcStorage::get_logs found {} logs",
-                    stored_logs.len()
-                );
+                debug!("MdbxRpcStorage::get_logs found {} logs", stored_logs.len());
                 // Convert stored logs to RPC logs
                 let rpc_logs: Vec<Log> = stored_logs
                     .into_iter()
@@ -910,11 +904,7 @@ impl<P: Provider + 'static> RpcStorage for MdbxRpcStorage<P> {
 
     async fn get_balance(&self, address: Address, block: BlockNumberOrTag) -> RpcResult<U256> {
         let _block_num = self.resolve_block_number(block);
-        trace!(
-            "MdbxRpcStorage::get_balance({}, {:?})",
-            address,
-            block
-        );
+        trace!("MdbxRpcStorage::get_balance({}, {:?})", address, block);
 
         // Query account from provider
         // Note: Currently queries latest state; historical state requires state archival
@@ -936,11 +926,7 @@ impl<P: Provider + 'static> RpcStorage for MdbxRpcStorage<P> {
 
     async fn get_code(&self, address: Address, block: BlockNumberOrTag) -> RpcResult<Bytes> {
         let _block_num = self.resolve_block_number(block);
-        trace!(
-            "MdbxRpcStorage::get_code({}, {:?})",
-            address,
-            block
-        );
+        trace!("MdbxRpcStorage::get_code({}, {:?})", address, block);
 
         // First get account to find code hash
         match self.provider.get_account(address) {
@@ -2021,7 +2007,8 @@ mod tests {
         use cipherbft_execution::database::InMemoryProvider;
 
         let filter = Filter::default();
-        let storage_filter = MdbxRpcStorage::<InMemoryProvider>::rpc_filter_to_storage_filter(&filter);
+        let storage_filter =
+            MdbxRpcStorage::<InMemoryProvider>::rpc_filter_to_storage_filter(&filter);
 
         assert!(storage_filter.from_block.is_none());
         assert!(storage_filter.to_block.is_none());
@@ -2037,10 +2024,9 @@ mod tests {
     fn test_rpc_filter_to_storage_filter_with_block_range() {
         use cipherbft_execution::database::InMemoryProvider;
 
-        let filter = Filter::new()
-            .from_block(100u64)
-            .to_block(200u64);
-        let storage_filter = MdbxRpcStorage::<InMemoryProvider>::rpc_filter_to_storage_filter(&filter);
+        let filter = Filter::new().from_block(100u64).to_block(200u64);
+        let storage_filter =
+            MdbxRpcStorage::<InMemoryProvider>::rpc_filter_to_storage_filter(&filter);
 
         assert_eq!(storage_filter.from_block, Some(100));
         assert_eq!(storage_filter.to_block, Some(200));
@@ -2055,7 +2041,8 @@ mod tests {
         let addr2 = Address::repeat_byte(0x22);
 
         let filter = Filter::new().address(vec![addr1, addr2]);
-        let storage_filter = MdbxRpcStorage::<InMemoryProvider>::rpc_filter_to_storage_filter(&filter);
+        let storage_filter =
+            MdbxRpcStorage::<InMemoryProvider>::rpc_filter_to_storage_filter(&filter);
 
         assert_eq!(storage_filter.addresses.len(), 2);
         assert!(storage_filter.addresses.contains(&addr1.0 .0));
@@ -2070,10 +2057,11 @@ mod tests {
         let topic1 = B256::repeat_byte(0xBB);
 
         let filter = Filter::new()
-            .event_signature(topic0)  // topic0
-            .topic1(topic1);           // topic1
+            .event_signature(topic0) // topic0
+            .topic1(topic1); // topic1
 
-        let storage_filter = MdbxRpcStorage::<InMemoryProvider>::rpc_filter_to_storage_filter(&filter);
+        let storage_filter =
+            MdbxRpcStorage::<InMemoryProvider>::rpc_filter_to_storage_filter(&filter);
 
         // Should have 4 topic positions
         assert_eq!(storage_filter.topics.len(), 4);

@@ -6,9 +6,11 @@
 use std::sync::Arc;
 
 use cipherbft_execution::database::InMemoryProvider;
-use cipherbft_rpc::{MdbxRpcStorage, RpcStorage, SyncStatus};
-use cipherbft_storage::mdbx::{Database, DatabaseConfig, MdbxBlockStore, MdbxLogStore, MdbxReceiptStore};
 use cipherbft_rpc::BlockNumberOrTag;
+use cipherbft_rpc::{MdbxRpcStorage, RpcStorage, SyncStatus};
+use cipherbft_storage::mdbx::{
+    Database, DatabaseConfig, MdbxBlockStore, MdbxLogStore, MdbxReceiptStore,
+};
 use cipherbft_storage::receipts::{Log as ReceiptLog, Receipt};
 use cipherbft_storage::{BlockStore, LogStore, ReceiptStore, StoredLog};
 
@@ -33,7 +35,12 @@ async fn test_mdbx_rpc_storage_struct_creation() {
     let provider = Arc::new(InMemoryProvider::new());
 
     // Create MdbxRpcStorage - this is the actual test
-    let storage = MdbxRpcStorage::new(provider, block_store.clone(), receipt_store.clone(), TEST_CHAIN_ID);
+    let storage = MdbxRpcStorage::new(
+        provider,
+        block_store.clone(),
+        receipt_store.clone(),
+        TEST_CHAIN_ID,
+    );
 
     // Verify the storage was created correctly
     assert_eq!(storage.chain_id(), TEST_CHAIN_ID);
@@ -129,7 +136,11 @@ async fn test_block_store_operations() {
     let block_store = Arc::new(MdbxBlockStore::new(env));
 
     // Initially no blocks
-    assert!(block_store.get_latest_block_number().await.unwrap().is_none());
+    assert!(block_store
+        .get_latest_block_number()
+        .await
+        .unwrap()
+        .is_none());
     assert!(!block_store.has_block(0).await.unwrap());
     assert!(block_store.get_block_by_number(0).await.unwrap().is_none());
 }
@@ -148,8 +159,16 @@ async fn test_receipt_store_operations() {
     // Initially no receipts
     let missing_hash = [0u8; 32];
     assert!(!receipt_store.has_receipt(&missing_hash).await.unwrap());
-    assert!(receipt_store.get_receipt(&missing_hash).await.unwrap().is_none());
-    assert!(receipt_store.get_receipts_by_block(0).await.unwrap().is_empty());
+    assert!(receipt_store
+        .get_receipt(&missing_hash)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(receipt_store
+        .get_receipts_by_block(0)
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]
@@ -166,7 +185,11 @@ async fn test_shared_database_environment() {
     let receipt_store = Arc::new(MdbxReceiptStore::new(env.clone()));
 
     // Both should work independently
-    assert!(block_store.get_latest_block_number().await.unwrap().is_none());
+    assert!(block_store
+        .get_latest_block_number()
+        .await
+        .unwrap()
+        .is_none());
     assert!(!receipt_store.has_receipt(&[1u8; 32]).await.unwrap());
 
     // Verify environment is shared - at least 3 strong references
@@ -195,8 +218,17 @@ async fn test_mdbx_rpc_storage_with_stores() {
     );
 
     // Access underlying stores through the storage wrapper
-    assert!(storage.block_store().get_latest_block_number().await.unwrap().is_none());
-    assert!(!storage.receipt_store().has_receipt(&[0u8; 32]).await.unwrap());
+    assert!(storage
+        .block_store()
+        .get_latest_block_number()
+        .await
+        .unwrap()
+        .is_none());
+    assert!(!storage
+        .receipt_store()
+        .has_receipt(&[0u8; 32])
+        .await
+        .unwrap());
 
     // Provider should also be accessible
     assert!(Arc::ptr_eq(storage.provider(), &provider));
@@ -299,9 +331,7 @@ async fn test_mdbx_rpc_storage_sync_status_thread_safety() {
     // Should still be in a valid syncing state
     let status = storage.sync_status().await.unwrap();
     match status {
-        SyncStatus::Syncing {
-            highest_block, ..
-        } => {
+        SyncStatus::Syncing { highest_block, .. } => {
             assert_eq!(highest_block, 100);
         }
         _ => panic!("Expected Syncing status"),
@@ -517,10 +547,18 @@ async fn test_mdbx_rpc_storage_get_block_receipts() {
     let receipt_store = Arc::new(MdbxReceiptStore::new(env.clone()));
     let provider = Arc::new(InMemoryProvider::new());
 
-    let storage = MdbxRpcStorage::new(provider, block_store.clone(), receipt_store.clone(), TEST_CHAIN_ID);
+    let storage = MdbxRpcStorage::new(
+        provider,
+        block_store.clone(),
+        receipt_store.clone(),
+        TEST_CHAIN_ID,
+    );
 
     // Query for non-existent block should return None
-    let result = storage.get_block_receipts(BlockNumberOrTag::Number(100)).await.unwrap();
+    let result = storage
+        .get_block_receipts(BlockNumberOrTag::Number(100))
+        .await
+        .unwrap();
     assert!(result.is_none(), "Non-existent block should return None");
 
     // Store a block first
@@ -592,7 +630,10 @@ async fn test_mdbx_rpc_storage_get_block_receipts() {
     receipt_store.put_receipts(&receipts).await.unwrap();
 
     // Query block receipts
-    let result = storage.get_block_receipts(BlockNumberOrTag::Number(100)).await.unwrap();
+    let result = storage
+        .get_block_receipts(BlockNumberOrTag::Number(100))
+        .await
+        .unwrap();
     assert!(result.is_some(), "Block with receipts should return Some");
 
     let rpc_receipts = result.unwrap();
@@ -649,9 +690,15 @@ async fn test_mdbx_rpc_storage_get_block_receipts_empty_block() {
     block_store.put_block(&block).await.unwrap();
 
     // Query block receipts for empty block
-    let result = storage.get_block_receipts(BlockNumberOrTag::Number(50)).await.unwrap();
+    let result = storage
+        .get_block_receipts(BlockNumberOrTag::Number(50))
+        .await
+        .unwrap();
 
     // Block exists but has no receipts - should return Some with empty vec
     assert!(result.is_some(), "Existing block should return Some");
-    assert!(result.unwrap().is_empty(), "Empty block should return empty receipts");
+    assert!(
+        result.unwrap().is_empty(),
+        "Empty block should return empty receipts"
+    );
 }

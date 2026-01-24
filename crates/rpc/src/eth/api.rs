@@ -145,11 +145,17 @@ pub trait EthRpc {
 
     /// Returns the number of transactions in a block from a block matching the given hash.
     #[method(name = "getBlockTransactionCountByHash")]
-    async fn get_block_transaction_count_by_hash(&self, block_hash: B256) -> JsonRpcResult<Option<U64>>;
+    async fn get_block_transaction_count_by_hash(
+        &self,
+        block_hash: B256,
+    ) -> JsonRpcResult<Option<U64>>;
 
     /// Returns the number of transactions in a block from a block matching the given number.
     #[method(name = "getBlockTransactionCountByNumber")]
-    async fn get_block_transaction_count_by_number(&self, block: String) -> JsonRpcResult<Option<U64>>;
+    async fn get_block_transaction_count_by_number(
+        &self,
+        block: String,
+    ) -> JsonRpcResult<Option<U64>>;
 
     /// Returns a transaction by block hash and transaction index position.
     #[method(name = "getTransactionByBlockHashAndIndex")]
@@ -893,7 +899,8 @@ where
                     base_fee_per_gas.push(0);
                     gas_used_ratio.push(0.0);
                     if let Some(ref mut rewards) = reward {
-                        let percentile_count = reward_percentiles.as_ref().map(|p| p.len()).unwrap_or(0);
+                        let percentile_count =
+                            reward_percentiles.as_ref().map(|p| p.len()).unwrap_or(0);
                         rewards.push(vec![0u128; percentile_count]);
                     }
                 }
@@ -1255,9 +1262,10 @@ where
     async fn get_filter_changes(&self, filter_id: U256) -> JsonRpcResult<serde_json::Value> {
         trace!("eth_getFilterChanges: filter_id={}", filter_id);
 
-        let filter_type = self.filter_manager.get_filter_type(filter_id).ok_or_else(|| {
-            RpcError::InvalidParams(format!("Filter not found: {}", filter_id))
-        })?;
+        let filter_type = self
+            .filter_manager
+            .get_filter_type(filter_id)
+            .ok_or_else(|| RpcError::InvalidParams(format!("Filter not found: {}", filter_id)))?;
 
         match filter_type {
             FilterType::Log(filter) => {
@@ -1290,8 +1298,11 @@ where
 
                 // Update filter state with new block position
                 let last_log_index = logs.last().map(|l| l.log_index.unwrap_or(0)).unwrap_or(0);
-                self.filter_manager
-                    .update_log_filter(filter_id, current_block, last_log_index as u32);
+                self.filter_manager.update_log_filter(
+                    filter_id,
+                    current_block,
+                    last_log_index as u32,
+                );
 
                 Ok(serde_json::to_value(&logs).unwrap_or_default())
             }
@@ -1321,9 +1332,10 @@ where
     async fn get_filter_logs(&self, filter_id: U256) -> JsonRpcResult<Vec<Log>> {
         trace!("eth_getFilterLogs: filter_id={}", filter_id);
 
-        let filter_type = self.filter_manager.get_filter_type(filter_id).ok_or_else(|| {
-            RpcError::InvalidParams(format!("Filter not found: {}", filter_id))
-        })?;
+        let filter_type = self
+            .filter_manager
+            .get_filter_type(filter_id)
+            .ok_or_else(|| RpcError::InvalidParams(format!("Filter not found: {}", filter_id)))?;
 
         match filter_type {
             FilterType::Log(filter) => {

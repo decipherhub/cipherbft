@@ -271,7 +271,10 @@ impl LogStore for MdbxLogStore {
         Ok(results)
     }
 
-    async fn get_logs_by_block_hash(&self, block_hash: &[u8; 32]) -> LogStoreResult<Vec<StoredLog>> {
+    async fn get_logs_by_block_hash(
+        &self,
+        block_hash: &[u8; 32],
+    ) -> LogStoreResult<Vec<StoredLog>> {
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
 
         // Look up block number from hash
@@ -301,7 +304,11 @@ impl LogStore for MdbxLogStore {
                 .cursor_read::<Logs>()
                 .map_err(|e| db_err(e.to_string()))?;
 
-            if cursor.seek(start_key).map_err(|e| db_err(e.to_string()))?.is_some() {
+            if cursor
+                .seek(start_key)
+                .map_err(|e| db_err(e.to_string()))?
+                .is_some()
+            {
                 loop {
                     let current = cursor.current().map_err(|e| db_err(e.to_string()))?;
                     match current {
@@ -518,10 +525,7 @@ mod tests {
         let (db, _temp_dir) = create_test_db();
         let store = MdbxLogStore::new(db);
 
-        let logs = vec![
-            make_test_log(10, 0, 1),
-            make_test_log(10, 1, 2),
-        ];
+        let logs = vec![make_test_log(10, 0, 1), make_test_log(10, 1, 2)];
 
         store.put_logs(&logs).await.unwrap();
         assert_eq!(store.get_logs_by_block(10).await.unwrap().len(), 2);

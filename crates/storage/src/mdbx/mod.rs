@@ -42,21 +42,16 @@ pub use staking::MdbxStakingStore;
 pub use tables::{
     // EVM table types
     AddressKey,
+    // Log table types
+    AddressLogKey,
     // Consensus table types
     Attestations,
     Batches,
+    BlockBlooms,
     BlockNumberKey,
     // Block table types
     Blocks,
     BlocksByHash,
-    // Log table types
-    AddressLogKey,
-    BlockBlooms,
-    LogKey,
-    Logs,
-    LogsByAddress,
-    StoredBloom,
-    StoredLogEntry,
     // Key types
     CarTableKey,
     Cars,
@@ -71,6 +66,9 @@ pub use tables::{
     HashKey,
     HeightKey,
     HeightRoundKey,
+    LogKey,
+    Logs,
+    LogsByAddress,
     PendingCuts,
     Proposals,
     // Receipt table types
@@ -87,6 +85,7 @@ pub use tables::{
     StoredBatchDigest,
     // Block value types
     StoredBlock,
+    StoredBloom,
     StoredBytecode,
     StoredCar,
     StoredCarEntry,
@@ -94,6 +93,7 @@ pub use tables::{
     StoredCut,
     // Receipt value types
     StoredLog,
+    StoredLogEntry,
     StoredProposal,
     StoredReceipt,
     StoredStakingMetadata,

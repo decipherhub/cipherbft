@@ -21,19 +21,29 @@ fn create_test_api() -> impl EthRpcServer {
     let config = Arc::new(RpcConfig::with_chain_id(85300));
     let filter_manager = Arc::new(FilterManager::new());
 
-    cipherbft_rpc::eth::EthApi::with_filter_manager(storage, mempool, executor, config, filter_manager)
+    cipherbft_rpc::eth::EthApi::with_filter_manager(
+        storage,
+        mempool,
+        executor,
+        config,
+        filter_manager,
+    )
 }
 
 /// Create a test EthApi with a shared filter manager.
-fn create_test_api_with_manager(
-    filter_manager: Arc<FilterManager>,
-) -> impl EthRpcServer {
+fn create_test_api_with_manager(filter_manager: Arc<FilterManager>) -> impl EthRpcServer {
     let storage = Arc::new(StubRpcStorage::default());
     let mempool = Arc::new(StubMempoolApi::new());
     let executor = Arc::new(StubExecutionApi::new());
     let config = Arc::new(RpcConfig::with_chain_id(85300));
 
-    cipherbft_rpc::eth::EthApi::with_filter_manager(storage, mempool, executor, config, filter_manager)
+    cipherbft_rpc::eth::EthApi::with_filter_manager(
+        storage,
+        mempool,
+        executor,
+        config,
+        filter_manager,
+    )
 }
 
 // ===== eth_newFilter tests =====
@@ -143,7 +153,10 @@ async fn test_get_filter_changes_block_filter() {
     // Second call should return empty (changes consumed)
     let changes2 = api.get_filter_changes(filter_id).await.unwrap();
     let hashes2: Vec<B256> = serde_json::from_value(changes2).unwrap();
-    assert!(hashes2.is_empty(), "Changes should be consumed after first call");
+    assert!(
+        hashes2.is_empty(),
+        "Changes should be consumed after first call"
+    );
 }
 
 #[tokio::test]
@@ -203,7 +216,10 @@ async fn test_get_filter_logs_wrong_filter_type() {
     // Try to get logs - should fail (only valid for log filters)
     let result = api.get_filter_logs(filter_id).await;
 
-    assert!(result.is_err(), "eth_getFilterLogs should fail for block filters");
+    assert!(
+        result.is_err(),
+        "eth_getFilterLogs should fail for block filters"
+    );
 }
 
 #[tokio::test]
@@ -257,7 +273,10 @@ async fn test_uninstall_nonexistent_filter() {
     let nonexistent_id = U256::from(999999);
     let result = api.uninstall_filter(nonexistent_id).await.unwrap();
 
-    assert!(!result, "Uninstall should return false for nonexistent filter");
+    assert!(
+        !result,
+        "Uninstall should return false for nonexistent filter"
+    );
 }
 
 // ===== Mixed filter type tests =====

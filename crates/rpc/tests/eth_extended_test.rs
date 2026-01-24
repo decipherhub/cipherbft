@@ -6,9 +6,7 @@
 use std::sync::Arc;
 
 use alloy_primitives::{Address, B256, U256, U64};
-use cipherbft_rpc::{
-    EthRpcServer, RpcConfig, StubExecutionApi, StubMempoolApi, StubRpcStorage,
-};
+use cipherbft_rpc::{EthRpcServer, RpcConfig, StubExecutionApi, StubMempoolApi, StubRpcStorage};
 use jsonrpsee::core::RpcResult;
 
 /// Create a test EthApi instance.
@@ -28,12 +26,13 @@ async fn test_get_block_transaction_count_by_hash_not_found() {
     let api = create_test_api();
 
     // Query for a block that doesn't exist
-    let result: RpcResult<Option<U64>> = api
-        .get_block_transaction_count_by_hash(B256::ZERO)
-        .await;
+    let result: RpcResult<Option<U64>> = api.get_block_transaction_count_by_hash(B256::ZERO).await;
 
     assert!(result.is_ok());
-    assert!(result.unwrap().is_none(), "Non-existent block should return None");
+    assert!(
+        result.unwrap().is_none(),
+        "Non-existent block should return None"
+    );
 }
 
 #[tokio::test]
@@ -42,7 +41,10 @@ async fn test_get_block_transaction_count_by_hash_exists() {
 
     // StubRpcStorage has a block at number 100
     // First get the block hash
-    let block = api.get_block_by_number("100".to_string(), false).await.unwrap();
+    let block = api
+        .get_block_by_number("100".to_string(), false)
+        .await
+        .unwrap();
     if let Some(block) = block {
         let hash = block.header.hash;
         let result = api.get_block_transaction_count_by_hash(hash).await.unwrap();
@@ -116,7 +118,10 @@ async fn test_get_transaction_by_block_hash_and_index_out_of_bounds() {
     let api = create_test_api();
 
     // Get a valid block hash
-    let block = api.get_block_by_number("100".to_string(), false).await.unwrap();
+    let block = api
+        .get_block_by_number("100".to_string(), false)
+        .await
+        .unwrap();
     if let Some(block) = block {
         let hash = block.header.hash;
 
@@ -126,7 +131,10 @@ async fn test_get_transaction_by_block_hash_and_index_out_of_bounds() {
             .await;
 
         assert!(result.is_ok());
-        assert!(result.unwrap().is_none(), "Out of bounds index should return None");
+        assert!(
+            result.unwrap().is_none(),
+            "Out of bounds index should return None"
+        );
     }
 }
 
@@ -155,7 +163,10 @@ async fn test_get_transaction_by_block_number_and_index_out_of_bounds() {
         .await;
 
     assert!(result.is_ok());
-    assert!(result.unwrap().is_none(), "Out of bounds index should return None");
+    assert!(
+        result.unwrap().is_none(),
+        "Out of bounds index should return None"
+    );
 }
 
 // ===== eth_maxPriorityFeePerGas tests =====
@@ -264,7 +275,10 @@ async fn test_fee_methods_consistency() {
 
     // Priority fee should be less than or equal to gas price (generally)
     // For our stubs, gas_price is 1 gwei and priority_fee is also 1 gwei
-    assert!(priority_fee <= gas_price, "Priority fee should not exceed gas price");
+    assert!(
+        priority_fee <= gas_price,
+        "Priority fee should not exceed gas price"
+    );
 }
 
 #[tokio::test]
@@ -272,14 +286,20 @@ async fn test_block_transaction_count_consistency() {
     let api = create_test_api();
 
     // Get block by number and by hash should return same transaction count
-    let block = api.get_block_by_number("100".to_string(), false).await.unwrap();
+    let block = api
+        .get_block_by_number("100".to_string(), false)
+        .await
+        .unwrap();
 
     if let Some(block) = block {
         let hash = block.header.hash;
         let tx_count = block.transactions.len();
 
         let count_by_hash = api.get_block_transaction_count_by_hash(hash).await.unwrap();
-        let count_by_number = api.get_block_transaction_count_by_number("100".to_string()).await.unwrap();
+        let count_by_number = api
+            .get_block_transaction_count_by_number("100".to_string())
+            .await
+            .unwrap();
 
         if let (Some(by_hash), Some(by_number)) = (count_by_hash, count_by_number) {
             assert_eq!(by_hash.to::<usize>(), tx_count);
@@ -300,7 +320,10 @@ async fn test_get_block_receipts_not_found() {
 
     assert!(result.is_ok());
     // StubRpcStorage returns None for all block receipts queries
-    assert!(result.unwrap().is_none(), "Non-existent block should return None");
+    assert!(
+        result.unwrap().is_none(),
+        "Non-existent block should return None"
+    );
 }
 
 #[tokio::test]

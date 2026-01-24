@@ -183,7 +183,11 @@ pub trait LogStore: Send + Sync {
     /// # Returns
     /// * `Ok(logs)` - Matching logs in order
     /// * `Err(...)` if the storage operation fails
-    async fn get_logs(&self, filter: &LogFilter, max_results: usize) -> LogStoreResult<Vec<StoredLog>>;
+    async fn get_logs(
+        &self,
+        filter: &LogFilter,
+        max_results: usize,
+    ) -> LogStoreResult<Vec<StoredLog>>;
 
     /// Get all logs for a specific block.
     ///
@@ -206,7 +210,8 @@ pub trait LogStore: Send + Sync {
     /// # Returns
     /// * `Ok(logs)` - All logs for the block in order
     /// * `Err(...)` if the storage operation fails
-    async fn get_logs_by_block_hash(&self, block_hash: &[u8; 32]) -> LogStoreResult<Vec<StoredLog>>;
+    async fn get_logs_by_block_hash(&self, block_hash: &[u8; 32])
+        -> LogStoreResult<Vec<StoredLog>>;
 
     /// Delete all logs for a block (for pruning or reorg handling).
     ///

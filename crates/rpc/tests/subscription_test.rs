@@ -19,7 +19,9 @@ fn test_subscription_kind_pending_transactions() {
     };
     assert!(matches!(
         kind,
-        SubscriptionKind::NewPendingTransactions { full_transactions: false }
+        SubscriptionKind::NewPendingTransactions {
+            full_transactions: false
+        }
     ));
 }
 
@@ -31,7 +33,9 @@ fn test_subscription_kind_pending_transactions_full() {
     };
     assert!(matches!(
         kind,
-        SubscriptionKind::NewPendingTransactions { full_transactions: true }
+        SubscriptionKind::NewPendingTransactions {
+            full_transactions: true
+        }
     ));
 }
 
