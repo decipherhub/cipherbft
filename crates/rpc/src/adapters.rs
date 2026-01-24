@@ -20,11 +20,13 @@
 //! - `StubNetworkApi`: Placeholder until P2P integration
 
 use alloy_primitives::{Address, Bytes, B256, U256};
-use alloy_rpc_types_eth::{Block, Filter, Log, Transaction, TransactionReceipt};
+use alloy_rpc_types_eth::{Block, BlockTransactions, Filter, Header, Log, Transaction, TransactionReceipt};
 use async_trait::async_trait;
 use cipherbft_execution::database::Provider;
 use cipherbft_mempool::pool::RecoveredTx;
 use cipherbft_mempool::CipherBftPool;
+use cipherbft_storage::mdbx::{MdbxBlockStore, MdbxReceiptStore};
+use cipherbft_storage::BlockStore;
 use parking_lot::RwLock;
 use reth_primitives::TransactionSigned;
 use reth_transaction_pool::{PoolTransaction, TransactionOrigin, TransactionPool};
@@ -295,6 +297,418 @@ impl<P: Provider + 'static> RpcStorage for ProviderBasedRpcStorage<P> {
         let _block_num = self.resolve_block_number(block);
         trace!(
             "ProviderBasedRpcStorage::get_transaction_count({}, {:?})",
+            address,
+            block
+        );
+
+        match self.provider.get_account(address) {
+            Ok(Some(account)) => {
+                debug!("Found account {} with nonce {}", address, account.nonce);
+                Ok(account.nonce)
+            }
+            Ok(None) => {
+                trace!("Account {} not found, returning nonce 0", address);
+                Ok(0)
+            }
+            Err(e) => {
+                debug!("Error getting account {}: {}", address, e);
+                Err(RpcError::Storage(e.to_string()))
+            }
+        }
+    }
+}
+
+// ============================================================================
+// MDBX-backed RPC Storage Implementation
+// ============================================================================
+
+/// MDBX-backed RPC storage that uses real block and receipt stores.
+///
+/// This adapter combines the execution layer's `Provider` trait for state queries
+/// with MDBX-backed block and receipt stores for historical data. It bridges the
+/// gap between the RPC interface and the persistent storage layer.
+///
+/// # Architecture
+///
+/// - State queries (balance, code, storage, nonce): Delegated to the `Provider`
+/// - Block queries: Use `MdbxBlockStore`
+/// - Receipt queries: Use `MdbxReceiptStore`
+/// - Latest block tracking: Managed internally via `AtomicU64`
+///
+/// # Thread Safety
+///
+/// This type is thread-safe and can be shared across threads using `Arc`.
+/// The underlying MDBX database handles concurrent access.
+pub struct MdbxRpcStorage<P: Provider> {
+    /// Provider for state queries (balance, code, storage, nonce).
+    provider: Arc<P>,
+    /// Block storage.
+    block_store: Arc<MdbxBlockStore>,
+    /// Receipt storage.
+    receipt_store: Arc<MdbxReceiptStore>,
+    /// Chain ID.
+    chain_id: u64,
+    /// Latest block number (updated by consensus).
+    latest_block: AtomicU64,
+}
+
+impl<P: Provider> MdbxRpcStorage<P> {
+    /// Create new MDBX-backed RPC storage.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider` - Provider for state queries
+    /// * `block_store` - MDBX-backed block store
+    /// * `receipt_store` - MDBX-backed receipt store
+    /// * `chain_id` - Chain ID for this network
+    pub fn new(
+        provider: Arc<P>,
+        block_store: Arc<MdbxBlockStore>,
+        receipt_store: Arc<MdbxReceiptStore>,
+        chain_id: u64,
+    ) -> Self {
+        Self {
+            provider,
+            block_store,
+            receipt_store,
+            chain_id,
+            latest_block: AtomicU64::new(0),
+        }
+    }
+
+    /// Update the latest block number.
+    ///
+    /// This should be called by the consensus layer when a new block is finalized.
+    pub fn set_latest_block(&self, block: u64) {
+        self.latest_block.store(block, Ordering::SeqCst);
+    }
+
+    /// Get the latest block number.
+    pub fn latest_block(&self) -> u64 {
+        self.latest_block.load(Ordering::SeqCst)
+    }
+
+    /// Get reference to block store.
+    pub fn block_store(&self) -> &Arc<MdbxBlockStore> {
+        &self.block_store
+    }
+
+    /// Get reference to receipt store.
+    pub fn receipt_store(&self) -> &Arc<MdbxReceiptStore> {
+        &self.receipt_store
+    }
+
+    /// Get reference to provider.
+    pub fn provider(&self) -> &Arc<P> {
+        &self.provider
+    }
+
+    /// Get chain ID.
+    pub fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+
+    /// Resolve block number from tag.
+    ///
+    /// For `Latest`, `Safe`, `Finalized`, `Pending`: returns `self.latest_block()`
+    /// For `Earliest`: returns 0 (genesis)
+    /// For `Number(n)`: returns `n`
+    fn resolve_block_number(&self, tag: BlockNumberOrTag) -> u64 {
+        match tag {
+            BlockNumberOrTag::Number(n) => n,
+            BlockNumberOrTag::Latest
+            | BlockNumberOrTag::Safe
+            | BlockNumberOrTag::Finalized
+            | BlockNumberOrTag::Pending => self.latest_block.load(Ordering::SeqCst),
+            BlockNumberOrTag::Earliest => 0,
+        }
+    }
+
+    /// Convert a storage block to an RPC block.
+    ///
+    /// # Arguments
+    ///
+    /// * `storage_block` - The block from storage
+    /// * `full_txs` - If true, include full transaction objects; otherwise just hashes
+    ///
+    /// # Returns
+    ///
+    /// An RPC Block suitable for JSON-RPC responses.
+    fn storage_block_to_rpc(
+        &self,
+        storage_block: cipherbft_storage::blocks::Block,
+        full_txs: bool,
+    ) -> Block {
+        use alloy_primitives::{Bloom, B64};
+
+        // Convert transaction hashes to B256
+        let tx_hashes: Vec<B256> = storage_block
+            .transaction_hashes
+            .iter()
+            .map(|h| B256::from(*h))
+            .collect();
+
+        // Build transactions field based on full_txs flag
+        // For now, we only support returning hashes (full tx bodies will come later)
+        let transactions = if full_txs {
+            // TODO: In the future, this should return full Transaction objects
+            // For now, return hashes even when full_txs is true
+            BlockTransactions::Hashes(tx_hashes)
+        } else {
+            BlockTransactions::Hashes(tx_hashes)
+        };
+
+        // Build the consensus header
+        let consensus_header = alloy_consensus::Header {
+            parent_hash: B256::from(storage_block.parent_hash),
+            ommers_hash: B256::from(storage_block.ommers_hash),
+            beneficiary: Address::from(storage_block.beneficiary),
+            state_root: B256::from(storage_block.state_root),
+            transactions_root: B256::from(storage_block.transactions_root),
+            receipts_root: B256::from(storage_block.receipts_root),
+            logs_bloom: Bloom::from_slice(&storage_block.logs_bloom),
+            difficulty: U256::from_be_bytes(storage_block.difficulty),
+            number: storage_block.number,
+            gas_limit: storage_block.gas_limit,
+            gas_used: storage_block.gas_used,
+            timestamp: storage_block.timestamp,
+            extra_data: Bytes::from(storage_block.extra_data),
+            mix_hash: B256::from(storage_block.mix_hash),
+            nonce: B64::from(storage_block.nonce),
+            base_fee_per_gas: storage_block.base_fee_per_gas,
+            withdrawals_root: None,
+            blob_gas_used: None,
+            excess_blob_gas: None,
+            parent_beacon_block_root: None,
+            requests_hash: None,
+        };
+
+        // Build the RPC header with hash and total difficulty
+        let block_hash = B256::from(storage_block.hash);
+        let total_difficulty = U256::from_be_bytes(storage_block.total_difficulty);
+
+        let rpc_header = Header {
+            hash: block_hash,
+            inner: consensus_header,
+            total_difficulty: Some(total_difficulty),
+            size: None,
+        };
+
+        // Build the final RPC block
+        Block {
+            header: rpc_header,
+            uncles: Vec::new(),
+            transactions,
+            withdrawals: None,
+        }
+    }
+}
+
+#[async_trait]
+impl<P: Provider + 'static> RpcStorage for MdbxRpcStorage<P> {
+    async fn get_block_by_number(
+        &self,
+        number: BlockNumberOrTag,
+        full_transactions: bool,
+    ) -> RpcResult<Option<Block>> {
+        let resolved = self.resolve_block_number(number);
+        trace!(
+            "MdbxRpcStorage::get_block_by_number({:?} -> {})",
+            number,
+            resolved
+        );
+
+        // Query the block store
+        match self.block_store.get_block_by_number(resolved).await {
+            Ok(Some(storage_block)) => {
+                debug!("Found block {} with hash {:?}", resolved, storage_block.hash);
+                let rpc_block = self.storage_block_to_rpc(storage_block, full_transactions);
+                Ok(Some(rpc_block))
+            }
+            Ok(None) => {
+                trace!("Block {} not found", resolved);
+                Ok(None)
+            }
+            Err(e) => {
+                debug!("Error getting block {}: {}", resolved, e);
+                Err(RpcError::Storage(e.to_string()))
+            }
+        }
+    }
+
+    async fn get_block_by_hash(
+        &self,
+        hash: B256,
+        full_transactions: bool,
+    ) -> RpcResult<Option<Block>> {
+        trace!("MdbxRpcStorage::get_block_by_hash({})", hash);
+
+        let hash_bytes: [u8; 32] = hash.into();
+
+        // Query the block store
+        match self.block_store.get_block_by_hash(&hash_bytes).await {
+            Ok(Some(storage_block)) => {
+                debug!(
+                    "Found block {} with hash {}",
+                    storage_block.number,
+                    hash
+                );
+                let rpc_block = self.storage_block_to_rpc(storage_block, full_transactions);
+                Ok(Some(rpc_block))
+            }
+            Ok(None) => {
+                trace!("Block with hash {} not found", hash);
+                Ok(None)
+            }
+            Err(e) => {
+                debug!("Error getting block by hash {}: {}", hash, e);
+                Err(RpcError::Storage(e.to_string()))
+            }
+        }
+    }
+
+    async fn get_transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction>> {
+        trace!("MdbxRpcStorage::get_transaction_by_hash({})", hash);
+        // Transaction indexing not yet implemented - return None
+        // TODO: Implement when transaction storage is added
+        Ok(None)
+    }
+
+    async fn get_transaction_receipt(&self, hash: B256) -> RpcResult<Option<TransactionReceipt>> {
+        trace!("MdbxRpcStorage::get_transaction_receipt({})", hash);
+        // Receipt storage not yet implemented - return None
+        // TODO: Implement when receipt storage is added
+        Ok(None)
+    }
+
+    async fn get_logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
+        trace!("MdbxRpcStorage::get_logs({:?})", filter);
+        // Log indexing not yet implemented - return empty
+        // TODO: Implement when log indexing is added
+        Ok(Vec::new())
+    }
+
+    async fn latest_block_number(&self) -> RpcResult<u64> {
+        trace!("MdbxRpcStorage::latest_block_number");
+        Ok(self.latest_block.load(Ordering::SeqCst))
+    }
+
+    async fn sync_status(&self) -> RpcResult<SyncStatus> {
+        trace!("MdbxRpcStorage::sync_status");
+        // For now, always return not syncing
+        // TODO: Add sync status tracking similar to ProviderBasedRpcStorage
+        Ok(SyncStatus::NotSyncing)
+    }
+
+    async fn get_balance(&self, address: Address, block: BlockNumberOrTag) -> RpcResult<U256> {
+        let _block_num = self.resolve_block_number(block);
+        trace!(
+            "MdbxRpcStorage::get_balance({}, {:?})",
+            address,
+            block
+        );
+
+        // Query account from provider
+        // Note: Currently queries latest state; historical state requires state archival
+        match self.provider.get_account(address) {
+            Ok(Some(account)) => {
+                debug!("Found account {} with balance {}", address, account.balance);
+                Ok(account.balance)
+            }
+            Ok(None) => {
+                trace!("Account {} not found, returning zero balance", address);
+                Ok(U256::ZERO)
+            }
+            Err(e) => {
+                debug!("Error getting account {}: {}", address, e);
+                Err(RpcError::Storage(e.to_string()))
+            }
+        }
+    }
+
+    async fn get_code(&self, address: Address, block: BlockNumberOrTag) -> RpcResult<Bytes> {
+        let _block_num = self.resolve_block_number(block);
+        trace!(
+            "MdbxRpcStorage::get_code({}, {:?})",
+            address,
+            block
+        );
+
+        // First get account to find code hash
+        match self.provider.get_account(address) {
+            Ok(Some(account)) => {
+                // Check if account has code (not KECCAK_EMPTY)
+                let keccak_empty = B256::from(cipherbft_execution::KECCAK_EMPTY);
+                if account.code_hash == keccak_empty || account.code_hash == B256::ZERO {
+                    trace!("Account {} has no code", address);
+                    return Ok(Bytes::new());
+                }
+
+                // Get the actual bytecode
+                match self.provider.get_code(account.code_hash) {
+                    Ok(Some(bytecode)) => {
+                        let bytes = bytecode.bytes_slice().to_vec();
+                        debug!("Found code for {} ({} bytes)", address, bytes.len());
+                        Ok(Bytes::from(bytes))
+                    }
+                    Ok(None) => {
+                        trace!("Code hash {} not found for {}", account.code_hash, address);
+                        Ok(Bytes::new())
+                    }
+                    Err(e) => {
+                        debug!("Error getting code for {}: {}", address, e);
+                        Err(RpcError::Storage(e.to_string()))
+                    }
+                }
+            }
+            Ok(None) => {
+                trace!("Account {} not found", address);
+                Ok(Bytes::new())
+            }
+            Err(e) => {
+                debug!("Error getting account {}: {}", address, e);
+                Err(RpcError::Storage(e.to_string()))
+            }
+        }
+    }
+
+    async fn get_storage_at(
+        &self,
+        address: Address,
+        slot: U256,
+        block: BlockNumberOrTag,
+    ) -> RpcResult<B256> {
+        let _block_num = self.resolve_block_number(block);
+        trace!(
+            "MdbxRpcStorage::get_storage_at({}, {}, {:?})",
+            address,
+            slot,
+            block
+        );
+
+        match self.provider.get_storage(address, slot) {
+            Ok(value) => {
+                let result = B256::from(value.to_be_bytes::<32>());
+                if !value.is_zero() {
+                    debug!("Found storage {}[{}] = {}", address, slot, value);
+                }
+                Ok(result)
+            }
+            Err(e) => {
+                debug!("Error getting storage {}[{}]: {}", address, slot, e);
+                Err(RpcError::Storage(e.to_string()))
+            }
+        }
+    }
+
+    async fn get_transaction_count(
+        &self,
+        address: Address,
+        block: BlockNumberOrTag,
+    ) -> RpcResult<u64> {
+        let _block_num = self.resolve_block_number(block);
+        trace!(
+            "MdbxRpcStorage::get_transaction_count({}, {:?})",
             address,
             block
         );

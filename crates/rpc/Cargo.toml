@@ -11,6 +11,7 @@ description = "CipherBFT JSON-RPC Server - Ethereum-compatible RPC interface"
 cipherbft-types = { path = "../types" }
 cipherbft-execution = { path = "../execution" }
 cipherbft-mempool = { path = "../mempool" }
+cipherbft-storage = { path = "../storage", features = ["mdbx"] }
 
 # Async runtime
 tokio = { workspace = true, features = ["full", "sync"] }
