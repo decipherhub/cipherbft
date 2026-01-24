@@ -21,6 +21,7 @@
 //! ```
 
 mod batch;
+mod blocks;
 mod database;
 mod evm;
 mod provider;
@@ -30,6 +31,7 @@ mod tables;
 mod wal;
 
 pub use batch::MdbxBatchStore;
+pub use blocks::MdbxBlockStore;
 pub use receipts::MdbxReceiptStore;
 pub use database::{Database, DatabaseConfig, DatabaseEnv};
 pub use evm::MdbxEvmStore;
@@ -42,6 +44,9 @@ pub use tables::{
     Attestations,
     Batches,
     BlockNumberKey,
+    // Block table types
+    Blocks,
+    BlocksByHash,
     // Key types
     CarTableKey,
     Cars,
@@ -75,6 +80,8 @@ pub use tables::{
     StoredCarEntry,
     StoredConsensusState,
     StoredCut,
+    // Block value types
+    StoredBlock,
     // Receipt value types
     StoredLog,
     StoredProposal,

@@ -53,6 +53,7 @@
 //! - `mdbx`: Enables the MDBX storage backend using reth-db
 
 pub mod batch;
+pub mod blocks;
 pub mod dcl;
 pub mod error;
 pub mod evm;
@@ -68,6 +69,7 @@ pub mod wal;
 pub mod mdbx;
 
 pub use batch::{BatchStore, BatchStoreResult};
+pub use blocks::{Block, BlockStore, BlockStoreResult};
 pub use dcl::DclStore;
 pub use error::StorageError;
 pub use evm::{EvmAccount, EvmBytecode, EvmStore, EvmStoreResult};
@@ -80,6 +82,6 @@ pub use wal::{Wal, WalEntry};
 // Re-export MDBX types when feature is enabled
 #[cfg(feature = "mdbx")]
 pub use mdbx::{
-    Database, DatabaseConfig, MdbxBatchStore, MdbxDclStore, MdbxEvmStore, MdbxReceiptStore,
-    MdbxStakingStore, MdbxWal,
+    Database, DatabaseConfig, MdbxBatchStore, MdbxBlockStore, MdbxDclStore, MdbxEvmStore,
+    MdbxReceiptStore, MdbxStakingStore, MdbxWal,
 };
