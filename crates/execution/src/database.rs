@@ -202,6 +202,56 @@ impl Provider for InMemoryProvider {
     }
 }
 
+/// Blanket implementation of Provider for Arc<P> where P: Provider.
+///
+/// This allows sharing a provider across multiple components (like RPC handlers)
+/// while still being able to use it with CipherBftDatabase.
+impl<P: Provider> Provider for Arc<P> {
+    fn get_account(&self, address: Address) -> Result<Option<Account>> {
+        (**self).get_account(address)
+    }
+
+    fn get_code(&self, code_hash: B256) -> Result<Option<Bytecode>> {
+        (**self).get_code(code_hash)
+    }
+
+    fn get_storage(&self, address: Address, slot: U256) -> Result<U256> {
+        (**self).get_storage(address, slot)
+    }
+
+    fn get_block_hash(&self, number: u64) -> Result<Option<B256>> {
+        (**self).get_block_hash(number)
+    }
+
+    fn set_account(&self, address: Address, account: Account) -> Result<()> {
+        (**self).set_account(address, account)
+    }
+
+    fn set_code(&self, code_hash: B256, bytecode: Bytecode) -> Result<()> {
+        (**self).set_code(code_hash, bytecode)
+    }
+
+    fn set_storage(&self, address: Address, slot: U256, value: U256) -> Result<()> {
+        (**self).set_storage(address, slot, value)
+    }
+
+    fn set_block_hash(&self, number: u64, hash: B256) -> Result<()> {
+        (**self).set_block_hash(number, hash)
+    }
+
+    fn get_accounts_batch(&self, addresses: &[Address]) -> Result<Vec<Option<Account>>> {
+        (**self).get_accounts_batch(addresses)
+    }
+
+    fn get_all_accounts(&self) -> Result<BTreeMap<Address, Account>> {
+        (**self).get_all_accounts()
+    }
+
+    fn get_all_storage(&self, address: Address) -> Result<BTreeMap<U256, U256>> {
+        (**self).get_all_storage(address)
+    }
+}
+
 /// CipherBFT database implementation that implements revm's Database trait.
 ///
 /// This database provides a caching layer on top of the underlying provider,
