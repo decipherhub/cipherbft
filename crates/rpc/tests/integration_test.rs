@@ -138,7 +138,9 @@ fn test_subscription_lifecycle() {
 
     // Create various subscription types
     let id1 = manager.subscribe(SubscriptionKind::NewHeads);
-    let id2 = manager.subscribe(SubscriptionKind::NewPendingTransactions);
+    let id2 = manager.subscribe(SubscriptionKind::NewPendingTransactions {
+        full_transactions: false,
+    });
     assert_eq!(manager.subscription_count(), 2);
 
     // Subscriptions have unique IDs

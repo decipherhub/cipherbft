@@ -12,7 +12,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, trace, warn};
 
 use alloy_primitives::B256;
-use alloy_rpc_types_eth::{Block, Filter, Log};
+use alloy_rpc_types_eth::{Block, Filter, Log, Transaction};
 
 use crate::error::RpcError;
 
@@ -62,8 +62,13 @@ pub enum SubscriptionKind {
     /// Subscribe to logs matching a filter.
     /// Boxed to reduce enum size (Filter is ~400 bytes).
     Logs(Box<Filter>),
-    /// Subscribe to new pending transaction hashes.
-    NewPendingTransactions,
+    /// Subscribe to new pending transactions.
+    /// If `full_transactions` is true, returns full transaction objects.
+    /// Otherwise, returns only transaction hashes.
+    NewPendingTransactions {
+        /// Whether to return full transaction objects or just hashes.
+        full_transactions: bool,
+    },
 }
 
 /// Active subscription information.
@@ -84,6 +89,8 @@ pub enum SubscriptionEvent {
     Log(Box<Log>),
     /// New pending transaction hash.
     PendingTransaction(B256),
+    /// New pending transaction (full details).
+    PendingTransactionFull(Box<Transaction>),
 }
 
 /// Manages WebSocket subscriptions and broadcasts events.
@@ -96,8 +103,10 @@ pub struct SubscriptionManager {
     block_tx: broadcast::Sender<Box<Block>>,
     /// Broadcast channel for logs.
     log_tx: broadcast::Sender<Box<Log>>,
-    /// Broadcast channel for pending transactions.
+    /// Broadcast channel for pending transaction hashes.
     pending_tx_tx: broadcast::Sender<B256>,
+    /// Broadcast channel for full pending transactions.
+    pending_tx_full_tx: broadcast::Sender<Box<Transaction>>,
 }
 
 impl SubscriptionManager {
@@ -111,6 +120,7 @@ impl SubscriptionManager {
         let (block_tx, _) = broadcast::channel(capacity);
         let (log_tx, _) = broadcast::channel(capacity);
         let (pending_tx_tx, _) = broadcast::channel(capacity);
+        let (pending_tx_full_tx, _) = broadcast::channel(capacity);
 
         Self {
             subscriptions: DashMap::new(),
@@ -118,6 +128,7 @@ impl SubscriptionManager {
             block_tx,
             log_tx,
             pending_tx_tx,
+            pending_tx_full_tx,
         }
     }
 
@@ -157,6 +168,11 @@ impl SubscriptionManager {
         let _ = self.pending_tx_tx.send(tx_hash);
     }
 
+    /// Broadcast a full pending transaction.
+    pub fn broadcast_pending_transaction_full(&self, tx: Transaction) {
+        let _ = self.pending_tx_full_tx.send(Box::new(tx));
+    }
+
     /// Subscribe to new block headers channel.
     pub fn subscribe_blocks(&self) -> broadcast::Receiver<Box<Block>> {
         self.block_tx.subscribe()
@@ -167,9 +183,14 @@ impl SubscriptionManager {
         self.log_tx.subscribe()
     }
 
-    /// Subscribe to pending transactions channel.
+    /// Subscribe to pending transactions hash channel.
     pub fn subscribe_pending_txs(&self) -> broadcast::Receiver<B256> {
         self.pending_tx_tx.subscribe()
+    }
+
+    /// Subscribe to full pending transactions channel.
+    pub fn subscribe_pending_txs_full(&self) -> broadcast::Receiver<Box<Transaction>> {
+        self.pending_tx_full_tx.subscribe()
     }
 }
 
@@ -209,7 +230,13 @@ impl EthPubSubRpcServer for EthPubSubApi {
                 let f = filter.unwrap_or_default();
                 SubscriptionKind::Logs(Box::new(f))
             }
-            "newPendingTransactions" => SubscriptionKind::NewPendingTransactions,
+            "newPendingTransactions" => {
+                // Default to hash-only mode. Full transaction mode requires
+                // a different parameter type (not Filter).
+                SubscriptionKind::NewPendingTransactions {
+                    full_transactions: false,
+                }
+            }
             _ => {
                 let err: ErrorObjectOwned = RpcError::InvalidParams(format!(
                     "Unknown subscription type: {}. Supported: newHeads, logs, newPendingTransactions",
@@ -303,40 +330,78 @@ impl EthPubSubRpcServer for EthPubSubApi {
                     }
                 });
             }
-            SubscriptionKind::NewPendingTransactions => {
-                let mut rx = self.manager.subscribe_pending_txs();
-                let manager = Arc::clone(&self.manager);
-                tokio::spawn(async move {
-                    loop {
-                        tokio::select! {
-                            _ = sink.closed() => {
-                                trace!("PendingTxs subscription {} closed by client", sub_id);
-                                manager.unsubscribe(sub_id);
-                                break;
-                            }
-                            result = rx.recv() => {
-                                match result {
-                                    Ok(tx_hash) => {
-                                        let msg = serde_json::to_value(tx_hash).unwrap_or_default();
-                                        if sink.send(jsonrpsee::SubscriptionMessage::from_json(&msg).unwrap()).await.is_err() {
-                                            trace!("Failed to send to subscription {}, closing", sub_id);
+            SubscriptionKind::NewPendingTransactions { full_transactions } => {
+                if full_transactions {
+                    // Full transaction mode
+                    let mut rx = self.manager.subscribe_pending_txs_full();
+                    let manager = Arc::clone(&self.manager);
+                    tokio::spawn(async move {
+                        loop {
+                            tokio::select! {
+                                _ = sink.closed() => {
+                                    trace!("PendingTxs (full) subscription {} closed by client", sub_id);
+                                    manager.unsubscribe(sub_id);
+                                    break;
+                                }
+                                result = rx.recv() => {
+                                    match result {
+                                        Ok(tx) => {
+                                            let msg = serde_json::to_value(&*tx).unwrap_or_default();
+                                            if sink.send(jsonrpsee::SubscriptionMessage::from_json(&msg).unwrap()).await.is_err() {
+                                                trace!("Failed to send to subscription {}, closing", sub_id);
+                                                manager.unsubscribe(sub_id);
+                                                break;
+                                            }
+                                        }
+                                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                                            warn!("Subscription {} lagged by {} messages", sub_id, n);
+                                        }
+                                        Err(broadcast::error::RecvError::Closed) => {
+                                            trace!("PendingTx (full) broadcast channel closed for subscription {}", sub_id);
                                             manager.unsubscribe(sub_id);
                                             break;
                                         }
                                     }
-                                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                                        warn!("Subscription {} lagged by {} messages", sub_id, n);
-                                    }
-                                    Err(broadcast::error::RecvError::Closed) => {
-                                        trace!("PendingTx broadcast channel closed for subscription {}", sub_id);
-                                        manager.unsubscribe(sub_id);
-                                        break;
+                                }
+                            }
+                        }
+                    });
+                } else {
+                    // Hash-only mode
+                    let mut rx = self.manager.subscribe_pending_txs();
+                    let manager = Arc::clone(&self.manager);
+                    tokio::spawn(async move {
+                        loop {
+                            tokio::select! {
+                                _ = sink.closed() => {
+                                    trace!("PendingTxs subscription {} closed by client", sub_id);
+                                    manager.unsubscribe(sub_id);
+                                    break;
+                                }
+                                result = rx.recv() => {
+                                    match result {
+                                        Ok(tx_hash) => {
+                                            let msg = serde_json::to_value(tx_hash).unwrap_or_default();
+                                            if sink.send(jsonrpsee::SubscriptionMessage::from_json(&msg).unwrap()).await.is_err() {
+                                                trace!("Failed to send to subscription {}, closing", sub_id);
+                                                manager.unsubscribe(sub_id);
+                                                break;
+                                            }
+                                        }
+                                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                                            warn!("Subscription {} lagged by {} messages", sub_id, n);
+                                        }
+                                        Err(broadcast::error::RecvError::Closed) => {
+                                            trace!("PendingTx broadcast channel closed for subscription {}", sub_id);
+                                            manager.unsubscribe(sub_id);
+                                            break;
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                });
+                    });
+                }
             }
         }
 

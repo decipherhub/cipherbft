@@ -11,11 +11,28 @@ fn test_subscription_kind_new_heads() {
     assert!(matches!(kind, SubscriptionKind::NewHeads));
 }
 
-/// Test subscription kind for pending transactions.
+/// Test subscription kind for pending transactions (hash-only mode).
 #[test]
 fn test_subscription_kind_pending_transactions() {
-    let kind = SubscriptionKind::NewPendingTransactions;
-    assert!(matches!(kind, SubscriptionKind::NewPendingTransactions));
+    let kind = SubscriptionKind::NewPendingTransactions {
+        full_transactions: false,
+    };
+    assert!(matches!(
+        kind,
+        SubscriptionKind::NewPendingTransactions { full_transactions: false }
+    ));
+}
+
+/// Test subscription kind for pending transactions (full mode).
+#[test]
+fn test_subscription_kind_pending_transactions_full() {
+    let kind = SubscriptionKind::NewPendingTransactions {
+        full_transactions: true,
+    };
+    assert!(matches!(
+        kind,
+        SubscriptionKind::NewPendingTransactions { full_transactions: true }
+    ));
 }
 
 /// Test subscription manager creation.
@@ -48,7 +65,9 @@ fn test_subscription_create() {
     let id1 = manager.subscribe(SubscriptionKind::NewHeads);
     assert_eq!(manager.subscription_count(), 1);
 
-    let id2 = manager.subscribe(SubscriptionKind::NewPendingTransactions);
+    let id2 = manager.subscribe(SubscriptionKind::NewPendingTransactions {
+        full_transactions: false,
+    });
     assert_eq!(manager.subscription_count(), 2);
 
     // IDs should be unique
