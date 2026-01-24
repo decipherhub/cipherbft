@@ -41,6 +41,10 @@ pub enum RpcError {
     /// Transaction validation error.
     #[error("Transaction error: {0}")]
     Transaction(String),
+
+    /// Resource limit exceeded (e.g., max filters).
+    #[error("Resource limit: {0}")]
+    ResourceLimit(String),
 }
 
 /// RPC result type alias.
@@ -61,6 +65,7 @@ impl From<RpcError> for ErrorObjectOwned {
             RpcError::Storage(msg) => (-32603, format!("Storage error: {}", msg)),
             RpcError::Execution(msg) => (-32603, format!("Execution error: {}", msg)),
             RpcError::Transaction(msg) => (-32603, format!("Transaction error: {}", msg)),
+            RpcError::ResourceLimit(msg) => (-32005, format!("Resource limit: {}", msg)),
         };
 
         ErrorObjectOwned::owned(code, message, None::<()>)

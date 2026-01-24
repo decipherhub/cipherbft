@@ -83,6 +83,14 @@ pub trait RpcStorage: Send + Sync {
     /// Get a transaction receipt by transaction hash.
     async fn get_transaction_receipt(&self, hash: B256) -> RpcResult<Option<TransactionReceipt>>;
 
+    /// Get all transaction receipts for a block.
+    ///
+    /// Returns `None` if the block doesn't exist, or an empty `Vec` if the block has no transactions.
+    async fn get_block_receipts(
+        &self,
+        block: BlockNumberOrTag,
+    ) -> RpcResult<Option<Vec<TransactionReceipt>>>;
+
     /// Get logs matching the given filter.
     async fn get_logs(&self, filter: Filter) -> RpcResult<Vec<Log>>;
 

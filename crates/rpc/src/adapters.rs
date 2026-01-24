@@ -25,8 +25,8 @@ use async_trait::async_trait;
 use cipherbft_execution::database::Provider;
 use cipherbft_mempool::pool::RecoveredTx;
 use cipherbft_mempool::CipherBftPool;
-use cipherbft_storage::mdbx::{MdbxBlockStore, MdbxReceiptStore};
-use cipherbft_storage::{BlockStore, ReceiptStore};
+use cipherbft_storage::mdbx::{MdbxBlockStore, MdbxLogStore, MdbxReceiptStore};
+use cipherbft_storage::{BlockStore, LogFilter as StorageLogFilter, LogStore, ReceiptStore, StoredLog};
 use parking_lot::RwLock;
 use reth_primitives::TransactionSigned;
 use reth_transaction_pool::{PoolTransaction, TransactionOrigin, TransactionPool};
@@ -157,6 +157,16 @@ impl<P: Provider + 'static> RpcStorage for ProviderBasedRpcStorage<P> {
 
     async fn get_transaction_receipt(&self, hash: B256) -> RpcResult<Option<TransactionReceipt>> {
         trace!("ProviderBasedRpcStorage::get_transaction_receipt({})", hash);
+        // Receipt storage not yet implemented - return None
+        // TODO: Implement when receipt storage is added
+        Ok(None)
+    }
+
+    async fn get_block_receipts(
+        &self,
+        block: BlockNumberOrTag,
+    ) -> RpcResult<Option<Vec<TransactionReceipt>>> {
+        trace!("ProviderBasedRpcStorage::get_block_receipts({:?})", block);
         // Receipt storage not yet implemented - return None
         // TODO: Implement when receipt storage is added
         Ok(None)
@@ -346,10 +356,14 @@ pub struct MdbxRpcStorage<P: Provider> {
     block_store: Arc<MdbxBlockStore>,
     /// Receipt storage.
     receipt_store: Arc<MdbxReceiptStore>,
+    /// Log storage for eth_getLogs queries.
+    log_store: Option<Arc<MdbxLogStore>>,
     /// Chain ID.
     chain_id: u64,
     /// Latest block number (updated by consensus).
     latest_block: AtomicU64,
+    /// Sync status tracking.
+    sync_state: RwLock<SyncStateTracker>,
 }
 
 impl<P: Provider> MdbxRpcStorage<P> {
@@ -371,8 +385,37 @@ impl<P: Provider> MdbxRpcStorage<P> {
             provider,
             block_store,
             receipt_store,
+            log_store: None,
             chain_id,
             latest_block: AtomicU64::new(0),
+            sync_state: RwLock::new(SyncStateTracker::default()),
+        }
+    }
+
+    /// Create new MDBX-backed RPC storage with log store.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider` - Provider for state queries
+    /// * `block_store` - MDBX-backed block store
+    /// * `receipt_store` - MDBX-backed receipt store
+    /// * `log_store` - MDBX-backed log store for eth_getLogs
+    /// * `chain_id` - Chain ID for this network
+    pub fn with_log_store(
+        provider: Arc<P>,
+        block_store: Arc<MdbxBlockStore>,
+        receipt_store: Arc<MdbxReceiptStore>,
+        log_store: Arc<MdbxLogStore>,
+        chain_id: u64,
+    ) -> Self {
+        Self {
+            provider,
+            block_store,
+            receipt_store,
+            log_store: Some(log_store),
+            chain_id,
+            latest_block: AtomicU64::new(0),
+            sync_state: RwLock::new(SyncStateTracker::default()),
         }
     }
 
@@ -398,6 +441,11 @@ impl<P: Provider> MdbxRpcStorage<P> {
         &self.receipt_store
     }
 
+    /// Get reference to log store (if configured).
+    pub fn log_store(&self) -> Option<&Arc<MdbxLogStore>> {
+        self.log_store.as_ref()
+    }
+
     /// Get reference to provider.
     pub fn provider(&self) -> &Arc<P> {
         &self.provider
@@ -406,6 +454,31 @@ impl<P: Provider> MdbxRpcStorage<P> {
     /// Get chain ID.
     pub fn chain_id(&self) -> u64 {
         self.chain_id
+    }
+
+    /// Update sync status (called by sync service).
+    ///
+    /// This should be called by the sync service to indicate progress.
+    ///
+    /// # Arguments
+    ///
+    /// * `starting` - Block number when sync started
+    /// * `current` - Current block during sync
+    /// * `highest` - Highest known block
+    pub fn set_syncing(&self, starting: u64, current: u64, highest: u64) {
+        let mut state = self.sync_state.write();
+        state.is_syncing = true;
+        state.starting_block = starting;
+        state.current_block = current;
+        state.highest_block = highest;
+    }
+
+    /// Mark sync as complete.
+    ///
+    /// This should be called when the node has finished syncing.
+    pub fn set_synced(&self) {
+        let mut state = self.sync_state.write();
+        state.is_syncing = false;
     }
 
     /// Resolve block number from tag.
@@ -569,6 +642,71 @@ impl<P: Provider> MdbxRpcStorage<P> {
             contract_address: storage_receipt.contract_address.map(Address::from),
         }
     }
+
+    /// Convert RPC Filter to storage LogFilter.
+    fn rpc_filter_to_storage_filter(filter: &Filter) -> StorageLogFilter {
+        // Extract block range
+        let (from_block, to_block) = filter.extract_block_range();
+        let block_hash = filter.get_block_hash().map(|h| h.0);
+
+        // Convert addresses: FilterSet<Address> -> Vec<[u8; 20]>
+        let addresses: Vec<[u8; 20]> = filter
+            .address
+            .iter()
+            .map(|addr| addr.0 .0)
+            .collect();
+
+        // Convert topics: [Topic; 4] -> Vec<Option<Vec<[u8; 32]>>>
+        // Topic is FilterSet<B256>, and each position can match any of the topics in the set
+        let topics: Vec<Option<Vec<[u8; 32]>>> = filter
+            .topics
+            .iter()
+            .map(|topic_set| {
+                if topic_set.is_empty() {
+                    None // Match any topic at this position
+                } else {
+                    Some(topic_set.iter().map(|t| t.0).collect())
+                }
+            })
+            .collect();
+
+        StorageLogFilter {
+            from_block,
+            to_block,
+            block_hash,
+            addresses,
+            topics,
+        }
+    }
+
+    /// Convert storage StoredLog to RPC Log.
+    fn stored_log_to_rpc_log(stored: StoredLog) -> Log {
+        use alloy_primitives::LogData;
+
+        // Convert topics from [u8; 32] to B256
+        let topics: Vec<B256> = stored.topics.iter().map(|t| B256::from(*t)).collect();
+
+        // Create the inner log data
+        let log_data = LogData::new_unchecked(topics, Bytes::from(stored.data));
+
+        // Create the primitive log
+        let inner = alloy_primitives::Log {
+            address: Address::from(stored.address),
+            data: log_data,
+        };
+
+        // Build the full RPC log with metadata
+        Log {
+            inner,
+            block_hash: Some(B256::from(stored.block_hash)),
+            block_number: Some(stored.block_number),
+            block_timestamp: None, // Not stored in current StoredLog
+            transaction_hash: Some(B256::from(stored.transaction_hash)),
+            transaction_index: Some(stored.transaction_index as u64),
+            log_index: Some(stored.log_index as u64),
+            removed: stored.removed,
+        }
+    }
 }
 
 #[async_trait]
@@ -667,11 +805,88 @@ impl<P: Provider + 'static> RpcStorage for MdbxRpcStorage<P> {
         }
     }
 
+    async fn get_block_receipts(
+        &self,
+        block: BlockNumberOrTag,
+    ) -> RpcResult<Option<Vec<TransactionReceipt>>> {
+        let block_number = self.resolve_block_number(block);
+        trace!(
+            "MdbxRpcStorage::get_block_receipts({:?} -> {})",
+            block,
+            block_number
+        );
+
+        // First check if the block exists
+        match self.block_store.get_block_by_number(block_number).await {
+            Ok(Some(_)) => {
+                // Block exists, get all receipts
+                match self.receipt_store.get_receipts_by_block(block_number).await {
+                    Ok(storage_receipts) => {
+                        debug!(
+                            "Found {} receipts for block {}",
+                            storage_receipts.len(),
+                            block_number
+                        );
+                        let rpc_receipts: Vec<TransactionReceipt> = storage_receipts
+                            .into_iter()
+                            .map(|r| self.storage_receipt_to_rpc(r))
+                            .collect();
+                        Ok(Some(rpc_receipts))
+                    }
+                    Err(e) => {
+                        warn!("Error getting receipts for block {}: {}", block_number, e);
+                        Err(RpcError::Storage(e.to_string()))
+                    }
+                }
+            }
+            Ok(None) => {
+                trace!("Block {} not found", block_number);
+                Ok(None)
+            }
+            Err(e) => {
+                warn!("Error checking block {}: {}", block_number, e);
+                Err(RpcError::Storage(e.to_string()))
+            }
+        }
+    }
+
     async fn get_logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
         trace!("MdbxRpcStorage::get_logs({:?})", filter);
-        // Log indexing not yet implemented - return empty
-        // TODO: Implement when log indexing is added
-        Ok(Vec::new())
+
+        // If no log store is configured, return empty
+        let log_store = match &self.log_store {
+            Some(store) => store,
+            None => {
+                debug!("MdbxRpcStorage::get_logs - no log store configured, returning empty");
+                return Ok(Vec::new());
+            }
+        };
+
+        // Convert RPC filter to storage filter
+        let storage_filter = Self::rpc_filter_to_storage_filter(&filter);
+
+        // Maximum results to prevent DoS (configurable in RpcConfig)
+        const MAX_LOG_RESULTS: usize = 10_000;
+
+        // Query logs from storage
+        match log_store.get_logs(&storage_filter, MAX_LOG_RESULTS).await {
+            Ok(stored_logs) => {
+                debug!(
+                    "MdbxRpcStorage::get_logs found {} logs",
+                    stored_logs.len()
+                );
+                // Convert stored logs to RPC logs
+                let rpc_logs: Vec<Log> = stored_logs
+                    .into_iter()
+                    .map(Self::stored_log_to_rpc_log)
+                    .collect();
+                Ok(rpc_logs)
+            }
+            Err(e) => {
+                warn!("MdbxRpcStorage::get_logs error: {}", e);
+                Err(RpcError::Storage(e.to_string()))
+            }
+        }
     }
 
     async fn latest_block_number(&self) -> RpcResult<u64> {
@@ -681,9 +896,16 @@ impl<P: Provider + 'static> RpcStorage for MdbxRpcStorage<P> {
 
     async fn sync_status(&self) -> RpcResult<SyncStatus> {
         trace!("MdbxRpcStorage::sync_status");
-        // For now, always return not syncing
-        // TODO: Add sync status tracking similar to ProviderBasedRpcStorage
-        Ok(SyncStatus::NotSyncing)
+        let state = self.sync_state.read();
+        if state.is_syncing {
+            Ok(SyncStatus::Syncing {
+                starting_block: state.starting_block,
+                current_block: state.current_block,
+                highest_block: state.highest_block,
+            })
+        } else {
+            Ok(SyncStatus::NotSyncing)
+        }
     }
 
     async fn get_balance(&self, address: Address, block: BlockNumberOrTag) -> RpcResult<U256> {
@@ -889,6 +1111,14 @@ impl RpcStorage for StubRpcStorage {
         Ok(None)
     }
 
+    async fn get_block_receipts(
+        &self,
+        block: BlockNumberOrTag,
+    ) -> RpcResult<Option<Vec<TransactionReceipt>>> {
+        trace!("StubRpcStorage::get_block_receipts({:?})", block);
+        Ok(None)
+    }
+
     async fn get_logs(&self, filter: Filter) -> RpcResult<Vec<Log>> {
         trace!("StubRpcStorage::get_logs({:?})", filter);
         Ok(Vec::new())
@@ -1016,7 +1246,7 @@ fn signed_tx_to_rpc_tx(signed_tx: &TransactionSigned, sender: Address) -> Transa
             let legacy = alloy_consensus::TxLegacy {
                 chain_id: signed_tx.chain_id(),
                 nonce: signed_tx.nonce(),
-                gas_price: signed_tx.max_fee_per_gas() as u128,
+                gas_price: signed_tx.max_fee_per_gas(),
                 gas_limit: signed_tx.gas_limit(),
                 to: signed_tx.to().into(),
                 value: signed_tx.value(),
@@ -1031,12 +1261,12 @@ fn signed_tx_to_rpc_tx(signed_tx: &TransactionSigned, sender: Address) -> Transa
             let eip2930 = alloy_consensus::TxEip2930 {
                 chain_id: signed_tx.chain_id().unwrap_or(1),
                 nonce: signed_tx.nonce(),
-                gas_price: signed_tx.max_fee_per_gas() as u128,
+                gas_price: signed_tx.max_fee_per_gas(),
                 gas_limit: signed_tx.gas_limit(),
                 to: signed_tx.to().into(),
                 value: signed_tx.value(),
                 input: signed_tx.input().clone(),
-                access_list: Default::default(), // TODO: extract from tx
+                access_list: signed_tx.access_list().cloned().unwrap_or_default(),
             };
             alloy_consensus::TxEnvelope::Eip2930(alloy_consensus::Signed::new_unchecked(
                 eip2930, signature, hash,
@@ -1047,13 +1277,13 @@ fn signed_tx_to_rpc_tx(signed_tx: &TransactionSigned, sender: Address) -> Transa
             let eip1559 = alloy_consensus::TxEip1559 {
                 chain_id: signed_tx.chain_id().unwrap_or(1),
                 nonce: signed_tx.nonce(),
-                max_fee_per_gas: signed_tx.max_fee_per_gas() as u128,
-                max_priority_fee_per_gas: signed_tx.max_priority_fee_per_gas().unwrap_or(0) as u128,
+                max_fee_per_gas: signed_tx.max_fee_per_gas(),
+                max_priority_fee_per_gas: signed_tx.max_priority_fee_per_gas().unwrap_or(0),
                 gas_limit: signed_tx.gas_limit(),
                 to: signed_tx.to().into(),
                 value: signed_tx.value(),
                 input: signed_tx.input().clone(),
-                access_list: Default::default(), // TODO: extract from tx
+                access_list: signed_tx.access_list().cloned().unwrap_or_default(),
             };
             alloy_consensus::TxEnvelope::Eip1559(alloy_consensus::Signed::new_unchecked(
                 eip1559, signature, hash,
@@ -1064,7 +1294,7 @@ fn signed_tx_to_rpc_tx(signed_tx: &TransactionSigned, sender: Address) -> Transa
             let legacy = alloy_consensus::TxLegacy {
                 chain_id: signed_tx.chain_id(),
                 nonce: signed_tx.nonce(),
-                gas_price: signed_tx.max_fee_per_gas() as u128,
+                gas_price: signed_tx.max_fee_per_gas(),
                 gas_limit: signed_tx.gas_limit(),
                 to: signed_tx.to().into(),
                 value: signed_tx.value(),
@@ -1782,5 +2012,146 @@ mod tests {
 
         network.set_listening(false);
         assert!(!network.is_listening().await.unwrap());
+    }
+
+    // ===== Log conversion helper tests =====
+
+    #[test]
+    fn test_rpc_filter_to_storage_filter_default() {
+        use cipherbft_execution::database::InMemoryProvider;
+
+        let filter = Filter::default();
+        let storage_filter = MdbxRpcStorage::<InMemoryProvider>::rpc_filter_to_storage_filter(&filter);
+
+        assert!(storage_filter.from_block.is_none());
+        assert!(storage_filter.to_block.is_none());
+        assert!(storage_filter.block_hash.is_none());
+        assert!(storage_filter.addresses.is_empty());
+        // All topics should be None (match any)
+        for topic in &storage_filter.topics {
+            assert!(topic.is_none());
+        }
+    }
+
+    #[test]
+    fn test_rpc_filter_to_storage_filter_with_block_range() {
+        use cipherbft_execution::database::InMemoryProvider;
+
+        let filter = Filter::new()
+            .from_block(100u64)
+            .to_block(200u64);
+        let storage_filter = MdbxRpcStorage::<InMemoryProvider>::rpc_filter_to_storage_filter(&filter);
+
+        assert_eq!(storage_filter.from_block, Some(100));
+        assert_eq!(storage_filter.to_block, Some(200));
+        assert!(storage_filter.block_hash.is_none());
+    }
+
+    #[test]
+    fn test_rpc_filter_to_storage_filter_with_addresses() {
+        use cipherbft_execution::database::InMemoryProvider;
+
+        let addr1 = Address::repeat_byte(0x11);
+        let addr2 = Address::repeat_byte(0x22);
+
+        let filter = Filter::new().address(vec![addr1, addr2]);
+        let storage_filter = MdbxRpcStorage::<InMemoryProvider>::rpc_filter_to_storage_filter(&filter);
+
+        assert_eq!(storage_filter.addresses.len(), 2);
+        assert!(storage_filter.addresses.contains(&addr1.0 .0));
+        assert!(storage_filter.addresses.contains(&addr2.0 .0));
+    }
+
+    #[test]
+    fn test_rpc_filter_to_storage_filter_with_topics() {
+        use cipherbft_execution::database::InMemoryProvider;
+
+        let topic0 = B256::repeat_byte(0xAA);
+        let topic1 = B256::repeat_byte(0xBB);
+
+        let filter = Filter::new()
+            .event_signature(topic0)  // topic0
+            .topic1(topic1);           // topic1
+
+        let storage_filter = MdbxRpcStorage::<InMemoryProvider>::rpc_filter_to_storage_filter(&filter);
+
+        // Should have 4 topic positions
+        assert_eq!(storage_filter.topics.len(), 4);
+
+        // topic0 should match the event signature
+        assert!(storage_filter.topics[0].is_some());
+        let t0 = storage_filter.topics[0].as_ref().unwrap();
+        assert!(t0.contains(&topic0.0));
+
+        // topic1 should match
+        assert!(storage_filter.topics[1].is_some());
+        let t1 = storage_filter.topics[1].as_ref().unwrap();
+        assert!(t1.contains(&topic1.0));
+
+        // topic2 and topic3 should be None (match any)
+        assert!(storage_filter.topics[2].is_none());
+        assert!(storage_filter.topics[3].is_none());
+    }
+
+    #[test]
+    fn test_stored_log_to_rpc_log() {
+        use cipherbft_execution::database::InMemoryProvider;
+
+        let stored = StoredLog {
+            address: [0x11; 20],
+            topics: vec![[0xAA; 32], [0xBB; 32]],
+            data: vec![1, 2, 3, 4],
+            block_number: 12345,
+            block_hash: [0x01; 32],
+            transaction_hash: [0x02; 32],
+            transaction_index: 5,
+            log_index: 10,
+            removed: false,
+        };
+
+        let rpc_log = MdbxRpcStorage::<InMemoryProvider>::stored_log_to_rpc_log(stored);
+
+        // Check address
+        assert_eq!(rpc_log.address(), Address::from([0x11; 20]));
+
+        // Check topics
+        let topics = rpc_log.topics();
+        assert_eq!(topics.len(), 2);
+        assert_eq!(topics[0], B256::from([0xAA; 32]));
+        assert_eq!(topics[1], B256::from([0xBB; 32]));
+
+        // Check data
+        assert_eq!(rpc_log.data().data.as_ref(), &[1u8, 2, 3, 4]);
+
+        // Check metadata
+        assert_eq!(rpc_log.block_number, Some(12345));
+        assert_eq!(rpc_log.block_hash, Some(B256::from([0x01; 32])));
+        assert_eq!(rpc_log.transaction_hash, Some(B256::from([0x02; 32])));
+        assert_eq!(rpc_log.transaction_index, Some(5));
+        assert_eq!(rpc_log.log_index, Some(10));
+        assert!(!rpc_log.removed);
+    }
+
+    #[test]
+    fn test_stored_log_to_rpc_log_removed() {
+        use cipherbft_execution::database::InMemoryProvider;
+
+        let stored = StoredLog {
+            address: [0x00; 20],
+            topics: vec![],
+            data: vec![],
+            block_number: 1,
+            block_hash: [0x00; 32],
+            transaction_hash: [0x00; 32],
+            transaction_index: 0,
+            log_index: 0,
+            removed: true, // Removed due to reorg
+        };
+
+        let rpc_log = MdbxRpcStorage::<InMemoryProvider>::stored_log_to_rpc_log(stored);
+
+        assert!(rpc_log.removed);
+        assert!(rpc_log.topics().is_empty());
+        assert!(rpc_log.data().data.is_empty());
     }
 }

@@ -54,29 +54,64 @@
 //!
 //! ## eth_* namespace
 //!
+//! ### Chain & Sync
 //! - `eth_chainId` - Returns the chain ID
 //! - `eth_blockNumber` - Returns the latest block number
 //! - `eth_syncing` - Returns sync status
+//!
+//! ### Block Queries
 //! - `eth_getBlockByHash` - Get block by hash
 //! - `eth_getBlockByNumber` - Get block by number
+//! - `eth_getBlockTransactionCountByHash` - Get transaction count in block by hash
+//! - `eth_getBlockTransactionCountByNumber` - Get transaction count in block by number
+//!
+//! ### Transaction Queries
+//! - `eth_getTransactionByHash` - Get transaction by hash
+//! - `eth_getTransactionByBlockHashAndIndex` - Get transaction by block hash and index
+//! - `eth_getTransactionByBlockNumberAndIndex` - Get transaction by block number and index
+//! - `eth_getTransactionReceipt` - Get transaction receipt
+//! - `eth_pendingTransactions` - Get all pending transactions
+//!
+//! ### State Queries
 //! - `eth_getBalance` - Get account balance
 //! - `eth_getCode` - Get contract code
 //! - `eth_getStorageAt` - Get storage slot value
 //! - `eth_getTransactionCount` - Get account nonce
-//! - `eth_getTransactionByHash` - Get transaction by hash
-//! - `eth_getTransactionReceipt` - Get transaction receipt
+//!
+//! ### Transaction Submission
 //! - `eth_sendRawTransaction` - Submit signed transaction
 //! - `eth_call` - Execute read-only contract call
 //! - `eth_estimateGas` - Estimate gas for transaction
-//! - `eth_getLogs` - Query event logs
+//!
+//! ### Fee Estimation
+//! - `eth_gasPrice` - Returns current gas price
+//! - `eth_maxPriorityFeePerGas` - Returns suggested priority fee (EIP-1559)
 //! - `eth_feeHistory` - Get historical gas information
-//! - `eth_pendingTransactions` - Get all pending transactions
+//!
+//! ### Filter API (Polling)
+//! - `eth_newFilter` - Create log filter, returns filter ID
+//! - `eth_newBlockFilter` - Create block filter, returns filter ID
+//! - `eth_newPendingTransactionFilter` - Create pending tx filter
+//! - `eth_getFilterChanges` - Poll for filter updates
+//! - `eth_getFilterLogs` - Get all logs matching filter
+//! - `eth_uninstallFilter` - Remove a filter
+//! - `eth_getLogs` - Query event logs (one-shot, no filter ID)
+//!
+//! ### Node Status
+//! - `eth_accounts` - Returns addresses owned by node (empty for external signing)
+//! - `eth_coinbase` - Returns validator address (zero if not a validator)
+//! - `eth_mining` - Returns mining status (always false for PoS)
+//! - `eth_hashrate` - Returns hashrate (always 0 for PoS)
+//!
+//! ### Uncle Methods (PoS Stubs)
 //! - `eth_getUncleByBlockHashAndIndex` - Get uncle by hash (always null in PoS)
 //! - `eth_getUncleByBlockNumberAndIndex` - Get uncle by number (always null in PoS)
 //! - `eth_getUncleCountByBlockHash` - Get uncle count by hash (always 0 in PoS)
 //! - `eth_getUncleCountByBlockNumber` - Get uncle count by number (always 0 in PoS)
+//!
+//! ### Unsupported Methods
 //! - `eth_getProof` - Get account/storage proof (unsupported, returns error)
-//! - `eth_createAccessList` - Create access list for transaction (unsupported, returns error)
+//! - `eth_createAccessList` - Create access list (unsupported, returns error)
 //!
 //! ## web3_* namespace
 //!
