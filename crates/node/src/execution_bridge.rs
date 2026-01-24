@@ -14,7 +14,7 @@ use cipherbft_types::genesis::Genesis;
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Bridge between consensus and execution layers
 ///
@@ -178,7 +178,7 @@ impl ExecutionBridge {
         &self,
         consensus_cut: cipherbft_data_chain::Cut,
     ) -> anyhow::Result<ExecutionResult> {
-        info!(
+        debug!(
             height = consensus_cut.height,
             cars = consensus_cut.cars.len(),
             "Executing Cut"
@@ -227,7 +227,7 @@ impl ExecutionBridge {
             *guard = new_block_hash;
         }
 
-        info!(
+        debug!(
             height = block_number,
             block_hash = %new_block_hash,
             parent_hash = %parent_hash,

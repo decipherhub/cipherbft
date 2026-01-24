@@ -40,7 +40,7 @@ use async_trait::async_trait;
 use informalsystems_malachitebft_core_types::CommitCertificate;
 use informalsystems_malachitebft_sync::RawDecidedValue;
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 use crate::context::CipherBftContext;
 use crate::error::ConsensusError;
@@ -240,7 +240,7 @@ impl<E: ExecutionCallback, R: ReceiptStore> DecisionHandler for ExecutingDecisio
     ) -> Result<(), ConsensusError> {
         let cut = value.into_cut();
 
-        info!(
+        debug!(
             height = height.0,
             cars = cut.cars.len(),
             "ExecutingDecisionHandler: Processing decided Cut"
@@ -249,7 +249,7 @@ impl<E: ExecutionCallback, R: ReceiptStore> DecisionHandler for ExecutingDecisio
         // Execute the Cut via callback
         match self.execution_callback.execute(height.0, &cut).await {
             Ok((state_root, gas_used)) => {
-                info!(
+                debug!(
                     height = height.0,
                     state_root = %state_root,
                     gas_used = gas_used,

@@ -372,7 +372,7 @@ impl Actor for CipherBftHost {
                 tokio::spawn(async move {
                     match value_builder.build_value(height, round).await {
                         Ok(value) => {
-                            info!(
+                            debug!(
                                 parent: &span,
                                 height = height.0,
                                 "Built proposal value"
