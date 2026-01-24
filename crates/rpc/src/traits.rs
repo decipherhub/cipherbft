@@ -121,6 +121,12 @@ pub trait MempoolApi: Send + Sync {
 
     /// Get pending transaction hashes from the mempool.
     async fn get_pending_transactions(&self) -> RpcResult<Vec<B256>>;
+
+    /// Get a transaction by its hash from the mempool.
+    ///
+    /// Returns the transaction if it exists in the pending or queued pool.
+    /// This is used as a fallback when a transaction is not found in storage.
+    async fn get_transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction>>;
 }
 
 /// Execution interface for eth_call and gas estimation.

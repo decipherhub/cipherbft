@@ -76,6 +76,7 @@ reth-libmdbx = { git = "https://github.com/paradigmxyz/reth", tag = "v1.10.0", f
 
 # JSON-RPC (T048 - Reth RPC Implementation)
 reth-primitives = { git = "https://github.com/paradigmxyz/reth", tag = "v1.10.0" }
+reth-primitives-traits = { git = "https://github.com/paradigmxyz/reth", tag = "v1.10.0" }
 jsonrpsee = { version = "0.24", features = ["server", "client", "macros"] }
 tower = { version = "0.5", features = ["full"] }
 tower-http = { version = "0.6", features = ["full"] }

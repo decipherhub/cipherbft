@@ -396,7 +396,19 @@ where
 
     async fn get_transaction_by_hash(&self, hash: B256) -> JsonRpcResult<Option<Transaction>> {
         trace!("eth_getTransactionByHash: hash={}", hash);
-        self.storage
+
+        // First, try to find the transaction in storage (finalized/on-chain)
+        match self.storage.get_transaction_by_hash(hash).await {
+            Ok(Some(tx)) => return Ok(Some(tx)),
+            Ok(None) => {
+                // Transaction not in storage, check mempool for pending transactions
+                trace!("Transaction {} not in storage, checking mempool", hash);
+            }
+            Err(e) => return Err(Self::to_json_rpc_error(e)),
+        }
+
+        // Fallback: check the mempool for pending transactions
+        self.mempool
             .get_transaction_by_hash(hash)
             .await
             .map_err(Self::to_json_rpc_error)

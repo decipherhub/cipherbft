@@ -970,6 +970,105 @@ impl MempoolApi for StubMempoolApi {
         trace!("StubMempoolApi::get_pending_transactions");
         Ok(Vec::new())
     }
+
+    async fn get_transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction>> {
+        trace!("StubMempoolApi::get_transaction_by_hash({})", hash);
+        // Stub implementation: no transactions in mempool
+        Ok(None)
+    }
+}
+
+/// Convert a signed transaction to an RPC Transaction.
+///
+/// For pending (mempool) transactions, block-related fields are None since
+/// the transaction hasn't been included in a block yet.
+fn signed_tx_to_rpc_tx(signed_tx: &TransactionSigned, sender: Address) -> Transaction {
+    use alloy_consensus::Transaction as ConsensusTx;
+    use reth_primitives_traits::Recovered;
+
+    let hash = *signed_tx.tx_hash();
+    let signature = *signed_tx.signature();
+
+    // Convert reth TransactionSigned to alloy TxEnvelope
+    // We need to match on the transaction type and convert accordingly
+    let tx_envelope: alloy_consensus::TxEnvelope = match signed_tx.tx_type() as u8 {
+        0 => {
+            // Legacy transaction
+            let legacy = alloy_consensus::TxLegacy {
+                chain_id: signed_tx.chain_id(),
+                nonce: signed_tx.nonce(),
+                gas_price: signed_tx.max_fee_per_gas() as u128,
+                gas_limit: signed_tx.gas_limit(),
+                to: signed_tx.to().into(),
+                value: signed_tx.value(),
+                input: signed_tx.input().clone(),
+            };
+            alloy_consensus::TxEnvelope::Legacy(alloy_consensus::Signed::new_unchecked(
+                legacy, signature, hash,
+            ))
+        }
+        1 => {
+            // EIP-2930 transaction
+            let eip2930 = alloy_consensus::TxEip2930 {
+                chain_id: signed_tx.chain_id().unwrap_or(1),
+                nonce: signed_tx.nonce(),
+                gas_price: signed_tx.max_fee_per_gas() as u128,
+                gas_limit: signed_tx.gas_limit(),
+                to: signed_tx.to().into(),
+                value: signed_tx.value(),
+                input: signed_tx.input().clone(),
+                access_list: Default::default(), // TODO: extract from tx
+            };
+            alloy_consensus::TxEnvelope::Eip2930(alloy_consensus::Signed::new_unchecked(
+                eip2930, signature, hash,
+            ))
+        }
+        2 => {
+            // EIP-1559 transaction
+            let eip1559 = alloy_consensus::TxEip1559 {
+                chain_id: signed_tx.chain_id().unwrap_or(1),
+                nonce: signed_tx.nonce(),
+                max_fee_per_gas: signed_tx.max_fee_per_gas() as u128,
+                max_priority_fee_per_gas: signed_tx.max_priority_fee_per_gas().unwrap_or(0) as u128,
+                gas_limit: signed_tx.gas_limit(),
+                to: signed_tx.to().into(),
+                value: signed_tx.value(),
+                input: signed_tx.input().clone(),
+                access_list: Default::default(), // TODO: extract from tx
+            };
+            alloy_consensus::TxEnvelope::Eip1559(alloy_consensus::Signed::new_unchecked(
+                eip1559, signature, hash,
+            ))
+        }
+        _ => {
+            // Default to legacy for unknown types
+            let legacy = alloy_consensus::TxLegacy {
+                chain_id: signed_tx.chain_id(),
+                nonce: signed_tx.nonce(),
+                gas_price: signed_tx.max_fee_per_gas() as u128,
+                gas_limit: signed_tx.gas_limit(),
+                to: signed_tx.to().into(),
+                value: signed_tx.value(),
+                input: signed_tx.input().clone(),
+            };
+            alloy_consensus::TxEnvelope::Legacy(alloy_consensus::Signed::new_unchecked(
+                legacy, signature, hash,
+            ))
+        }
+    };
+
+    // Wrap in Recovered to include sender
+    let recovered = Recovered::new_unchecked(tx_envelope, sender);
+
+    // Build the RPC transaction
+    // For pending transactions, block-related fields are None
+    Transaction {
+        inner: recovered,
+        block_hash: None,
+        block_number: None,
+        transaction_index: None,
+        effective_gas_price: None,
+    }
 }
 
 /// Real mempool adapter backed by CipherBftPool.
@@ -1039,6 +1138,34 @@ where
 
         debug!("Found {} transactions in pool", hashes.len());
         Ok(hashes)
+    }
+
+    async fn get_transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction>> {
+        trace!("PoolMempoolApi::get_transaction_by_hash({})", hash);
+
+        // Search through all transactions in the pool
+        let all_txs = self.pool.pool().all_transactions();
+
+        // Search in both pending and queued pools
+        let maybe_tx = all_txs
+            .pending
+            .iter()
+            .chain(all_txs.queued.iter())
+            .find(|tx| *tx.hash() == hash);
+
+        match maybe_tx {
+            Some(pool_tx) => {
+                // Convert pool transaction to RPC Transaction
+                let signed_tx = pool_tx.transaction.clone_into_consensus().into_inner();
+                let rpc_tx = signed_tx_to_rpc_tx(&signed_tx, pool_tx.sender());
+                debug!("Found transaction {} in mempool", hash);
+                Ok(Some(rpc_tx))
+            }
+            None => {
+                trace!("Transaction {} not found in mempool", hash);
+                Ok(None)
+            }
+        }
     }
 }
 
