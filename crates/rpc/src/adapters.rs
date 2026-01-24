@@ -23,10 +23,14 @@ use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_rpc_types_eth::{Block, Filter, Log, Transaction, TransactionReceipt};
 use async_trait::async_trait;
 use cipherbft_execution::database::Provider;
+use cipherbft_mempool::pool::RecoveredTx;
+use cipherbft_mempool::CipherBftPool;
 use parking_lot::RwLock;
+use reth_primitives::TransactionSigned;
+use reth_transaction_pool::{PoolTransaction, TransactionOrigin, TransactionPool};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 use crate::error::{RpcError, RpcResult};
 use crate::traits::{
@@ -459,6 +463,76 @@ impl MempoolApi for StubMempoolApi {
     async fn get_pending_transactions(&self) -> RpcResult<Vec<B256>> {
         trace!("StubMempoolApi::get_pending_transactions");
         Ok(Vec::new())
+    }
+}
+
+/// Real mempool adapter backed by CipherBftPool.
+///
+/// This adapter implements the MempoolApi trait using an actual transaction pool.
+/// It wraps a `CipherBftPool` and delegates transaction submission and queries
+/// to the underlying pool.
+pub struct PoolMempoolApi<P: TransactionPool> {
+    /// The underlying CipherBFT transaction pool.
+    pool: Arc<CipherBftPool<P>>,
+}
+
+impl<P: TransactionPool> PoolMempoolApi<P> {
+    /// Create a new mempool adapter wrapping a CipherBftPool.
+    pub fn new(pool: Arc<CipherBftPool<P>>) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl<P> MempoolApi for PoolMempoolApi<P>
+where
+    P: TransactionPool + Send + Sync + 'static,
+    P::Transaction: PoolTransaction<Consensus = TransactionSigned> + TryFrom<RecoveredTx>,
+    <P::Transaction as TryFrom<RecoveredTx>>::Error: std::fmt::Display,
+{
+    async fn submit_transaction(&self, tx_bytes: Bytes) -> RpcResult<B256> {
+        debug!(
+            "PoolMempoolApi::submit_transaction({} bytes)",
+            tx_bytes.len()
+        );
+
+        // Decode the transaction to get its hash
+        use alloy_rlp::Decodable;
+        let tx = TransactionSigned::decode(&mut tx_bytes.as_ref()).map_err(|e| {
+            warn!("Failed to decode transaction: {}", e);
+            RpcError::InvalidParams(format!("Invalid transaction encoding: {e}"))
+        })?;
+
+        // Get the transaction hash before submitting
+        let tx_hash = *tx.tx_hash();
+
+        // Submit to the pool
+        self.pool
+            .add_signed_transaction(TransactionOrigin::External, tx)
+            .await
+            .map_err(|e| {
+                warn!("Failed to submit transaction: {}", e);
+                RpcError::Execution(format!("Transaction submission failed: {e}"))
+            })?;
+
+        debug!("Transaction submitted successfully: {}", tx_hash);
+        Ok(tx_hash)
+    }
+
+    async fn get_pending_transactions(&self) -> RpcResult<Vec<B256>> {
+        trace!("PoolMempoolApi::get_pending_transactions");
+
+        // Get all transaction hashes from the pool (pending + queued)
+        let all_txs = self.pool.pool().all_transactions();
+        let hashes: Vec<B256> = all_txs
+            .pending
+            .iter()
+            .chain(all_txs.queued.iter())
+            .map(|tx| *tx.hash())
+            .collect();
+
+        debug!("Found {} transactions in pool", hashes.len());
+        Ok(hashes)
     }
 }
 
