@@ -657,7 +657,9 @@ impl Node {
         let wal_path = self.config.data_dir.join("wal");
         let wal = spawn_wal(&ctx, wal_path, metrics.clone()).await?;
 
-        let host = spawn_host(self.validator_id, ctx.clone(), cut_rx, Some(decided_tx)).await?;
+        // Pass network to host for ProposalAndParts mode (enables non-proposers to receive proposal parts)
+        let host =
+            spawn_host(self.validator_id, ctx.clone(), cut_rx, Some(decided_tx), Some(network.clone())).await?;
 
         // Build and spawn Consensus engine
         let _engine_handles = MalachiteEngineBuilder::new(

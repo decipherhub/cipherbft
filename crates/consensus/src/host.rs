@@ -20,8 +20,10 @@ use async_trait::async_trait;
 use informalsystems_malachitebft_app::streaming::StreamContent;
 use informalsystems_malachitebft_app::types::ProposedValue;
 use informalsystems_malachitebft_core_consensus::LocallyProposedValue;
-use informalsystems_malachitebft_core_types::{CommitCertificate, Validity};
+use informalsystems_malachitebft_core_types::{CommitCertificate, Round, Validity};
 use informalsystems_malachitebft_engine::host::{HostMsg, HostRef, Next};
+use informalsystems_malachitebft_engine::network::{NetworkMsg, NetworkRef};
+use informalsystems_malachitebft_engine::util::streaming::{StreamId, StreamMessage};
 use informalsystems_malachitebft_sync::RawDecidedValue;
 use ractor::{async_trait as ractor_async_trait, Actor, ActorProcessingErr, ActorRef};
 use tokio::sync::{mpsc, Notify, RwLock};
@@ -29,8 +31,9 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::context::CipherBftContext;
 use crate::error::ConsensusError;
+use crate::proposal::CutProposalPart;
 use crate::types::{ConsensusHeight, ConsensusRound, ConsensusValue, ConsensusValueId};
-use crate::validator_set::ConsensusValidatorSet;
+use crate::validator_set::{ConsensusAddress, ConsensusValidatorSet};
 use crate::validator_set_manager::{EpochConfig, ValidatorSetManager};
 use cipherbft_data_chain::Cut;
 use cipherbft_types::ValidatorId;
@@ -778,6 +781,7 @@ pub async fn spawn_host_actor(
 /// Channel-based value builder for backward compatibility.
 ///
 /// This adapter implements `ValueBuilder` by receiving cuts from a channel.
+/// In `ProposalAndParts` mode, it also publishes proposal parts to the network.
 pub struct ChannelValueBuilder {
     /// Pending cuts by height (waiting for consensus to request)
     pending_cuts: Arc<RwLock<HashMap<ConsensusHeight, Cut>>>,
@@ -787,6 +791,10 @@ pub struct ChannelValueBuilder {
     cut_notify: Arc<Notify>,
     /// Number of heights to retain pending cuts
     pending_cuts_retention: usize,
+    /// Network reference for publishing proposal parts
+    network: Option<NetworkRef<CipherBftContext>>,
+    /// Our own address (for creating proposal parts)
+    our_address: Option<ConsensusAddress>,
 }
 
 impl Default for ChannelValueBuilder {
@@ -806,7 +814,87 @@ impl ChannelValueBuilder {
             cuts_by_value_id: Arc::new(RwLock::new(HashMap::new())),
             cut_notify: Arc::new(Notify::new()),
             pending_cuts_retention,
+            network: None,
+            our_address: None,
         }
+    }
+
+    /// Set the network reference for publishing proposal parts.
+    ///
+    /// This enables `ProposalAndParts` mode where the proposer publishes
+    /// proposal parts to the network, allowing non-proposers to receive
+    /// and store the proposal values.
+    pub fn with_network(
+        mut self,
+        network: NetworkRef<CipherBftContext>,
+        our_address: ConsensusAddress,
+    ) -> Self {
+        self.network = Some(network);
+        self.our_address = Some(our_address);
+        self
+    }
+
+    /// Publish proposal parts to the network.
+    ///
+    /// Creates a single-part proposal and sends it via the network actor.
+    /// This is called after building a value when in `ProposalAndParts` mode.
+    async fn publish_proposal_parts(
+        &self,
+        height: ConsensusHeight,
+        round: ConsensusRound,
+        cut: &Cut,
+    ) {
+        let Some(network) = &self.network else {
+            // No network configured - skip publishing (ProposalOnly mode)
+            return;
+        };
+        let Some(our_address) = &self.our_address else {
+            warn!("ChannelValueBuilder: No our_address set, cannot publish proposal parts");
+            return;
+        };
+
+        // Create a unique stream ID based on height and round
+        let stream_id_bytes = format!("{}:{}", height.0, round.as_u32().unwrap_or(0));
+        let stream_id = StreamId::new(bytes::Bytes::from(stream_id_bytes));
+
+        // Create the proposal part (single-part proposal with first=true, last=true)
+        // valid_round is Round::Nil for fresh proposals (not re-proposals)
+        let proposal_part = CutProposalPart::single(
+            height,
+            round,
+            Round::Nil, // Fresh proposal, not a re-proposal
+            our_address.clone(),
+            cut.clone(),
+        );
+
+        // Send the Data message (sequence 0)
+        let data_msg = StreamMessage::new(
+            stream_id.clone(),
+            0, // First message in stream
+            StreamContent::Data(proposal_part),
+        );
+
+        if let Err(e) = network.cast(NetworkMsg::PublishProposalPart(data_msg)) {
+            error!("Failed to publish proposal part Data: {:?}", e);
+            return;
+        }
+
+        // Send the Fin message (sequence 1)
+        let fin_msg: StreamMessage<CutProposalPart> = StreamMessage::new(
+            stream_id,
+            1, // Second message in stream
+            StreamContent::Fin,
+        );
+
+        if let Err(e) = network.cast(NetworkMsg::PublishProposalPart(fin_msg)) {
+            error!("Failed to publish proposal part Fin: {:?}", e);
+        }
+
+        debug!(
+            "ChannelValueBuilder: Published proposal parts for height {} round {}",
+            height.0,
+            round.as_u32().unwrap_or(0)
+        );
     }
 
     /// Store a cut for consensus requests.
@@ -922,7 +1010,12 @@ impl ValueBuilder for ChannelValueBuilder {
                     self.cuts_by_value_id
                         .write()
                         .await
-                        .insert(value_id.clone(), cut);
+                        .insert(value_id.clone(), cut.clone());
+
+                    // Publish proposal parts to the network for non-proposers to receive.
+                    // This enables ProposalAndParts mode where non-proposers can store
+                    // received values via ReceivedProposalPart handler.
+                    self.publish_proposal_parts(height, round, &cut).await;
 
                     return Ok(LocallyProposedValue::new(height, round, value));
                 }
@@ -993,11 +1086,29 @@ impl ValueBuilder for ChannelValueBuilder {
 
     async fn restream_value(
         &self,
-        _height: ConsensusHeight,
-        _round: ConsensusRound,
-        _value_id: ConsensusValueId,
+        height: ConsensusHeight,
+        round: ConsensusRound,
+        value_id: ConsensusValueId,
     ) -> Result<(), ConsensusError> {
-        // No-op for backward compatibility
+        // Look up the cut by value_id and re-publish it
+        let cut_opt = {
+            let cuts = self.cuts_by_value_id.read().await;
+            cuts.get(&value_id).cloned()
+        };
+
+        if let Some(cut) = cut_opt {
+            debug!(
+                "ChannelValueBuilder: Restreaming value for height {} round {}",
+                height.0,
+                round.as_u32().unwrap_or(0)
+            );
+            self.publish_proposal_parts(height, round, &cut).await;
+        } else {
+            warn!(
+                "ChannelValueBuilder: Cannot restream value - not found for value_id {:?}",
+                value_id
+            );
+        }
         Ok(())
     }
 
@@ -1121,19 +1232,28 @@ impl DecisionHandler for ChannelDecisionHandler {
 ///
 /// # Arguments
 ///
-/// * `_our_id` - Our validator ID (unused in new architecture)
+/// * `our_id` - Our validator ID (used for publishing proposal parts)
 /// * `ctx` - Consensus context containing validator set
 /// * `cut_rx` - Channel to receive cuts from DCL
 /// * `decided_tx` - Channel to send decided events
+/// * `network` - Optional network reference for publishing proposal parts
 ///
 /// # Returns
 ///
 /// A `HostRef<CipherBftContext>` for sending messages to the host.
+///
+/// # Proposal Parts Publishing
+///
+/// When `network` is provided, the host will publish proposal parts to the
+/// network when building values. This enables `ProposalAndParts` mode where
+/// non-proposer nodes can receive and store the proposal values via the
+/// `ReceivedProposalPart` handler.
 pub async fn spawn_host(
-    _our_id: ValidatorId,
+    our_id: ValidatorId,
     ctx: CipherBftContext,
     mut cut_rx: mpsc::Receiver<Cut>,
     decided_tx: Option<mpsc::Sender<(ConsensusHeight, Cut)>>,
+    network: Option<NetworkRef<CipherBftContext>>,
 ) -> anyhow::Result<HostRef<CipherBftContext>> {
     // Extract validators from context
     let validators: Vec<_> = ctx.validator_set.as_slice().to_vec();
@@ -1149,7 +1269,22 @@ pub async fn spawn_host(
     let config = HostConfig::default();
 
     // Create channel-based handlers with config values
-    let value_builder = Arc::new(ChannelValueBuilder::new(config.pending_cuts_retention));
+    let value_builder = if let Some(network_ref) = network {
+        // ProposalAndParts mode: publish proposal parts to network
+        let our_address = ConsensusAddress(our_id);
+        info!(
+            "Host: Enabling ProposalAndParts mode with our_address={}",
+            our_address
+        );
+        Arc::new(
+            ChannelValueBuilder::new(config.pending_cuts_retention)
+                .with_network(network_ref, our_address),
+        )
+    } else {
+        // ProposalOnly mode: no proposal parts publishing
+        Arc::new(ChannelValueBuilder::new(config.pending_cuts_retention))
+    };
+
     let decision_handler = Arc::new(ChannelDecisionHandler::new(
         decided_tx,
         config.decided_retention,
