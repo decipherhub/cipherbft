@@ -430,7 +430,10 @@ async fn test_log_store_basic_operations() {
     };
 
     // Store the log
-    log_store.put_logs(&[test_log.clone()]).await.unwrap();
+    log_store
+        .put_logs(std::slice::from_ref(&test_log))
+        .await
+        .unwrap();
 
     // Retrieve by block number
     let logs = log_store.get_logs_by_block(100).await.unwrap();
