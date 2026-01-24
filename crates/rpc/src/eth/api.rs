@@ -122,6 +122,45 @@ pub trait EthRpc {
         newest_block: String,
         reward_percentiles: Option<Vec<f64>>,
     ) -> JsonRpcResult<FeeHistory>;
+
+    /// Returns all pending transactions in the transaction pool.
+    ///
+    /// This is a non-standard method supported by Reth and Geth.
+    /// Returns a flat list of all pending transactions.
+    #[method(name = "pendingTransactions")]
+    async fn pending_transactions(&self) -> JsonRpcResult<Vec<Transaction>>;
+
+    /// Returns information about an uncle by block hash and uncle index.
+    ///
+    /// Always returns null for PoS chains (no uncles in CipherBFT).
+    #[method(name = "getUncleByBlockHashAndIndex")]
+    async fn get_uncle_by_block_hash_and_index(
+        &self,
+        block_hash: B256,
+        index: U64,
+    ) -> JsonRpcResult<Option<Block>>;
+
+    /// Returns information about an uncle by block number and uncle index.
+    ///
+    /// Always returns null for PoS chains (no uncles in CipherBFT).
+    #[method(name = "getUncleByBlockNumberAndIndex")]
+    async fn get_uncle_by_block_number_and_index(
+        &self,
+        block: String,
+        index: U64,
+    ) -> JsonRpcResult<Option<Block>>;
+
+    /// Returns the number of uncles in a block from a block matching the given hash.
+    ///
+    /// Always returns 0 for PoS chains (no uncles in CipherBFT).
+    #[method(name = "getUncleCountByBlockHash")]
+    async fn get_uncle_count_by_block_hash(&self, block_hash: B256) -> JsonRpcResult<U64>;
+
+    /// Returns the number of uncles in a block from a block matching the given number.
+    ///
+    /// Always returns 0 for PoS chains (no uncles in CipherBFT).
+    #[method(name = "getUncleCountByBlockNumber")]
+    async fn get_uncle_count_by_block_number(&self, block: String) -> JsonRpcResult<U64>;
 }
 
 /// Call request parameters for eth_call and eth_estimateGas.
@@ -683,5 +722,68 @@ where
             blob_gas_used_ratio: Vec::new(),
             reward,
         })
+    }
+
+    async fn pending_transactions(&self) -> JsonRpcResult<Vec<Transaction>> {
+        trace!("eth_pendingTransactions");
+
+        // Get pending transactions from mempool
+        let pending_by_sender = self
+            .mempool
+            .get_pending_content()
+            .await
+            .map_err(Self::to_json_rpc_error)?;
+
+        // Flatten into a single list
+        let mut transactions: Vec<Transaction> = Vec::new();
+        for (_sender, txs) in pending_by_sender {
+            transactions.extend(txs);
+        }
+
+        debug!(
+            "eth_pendingTransactions: returning {} transactions",
+            transactions.len()
+        );
+        Ok(transactions)
+    }
+
+    async fn get_uncle_by_block_hash_and_index(
+        &self,
+        block_hash: B256,
+        index: U64,
+    ) -> JsonRpcResult<Option<Block>> {
+        trace!(
+            "eth_getUncleByBlockHashAndIndex: hash={}, index={}",
+            block_hash,
+            index
+        );
+        // CipherBFT is a PoS chain - no uncles exist
+        Ok(None)
+    }
+
+    async fn get_uncle_by_block_number_and_index(
+        &self,
+        block: String,
+        index: U64,
+    ) -> JsonRpcResult<Option<Block>> {
+        trace!(
+            "eth_getUncleByBlockNumberAndIndex: block={}, index={}",
+            block,
+            index
+        );
+        // CipherBFT is a PoS chain - no uncles exist
+        Ok(None)
+    }
+
+    async fn get_uncle_count_by_block_hash(&self, block_hash: B256) -> JsonRpcResult<U64> {
+        trace!("eth_getUncleCountByBlockHash: hash={}", block_hash);
+        // CipherBFT is a PoS chain - no uncles exist
+        Ok(U64::ZERO)
+    }
+
+    async fn get_uncle_count_by_block_number(&self, block: String) -> JsonRpcResult<U64> {
+        trace!("eth_getUncleCountByBlockNumber: block={}", block);
+        // CipherBFT is a PoS chain - no uncles exist
+        Ok(U64::ZERO)
     }
 }

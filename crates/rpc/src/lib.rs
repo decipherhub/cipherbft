@@ -69,6 +69,12 @@
 //! - `eth_call` - Execute read-only contract call
 //! - `eth_estimateGas` - Estimate gas for transaction
 //! - `eth_getLogs` - Query event logs
+//! - `eth_feeHistory` - Get historical gas information
+//! - `eth_pendingTransactions` - Get all pending transactions
+//! - `eth_getUncleByBlockHashAndIndex` - Get uncle by hash (always null in PoS)
+//! - `eth_getUncleByBlockNumberAndIndex` - Get uncle by number (always null in PoS)
+//! - `eth_getUncleCountByBlockHash` - Get uncle count by hash (always 0 in PoS)
+//! - `eth_getUncleCountByBlockNumber` - Get uncle count by number (always 0 in PoS)
 //!
 //! ## web3_* namespace
 //!
