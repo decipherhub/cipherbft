@@ -4,7 +4,10 @@
 
 use alloy_primitives::U256;
 use anyhow::{Context, Result};
-use cipherbft_crypto::{BlsKeyPair, BlsSecretKey, Ed25519KeyPair, Ed25519SecretKey, ExposeSecret};
+use cipherbft_crypto::{
+    BlsKeyPair, BlsSecretKey, Ed25519KeyPair, Ed25519SecretKey, ExposeSecret, KeyMetadata, Keyring,
+    KeyringBackend,
+};
 use cipherd::key_cli::KeyringBackendArg;
 use cipherd::{
     execute_keys_command, generate_local_configs, GenesisGenerator, GenesisGeneratorConfig,
@@ -604,13 +607,13 @@ async fn cmd_start(
     // Load client config (Cosmos SDK style) for keyring settings
     let client_config = cipherd::ClientConfig::load(home)?;
 
-    // Determine keyring backend: CLI flag > client.toml > default
+    // Determine keyring backend: CLI flag > node.json > client.toml > default
     let keyring_backend: KeyringBackend = if let Some(backend_arg) = keyring_backend_override {
         // CLI flag takes precedence
         backend_arg.into()
     } else {
-        // Fall back to client.toml setting (or its default)
-        let keyring_backend_str = client_config.effective_keyring_backend();
+        // Prefer node.json keyring_backend, fall back to client.toml
+        let keyring_backend_str = config.effective_keyring_backend();
         keyring_backend_str
             .parse()
             .map_err(|_| anyhow::anyhow!("Invalid keyring backend: {}", keyring_backend_str))?
@@ -624,9 +627,15 @@ async fn cmd_start(
         );
     }
 
-    // Get keys directory from client.toml (primary source of truth for keyring settings)
-    let keys_dir = client_config.effective_keyring_dir(home);
-    let key_name = client_config.effective_key_name();
+    // Get keys directory: node.json keystore_dir > client.toml > default
+    // This allows devnet init-files to set keystore_dir in node.json
+    let keys_dir = if config.keystore_dir.is_some() {
+        config.effective_keystore_dir()
+    } else {
+        client_config.effective_keyring_dir(home)
+    };
+    // Use key_name from node.json
+    let key_name = config.effective_key_name();
     let account = config.effective_keystore_account();
 
     info!(
@@ -830,18 +839,50 @@ fn cmd_testnet_init_files(
         let node_dir = output.join(format!("node{}", i));
         let config_dir = node_dir.join("config");
         let data_dir = node_dir.join("data");
+        let keys_dir = node_dir.join("keys");
         std::fs::create_dir_all(&config_dir)?;
         std::fs::create_dir_all(&data_dir)?;
+        std::fs::create_dir_all(&keys_dir)?;
 
         let port_offset = starting_port + (i as u16 * 10);
+        let key_name = format!("validator-{}", i);
+        let account = 0u32;
+
+        // Store keys in the node's keyring using "test" backend (no passphrase for devnet)
+        let keyring = Keyring::new(KeyringBackend::Test, &keys_dir)
+            .map_err(|e| anyhow::anyhow!("Failed to create keyring: {}", e))?;
+
+        // Key names follow the pattern: {key_name}_{account}_{type}
+        let ed25519_key_name = format!("{}_{}_ed25519", key_name, account);
+        let bls_key_name = format!("{}_{}_bls", key_name, account);
+
+        // Store Ed25519 key
+        let ed25519_secret = hex::decode(validator.ed25519_secret_hex.clone().unwrap_or_default())
+            .map_err(|e| anyhow::anyhow!("Invalid ed25519 secret hex: {}", e))?;
+        let ed25519_metadata =
+            KeyMetadata::new(&ed25519_key_name, "ed25519", &validator.ed25519_pubkey_hex)
+                .with_description(&format!("Devnet validator {} Ed25519 key", i));
+        keyring
+            .store_key(&ed25519_metadata, &ed25519_secret, None)
+            .map_err(|e| anyhow::anyhow!("Failed to store Ed25519 key: {}", e))?;
+
+        // Store BLS key
+        let bls_secret = hex::decode(validator.bls_secret_hex.clone().unwrap_or_default())
+            .map_err(|e| anyhow::anyhow!("Invalid BLS secret hex: {}", e))?;
+        let bls_metadata = KeyMetadata::new(&bls_key_name, "bls12-381", &validator.bls_pubkey_hex)
+            .with_description(&format!("Devnet validator {} BLS key", i));
+        keyring
+            .store_key(&bls_metadata, &bls_secret, None)
+            .map_err(|e| anyhow::anyhow!("Failed to store BLS key: {}", e))?;
 
         // Build node config using the SAME validator ID as in genesis
+        // Use "test" backend for devnet (no passphrase required)
         let node_config = NodeConfig {
             validator_id: Some(validator.validator_id),
-            keyring_backend: "file".to_string(),
-            key_name: format!("validator-{}", i),
-            keystore_dir: None,
-            keystore_account: None,
+            keyring_backend: "test".to_string(),
+            key_name: key_name.clone(),
+            keystore_dir: Some(keys_dir.clone()),
+            keystore_account: Some(account),
             primary_listen: format!("0.0.0.0:{}", port_offset).parse()?,
             consensus_listen: format!("0.0.0.0:{}", port_offset + 5).parse()?,
             worker_listens: vec![format!("0.0.0.0:{}", port_offset + 1).parse()?],
