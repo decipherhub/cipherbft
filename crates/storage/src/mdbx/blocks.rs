@@ -196,6 +196,19 @@ impl BlockStore for MdbxBlockStore {
         }
     }
 
+    async fn get_earliest_block_number(&self) -> BlockStoreResult<Option<u64>> {
+        let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
+        let mut cursor = tx
+            .cursor_read::<Blocks>()
+            .map_err(|e| db_err(e.to_string()))?;
+
+        // Seek to the first entry
+        match cursor.first().map_err(|e| db_err(e.to_string()))? {
+            Some((key, _)) => Ok(Some(key.0)),
+            None => Ok(None),
+        }
+    }
+
     async fn has_block(&self, number: u64) -> BlockStoreResult<bool> {
         let key = BlockNumberKey::new(number);
 
@@ -344,6 +357,24 @@ mod tests {
         // Should return highest
         let latest = store.get_latest_block_number().await.unwrap().unwrap();
         assert_eq!(latest, 5);
+    }
+
+    #[tokio::test]
+    async fn test_earliest_block_number() {
+        let (db, _temp_dir) = create_test_db();
+        let store = MdbxBlockStore::new(db);
+
+        // No blocks yet
+        assert!(store.get_earliest_block_number().await.unwrap().is_none());
+
+        // Add some blocks (not starting from 0)
+        store.put_block(&make_test_block(5)).await.unwrap();
+        store.put_block(&make_test_block(10)).await.unwrap();
+        store.put_block(&make_test_block(7)).await.unwrap();
+
+        // Should return lowest
+        let earliest = store.get_earliest_block_number().await.unwrap().unwrap();
+        assert_eq!(earliest, 5);
     }
 
     #[tokio::test]
