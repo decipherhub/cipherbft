@@ -806,7 +806,7 @@ impl Node {
                 Some(event) = primary_handle.recv_event() => {
                     match event {
                         PrimaryEvent::CutReady(cut) => {
-                            info!(
+                            debug!(
                                 "Cut ready at height {} with {} validators",
                                 cut.height,
                                 cut.validator_count()
@@ -839,7 +839,7 @@ impl Node {
 
                 // Consensus Decided events - execute the decided Cut
                 Some((height, cut)) = decided_rx.recv() => {
-                    info!(
+                    debug!(
                         "Consensus decided at height {} with {} cars",
                         height,
                         cut.cars.len()

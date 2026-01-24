@@ -450,7 +450,7 @@ impl Primary {
     async fn handle_command(&mut self, cmd: PrimaryCommand) {
         match cmd {
             PrimaryCommand::ConsensusDecided { height } => {
-                info!(
+                debug!(
                     height,
                     validator = %self.config.validator_id,
                     "Received consensus decision notification"
