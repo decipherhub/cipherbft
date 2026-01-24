@@ -36,9 +36,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing::{debug, trace, warn};
 
+use cipherbft_execution::AccountProof;
+
 use crate::error::{RpcError, RpcResult};
 use crate::traits::{
-    BlockNumberOrTag, ExecutionApi, MempoolApi, NetworkApi, RpcStorage, SyncStatus,
+    BlockNumberOrTag, DebugExecutionApi, ExecutionApi, MempoolApi, NetworkApi, RpcProofStorage, RpcStorage, SyncStatus,
 };
 use crate::types::RpcBlock;
 
@@ -328,6 +330,39 @@ impl<P: Provider + 'static> RpcStorage for ProviderBasedRpcStorage<P> {
                 Err(RpcError::Storage(e.to_string()))
             }
         }
+    }
+}
+
+#[async_trait]
+impl<P: Provider + 'static> RpcProofStorage for ProviderBasedRpcStorage<P> {
+    async fn get_proof(
+        &self,
+        address: Address,
+        storage_keys: Vec<U256>,
+        _block: BlockNumberOrTag,
+    ) -> RpcResult<AccountProof> {
+        debug!(
+            "ProviderBasedRpcStorage::get_proof({}, {} keys)",
+            address,
+            storage_keys.len()
+        );
+
+        // Get all accounts from provider
+        let accounts = self.provider.get_all_accounts().map_err(|e| {
+            RpcError::Storage(format!("Failed to get accounts: {}", e))
+        })?;
+
+        // Storage getter function
+        let provider = Arc::clone(&self.provider);
+        let storage_getter = move |addr: Address| -> cipherbft_execution::Result<std::collections::BTreeMap<U256, U256>> {
+            provider.get_all_storage(addr).map_err(|e| {
+                cipherbft_execution::ExecutionError::Internal(format!("Failed to get storage: {}", e))
+            })
+        };
+
+        // Generate the proof
+        cipherbft_execution::generate_account_proof(&accounts, storage_getter, address, storage_keys)
+            .map_err(|e| RpcError::Storage(format!("Failed to generate proof: {}", e)))
     }
 }
 
@@ -1074,6 +1109,50 @@ impl RpcStorage for StubRpcStorage {
     }
 }
 
+#[async_trait]
+impl RpcProofStorage for StubRpcStorage {
+    async fn get_proof(
+        &self,
+        address: Address,
+        storage_keys: Vec<U256>,
+        _block: BlockNumberOrTag,
+    ) -> RpcResult<AccountProof> {
+        debug!(
+            "StubRpcStorage::get_proof({}, {} keys)",
+            address,
+            storage_keys.len()
+        );
+
+        // Return a minimal stub proof
+        use cipherbft_execution::StorageProof;
+        const EMPTY_ROOT_HASH: B256 = B256::new([
+            0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6,
+            0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0, 0xf8, 0x6e,
+            0x5b, 0x48, 0xe0, 0x1b, 0x99, 0x6c, 0xad, 0xc0,
+            0x01, 0x62, 0x2f, 0xb5, 0xe3, 0x63, 0xb4, 0x21,
+        ]);
+
+        let storage_proofs: Vec<StorageProof> = storage_keys
+            .into_iter()
+            .map(|key| StorageProof {
+                key,
+                value: U256::ZERO,
+                proof: vec![],
+            })
+            .collect();
+
+        Ok(AccountProof {
+            address,
+            balance: U256::ZERO,
+            code_hash: cipherbft_execution::KECCAK_EMPTY,
+            nonce: 0,
+            storage_hash: EMPTY_ROOT_HASH,
+            account_proof: vec![],
+            storage_proof: storage_proofs,
+        })
+    }
+}
+
 /// Stub mempool adapter.
 ///
 /// This adapter provides placeholder implementations for mempool operations.
@@ -1749,6 +1828,88 @@ pub fn storage_block_to_rpc_block(
 ) -> crate::types::RpcBlock {
     // Use the RpcBlock's from_storage constructor for proper hex serialization
     crate::types::RpcBlock::from_storage(storage_block)
+}
+
+// ============================================================================
+// Stub Debug Execution Implementation
+// ============================================================================
+
+/// Stub debug execution adapter.
+///
+/// This adapter provides placeholder implementations for debug tracing operations.
+/// Replace with actual revm tracing integration when ready.
+pub struct StubDebugExecutionApi;
+
+impl StubDebugExecutionApi {
+    /// Create a new stub debug execution adapter.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for StubDebugExecutionApi {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl crate::traits::DebugExecutionApi for StubDebugExecutionApi {
+    async fn trace_transaction(
+        &self,
+        tx_hash: B256,
+        _block: BlockNumberOrTag,
+        _options: Option<cipherbft_execution::TraceOptions>,
+    ) -> RpcResult<cipherbft_execution::TraceResult> {
+        debug!("StubDebugExecutionApi::trace_transaction(hash={})", tx_hash);
+        // Return an empty trace result for now
+        Ok(cipherbft_execution::TraceResult {
+            call_trace: None,
+            struct_logs: Some(vec![]),
+            state_diff: None,
+            failed: false,
+            gas: 21000,
+            return_value: Some(Bytes::new()),
+        })
+    }
+
+    async fn trace_call(
+        &self,
+        from: Option<Address>,
+        to: Option<Address>,
+        gas: Option<u64>,
+        _gas_price: Option<U256>,
+        _value: Option<U256>,
+        data: Option<Bytes>,
+        _block: BlockNumberOrTag,
+        _options: Option<cipherbft_execution::TraceOptions>,
+    ) -> RpcResult<cipherbft_execution::TraceResult> {
+        debug!(
+            "StubDebugExecutionApi::trace_call(from={:?}, to={:?}, gas={:?}, data_len={:?})",
+            from,
+            to,
+            gas,
+            data.as_ref().map(|d| d.len())
+        );
+        // Return an empty trace result for now
+        Ok(cipherbft_execution::TraceResult {
+            call_trace: None,
+            struct_logs: Some(vec![]),
+            state_diff: None,
+            failed: false,
+            gas: gas.unwrap_or(21000),
+            return_value: Some(Bytes::new()),
+        })
+    }
+
+    async fn trace_block(
+        &self,
+        block: BlockNumberOrTag,
+        _options: Option<cipherbft_execution::TraceOptions>,
+    ) -> RpcResult<Vec<cipherbft_execution::TraceResult>> {
+        debug!("StubDebugExecutionApi::trace_block(block={:?})", block);
+        // Return empty traces for now
+        Ok(vec![])
 }
 
 #[cfg(test)]

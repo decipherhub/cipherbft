@@ -203,6 +203,51 @@ pub trait NetworkApi: Send + Sync {
     async fn is_listening(&self) -> RpcResult<bool>;
 }
 
+/// Debug execution interface for tracing operations.
+#[async_trait]
+#[allow(clippy::too_many_arguments)]
+pub trait DebugExecutionApi: Send + Sync {
+    /// Trace a transaction that has already been executed.
+    async fn trace_transaction(
+        &self,
+        tx_hash: B256,
+        block: BlockNumberOrTag,
+        options: Option<cipherbft_execution::TraceOptions>,
+    ) -> RpcResult<cipherbft_execution::TraceResult>;
+
+    /// Execute and trace a call without committing.
+    async fn trace_call(
+        &self,
+        from: Option<Address>,
+        to: Option<Address>,
+        gas: Option<u64>,
+        gas_price: Option<U256>,
+        value: Option<U256>,
+        data: Option<Bytes>,
+        block: BlockNumberOrTag,
+        options: Option<cipherbft_execution::TraceOptions>,
+    ) -> RpcResult<cipherbft_execution::TraceResult>;
+
+    /// Trace all transactions in a block.
+    async fn trace_block(
+        &self,
+        block: BlockNumberOrTag,
+        options: Option<cipherbft_execution::TraceOptions>,
+    ) -> RpcResult<Vec<cipherbft_execution::TraceResult>>;
+}
+
+/// Extended storage interface for proof generation.
+#[async_trait]
+pub trait RpcProofStorage: RpcStorage {
+    /// Generate an account proof (for eth_getProof).
+    async fn get_proof(
+        &self,
+        address: Address,
+        storage_keys: Vec<U256>,
+        block: BlockNumberOrTag,
+    ) -> RpcResult<cipherbft_execution::AccountProof>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

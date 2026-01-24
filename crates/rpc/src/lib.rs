@@ -141,6 +141,7 @@
 // Modules
 pub mod adapters;
 pub mod config;
+pub mod debug;
 pub mod error;
 pub mod eth;
 pub mod filters;
@@ -160,10 +161,10 @@ pub use error::{RpcError, RpcResult};
 pub use server::RpcServer;
 
 // Backend trait abstractions
-pub use traits::{BlockNumberOrTag, ExecutionApi, MempoolApi, NetworkApi, RpcStorage, SyncStatus};
+pub use traits::{BlockNumberOrTag, DebugExecutionApi, ExecutionApi, MempoolApi, NetworkApi, RpcProofStorage, RpcStorage, SyncStatus};
 
 // Stub implementations for testing and development
-pub use adapters::{StubExecutionApi, StubMempoolApi, StubNetworkApi, StubRpcStorage};
+pub use adapters::{StubDebugExecutionApi, StubExecutionApi, StubMempoolApi, StubNetworkApi, StubRpcStorage};
 
 // Real implementations backed by storage
 pub use adapters::{EvmExecutionApi, MdbxRpcStorage, PoolMempoolApi, ProviderBasedRpcStorage};
@@ -175,6 +176,7 @@ pub use adapters::storage_block_to_rpc_block;
 pub use types::RpcBlock;
 
 // RPC server traits (for method registration)
+pub use debug::DebugRpcServer;
 pub use eth::EthRpcServer;
 pub use net::NetRpcServer;
 pub use txpool::TxPoolRpcServer;
