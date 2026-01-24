@@ -100,6 +100,7 @@
 //! - `eth_subscribe("newHeads")` - New block headers
 //! - `eth_subscribe("logs", filter)` - New logs matching filter
 //! - `eth_subscribe("newPendingTransactions")` - New pending transaction hashes
+//! - `eth_subscribe("syncing")` - Sync status changes
 //! - `eth_unsubscribe` - Cancel subscription
 
 // Modules

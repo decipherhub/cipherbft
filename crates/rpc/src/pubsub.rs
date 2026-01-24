@@ -12,7 +12,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, trace, warn};
 
 use alloy_primitives::B256;
-use alloy_rpc_types_eth::{Block, Filter, Log, Transaction};
+use alloy_rpc_types_eth::{Block, Filter, Log, SyncStatus, Transaction};
 
 use crate::error::RpcError;
 
@@ -28,6 +28,7 @@ pub trait EthPubSubRpc {
     /// - "newHeads": Fires when a new block header is received
     /// - "logs": Fires when a log matching filter is included in a new block
     /// - "newPendingTransactions": Fires when a new transaction enters the mempool
+    /// - "syncing": Fires when sync status changes
     #[subscription(name = "subscribe" => "subscription", unsubscribe = "unsubscribe", item = serde_json::Value)]
     async fn subscribe(&self, kind: String, filter: Option<Filter>) -> SubscriptionResult;
 }
@@ -69,6 +70,9 @@ pub enum SubscriptionKind {
         /// Whether to return full transaction objects or just hashes.
         full_transactions: bool,
     },
+    /// Subscribe to sync status changes.
+    /// Emits sync status when syncing starts/progresses, or `false` when synced.
+    Syncing,
 }
 
 /// Active subscription information.
@@ -91,6 +95,8 @@ pub enum SubscriptionEvent {
     PendingTransaction(B256),
     /// New pending transaction (full details).
     PendingTransactionFull(Box<Transaction>),
+    /// Sync status change.
+    SyncingStatus(SyncStatus),
 }
 
 /// Manages WebSocket subscriptions and broadcasts events.
@@ -107,6 +113,8 @@ pub struct SubscriptionManager {
     pending_tx_tx: broadcast::Sender<B256>,
     /// Broadcast channel for full pending transactions.
     pending_tx_full_tx: broadcast::Sender<Box<Transaction>>,
+    /// Broadcast channel for sync status changes.
+    syncing_tx: broadcast::Sender<SyncStatus>,
 }
 
 impl SubscriptionManager {
@@ -121,6 +129,7 @@ impl SubscriptionManager {
         let (log_tx, _) = broadcast::channel(capacity);
         let (pending_tx_tx, _) = broadcast::channel(capacity);
         let (pending_tx_full_tx, _) = broadcast::channel(capacity);
+        let (syncing_tx, _) = broadcast::channel(capacity);
 
         Self {
             subscriptions: DashMap::new(),
@@ -129,6 +138,7 @@ impl SubscriptionManager {
             log_tx,
             pending_tx_tx,
             pending_tx_full_tx,
+            syncing_tx,
         }
     }
 
@@ -192,6 +202,16 @@ impl SubscriptionManager {
     pub fn subscribe_pending_txs_full(&self) -> broadcast::Receiver<Box<Transaction>> {
         self.pending_tx_full_tx.subscribe()
     }
+
+    /// Broadcast a sync status change.
+    pub fn broadcast_sync_status(&self, status: SyncStatus) {
+        let _ = self.syncing_tx.send(status);
+    }
+
+    /// Subscribe to sync status changes channel.
+    pub fn subscribe_syncing(&self) -> broadcast::Receiver<SyncStatus> {
+        self.syncing_tx.subscribe()
+    }
 }
 
 impl Default for SubscriptionManager {
@@ -237,9 +257,10 @@ impl EthPubSubRpcServer for EthPubSubApi {
                     full_transactions: false,
                 }
             }
+            "syncing" => SubscriptionKind::Syncing,
             _ => {
                 let err: ErrorObjectOwned = RpcError::InvalidParams(format!(
-                    "Unknown subscription type: {}. Supported: newHeads, logs, newPendingTransactions",
+                    "Unknown subscription type: {}. Supported: newHeads, logs, newPendingTransactions, syncing",
                     kind
                 ))
                 .into();
@@ -402,6 +423,43 @@ impl EthPubSubRpcServer for EthPubSubApi {
                         }
                     });
                 }
+            }
+            SubscriptionKind::Syncing => {
+                let mut rx = self.manager.subscribe_syncing();
+                let manager = Arc::clone(&self.manager);
+                tokio::spawn(async move {
+                    loop {
+                        tokio::select! {
+                            _ = sink.closed() => {
+                                trace!("Syncing subscription {} closed by client", sub_id);
+                                manager.unsubscribe(sub_id);
+                                break;
+                            }
+                            result = rx.recv() => {
+                                match result {
+                                    Ok(status) => {
+                                        // Convert SyncStatus to JSON value
+                                        // SyncStatus is an enum: None (not syncing) or Status(SyncInfo)
+                                        let msg = serde_json::to_value(&status).unwrap_or_default();
+                                        if sink.send(jsonrpsee::SubscriptionMessage::from_json(&msg).unwrap()).await.is_err() {
+                                            trace!("Failed to send to subscription {}, closing", sub_id);
+                                            manager.unsubscribe(sub_id);
+                                            break;
+                                        }
+                                    }
+                                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                                        warn!("Subscription {} lagged by {} messages", sub_id, n);
+                                    }
+                                    Err(broadcast::error::RecvError::Closed) => {
+                                        trace!("Syncing broadcast channel closed for subscription {}", sub_id);
+                                        manager.unsubscribe(sub_id);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
             }
         }
 

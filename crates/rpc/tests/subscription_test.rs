@@ -35,6 +35,13 @@ fn test_subscription_kind_pending_transactions_full() {
     ));
 }
 
+/// Test subscription kind for syncing.
+#[test]
+fn test_subscription_kind_syncing() {
+    let kind = SubscriptionKind::Syncing;
+    assert!(matches!(kind, SubscriptionKind::Syncing));
+}
+
 /// Test subscription manager creation.
 #[test]
 fn test_subscription_manager_new() {
