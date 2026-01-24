@@ -208,6 +208,7 @@ where
 }
 
 /// Convenience function to execute with call tracing.
+#[allow(dead_code)]
 pub fn trace_call<F, R>(config: CallTracerConfig, f: F) -> (R, Option<CallFrame>)
 where
     F: FnOnce(&mut CallTracer) -> R,

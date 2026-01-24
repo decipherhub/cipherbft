@@ -40,8 +40,7 @@ use cipherbft_execution::AccountProof;
 
 use crate::error::{RpcError, RpcResult};
 use crate::traits::{
-    BlockNumberOrTag, ExecutionApi, MempoolApi, NetworkApi, RpcProofStorage,
-    RpcStorage, SyncStatus,
+    BlockNumberOrTag, ExecutionApi, MempoolApi, NetworkApi, RpcProofStorage, RpcStorage, SyncStatus,
 };
 use crate::types::RpcBlock;
 

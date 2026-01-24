@@ -1,7 +1,7 @@
 # Rust build artifacts
 target/
-debug/
-release/
+/debug/
+/release/
 Cargo.lock
 *.rs.bk
 *.rlib

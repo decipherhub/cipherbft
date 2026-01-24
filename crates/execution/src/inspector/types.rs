@@ -27,7 +27,6 @@ pub enum CallType {
     Create2,
 }
 
-
 /// A single call frame in the execution trace.
 ///
 /// Represents one call in the call stack, including nested internal calls.

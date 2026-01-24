@@ -845,7 +845,8 @@ impl Node {
         // Start RPC server if enabled
         if let Some(ref storage) = rpc_storage {
             use cipherbft_rpc::{
-                RpcConfig, RpcServer, StubExecutionApi, StubMempoolApi, StubNetworkApi,
+                RpcConfig, RpcServer, StubDebugExecutionApi, StubExecutionApi, StubMempoolApi,
+                StubNetworkApi,
             };
 
             let mut rpc_config = RpcConfig::with_chain_id(85300); // CipherBFT testnet chain ID
@@ -857,6 +858,7 @@ impl Node {
             let mempool = Arc::new(StubMempoolApi::new());
             let executor = Arc::new(StubExecutionApi::new());
             let network = Arc::new(StubNetworkApi::new());
+            let debug_executor = Arc::new(StubDebugExecutionApi::new());
 
             // Use with_subscription_manager to share the subscription manager
             // between the RPC server and the event loop for broadcasting blocks
@@ -866,6 +868,7 @@ impl Node {
                 mempool,
                 executor,
                 network,
+                debug_executor,
                 subscription_manager.clone().unwrap(),
             );
 

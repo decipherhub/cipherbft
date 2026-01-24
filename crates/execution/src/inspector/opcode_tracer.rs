@@ -7,7 +7,7 @@
 //! - Call depth
 
 use super::types::{OpcodeStep, OpcodeTracerConfig};
-use alloy_primitives::{Bytes, U256};
+use alloy_primitives::Bytes;
 use revm::{
     context_interface::JournalTr,
     interpreter::{
