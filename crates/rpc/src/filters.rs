@@ -23,10 +23,13 @@ pub const DEFAULT_FILTER_TIMEOUT: Duration = Duration::from_secs(300);
 pub const MAX_FILTERS: usize = 1000;
 
 /// Filter type variants.
+///
+/// The `Log` variant is boxed to reduce enum size since `Filter` is ~400 bytes.
 #[derive(Debug, Clone)]
 pub enum FilterType {
     /// Log filter with the original filter criteria.
-    Log(Filter),
+    /// Boxed to reduce enum size (Filter is ~400 bytes).
+    Log(Box<Filter>),
     /// Block filter (watches for new block hashes).
     Block,
     /// Pending transaction filter (watches for new pending tx hashes).
@@ -122,7 +125,7 @@ impl FilterManager {
     ///
     /// Returns the filter ID on success, or None if max filters exceeded.
     pub fn new_log_filter(&self, filter: Filter, current_block: u64) -> Option<U256> {
-        self.create_filter(FilterType::Log(filter), current_block)
+        self.create_filter(FilterType::Log(Box::new(filter)), current_block)
     }
 
     /// Create a new block filter.
