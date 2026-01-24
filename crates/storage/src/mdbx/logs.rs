@@ -442,7 +442,7 @@ mod tests {
         let log = make_test_log(1, 0, 0x42);
 
         // Store
-        store.put_logs(&[log.clone()]).await.unwrap();
+        store.put_logs(std::slice::from_ref(&log)).await.unwrap();
 
         // Retrieve by block
         let retrieved = store.get_logs_by_block(1).await.unwrap();
