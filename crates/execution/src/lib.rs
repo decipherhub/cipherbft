@@ -194,7 +194,9 @@ impl<P: Provider + Clone> ExecutionLayer<P> {
         // This is a debug assertion since consensus layer guarantees ordering,
         // but we verify it in debug builds to catch integration bugs early
         debug_assert!(
-            cut.cars.windows(2).all(|w| w[0].validator_id <= w[1].validator_id),
+            cut.cars
+                .windows(2)
+                .all(|w| w[0].validator_id <= w[1].validator_id),
             "Cars must be sorted by validator_id (consensus layer invariant violated)"
         );
 
@@ -590,8 +592,7 @@ mod tests {
         let provider = InMemoryProvider::new();
 
         // Create with empty validator list (equivalent to new())
-        let execution_layer =
-            ExecutionLayer::with_genesis_validators(config, provider, vec![]);
+        let execution_layer = ExecutionLayer::with_genesis_validators(config, provider, vec![]);
 
         // Should initialize successfully with zero state root
         assert_eq!(execution_layer.state_root(), B256::ZERO);
@@ -638,8 +639,7 @@ mod tests {
             },
         ];
 
-        let execution_layer =
-            ExecutionLayer::with_genesis_validators(config, provider, validators);
+        let execution_layer = ExecutionLayer::with_genesis_validators(config, provider, validators);
 
         // Should initialize successfully
         assert_eq!(execution_layer.state_root(), B256::ZERO);
@@ -698,7 +698,9 @@ mod tests {
         let error_msg = format!("{}", result.unwrap_err());
         // Verify error message contains the address for debugging
         assert!(
-            error_msg.to_lowercase().contains(&test_address.to_string().to_lowercase()),
+            error_msg
+                .to_lowercase()
+                .contains(&test_address.to_string().to_lowercase()),
             "Error should contain address: {}",
             error_msg
         );
