@@ -1036,15 +1036,30 @@ impl Node {
                             warn!("Failed to notify Primary of consensus decision: {:?}", e);
                         }
 
-                        // CRITICAL FIX: Drain any pending CutReady events IMMEDIATELY after notify_decision.
-                        // notify_decision() calls finalize_height() which triggers try_form_cut(), which
-                        // may form a Cut for the next height and send CutReady to the event channel.
-                        // We MUST forward this to consensus BEFORE doing execution work, otherwise:
+                        // CRITICAL FIX: Wait for and drain CutReady events after notify_decision.
+                        //
+                        // notify_decision() is non-blocking - it sends a command to Primary's command channel
+                        // and returns immediately. The Primary task processes this command asynchronously:
+                        // 1. Primary receives ConsensusDecided command
+                        // 2. Primary calls finalize_height() and try_form_cut()
+                        // 3. Primary sends CutReady event to the event channel
+                        //
+                        // We MUST forward this CutReady to consensus BEFORE doing execution work, otherwise:
                         // 1. Consensus starts the next height and requests a value
                         // 2. ChannelValueBuilder doesn't have the cut (it's stuck in this channel)
                         // 3. Consensus times out on Propose step, all validators vote NIL
                         // 4. System gets stuck in a liveness failure
+                        //
+                        // Solution: Yield to let Primary process the command, then poll for events
+                        // with a short timeout to ensure we catch the CutReady event.
+                        let drain_deadline = tokio::time::Instant::now() + Duration::from_millis(100);
+                        let mut got_cut_ready = false;
+
                         loop {
+                            // First yield to allow the Primary task to run and process the command
+                            tokio::task::yield_now().await;
+
+                            // Try to receive any pending events
                             match handle.try_recv_event() {
                                 Ok(event) => {
                                     match event {
@@ -1057,6 +1072,7 @@ impl Node {
                                             if let Err(e) = cut_tx.send(new_cut).await {
                                                 warn!("Failed to send Cut to Consensus Host: {}", e);
                                             }
+                                            got_cut_ready = true;
                                         }
                                         PrimaryEvent::CarCreated(car) => {
                                             debug!(
@@ -1076,10 +1092,15 @@ impl Node {
                                             );
                                         }
                                     }
+                                    // Continue draining other events even after getting CutReady
                                 }
                                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
-                                    // No more events pending, continue with execution
-                                    break;
+                                    // No events pending - check if we should continue waiting
+                                    if got_cut_ready || tokio::time::Instant::now() >= drain_deadline {
+                                        // Either got the CutReady or timed out, proceed with execution
+                                        break;
+                                    }
+                                    // Keep yielding and polling until we get the CutReady or timeout
                                 }
                                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                                     warn!("Primary event channel disconnected");
