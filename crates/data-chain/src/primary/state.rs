@@ -1025,4 +1025,162 @@ mod tests {
         assert_eq!(summary.preserved_car_count, 0);
         assert_eq!(summary.next_height_attestation_count, 0);
     }
+
+    // =========================================================
+    // Queued CAR Processing After Consensus Decision Tests
+    // =========================================================
+
+    /// Test that verifies the race condition fix: queued CARs become ready
+    /// after sync_positions_from_cut() updates position tracking.
+    ///
+    /// Scenario:
+    /// 1. Validator A has seen position 4 for validator B
+    /// 2. Consensus decides a cut with validator B at position 6
+    /// 3. Validator A receives validator B's CAR at position 7 (queued due to gap)
+    /// 4. Validator A processes consensus decision, sync_positions_from_cut() sets B's position to 6
+    /// 5. Now the queued CAR at position 7 should be returned by get_cars_ready_after_gap_filled()
+    #[test]
+    fn test_queued_cars_ready_after_consensus_sync() {
+        use crate::car::Car;
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let mut state = PrimaryState::new(our_id, 1000);
+
+        let validator_b = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
+
+        // Step 1: Validator A has seen position 4 for validator B
+        state.update_last_seen(validator_b, 4, Hash::compute(b"car4"));
+        assert_eq!(state.expected_position(&validator_b), 5);
+
+        // Step 2: Validator A receives validator B's CAR at position 7 (out of order)
+        // This gets queued because expected_position is 5, but we received 7
+        let car_at_7 = Car::new(validator_b, 7, vec![], Some(Hash::compute(b"car6")));
+        state.queue_car_awaiting_gap(car_at_7.clone(), 5); // expected was 5 when received
+
+        // Verify the CAR is queued
+        assert!(state.is_awaiting_gap_sync(&validator_b, 7));
+
+        // Step 3: Check that get_cars_ready_after_gap_filled returns nothing
+        // because expected_position (5) != queued car position (7)
+        let ready_before = state.get_cars_ready_after_gap_filled(&validator_b);
+        assert!(
+            ready_before.is_empty(),
+            "No CARs should be ready before sync"
+        );
+
+        // Re-queue the CAR since get_cars_ready_after_gap_filled clears checked positions
+        state.queue_car_awaiting_gap(car_at_7.clone(), 5);
+
+        // Step 4: Consensus decides a cut with validator B at position 6
+        let mut decided_cut = Cut::new(2);
+        let car_at_6 = Car::new(validator_b, 6, vec![], Some(Hash::compute(b"car5")));
+        decided_cut.cars.insert(validator_b, car_at_6);
+
+        // Sync positions from the decided cut
+        state.sync_positions_from_cut(&decided_cut);
+
+        // Expected position should now be 7 (6 + 1)
+        assert_eq!(state.expected_position(&validator_b), 7);
+
+        // Step 5: Now the queued CAR at position 7 should be ready
+        let ready_after = state.get_cars_ready_after_gap_filled(&validator_b);
+        assert_eq!(ready_after.len(), 1, "CAR at position 7 should be ready");
+        assert_eq!(ready_after[0].position, 7);
+        assert_eq!(ready_after[0].proposer, validator_b);
+
+        // Verify the CAR is no longer queued
+        assert!(!state.is_awaiting_gap_sync(&validator_b, 7));
+    }
+
+    /// Test that queued CARs for multiple validators are handled correctly
+    /// after sync_positions_from_cut().
+    #[test]
+    fn test_queued_cars_multiple_validators_after_sync() {
+        use crate::car::Car;
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let mut state = PrimaryState::new(our_id, 1000);
+
+        let validator_b = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
+        let validator_c = ValidatorId::from_bytes([3u8; VALIDATOR_ID_SIZE]);
+
+        // Set up initial positions
+        state.update_last_seen(validator_b, 2, Hash::compute(b"b_car2"));
+        state.update_last_seen(validator_c, 3, Hash::compute(b"c_car3"));
+
+        // Queue CARs that arrived out of order
+        let car_b_at_5 = Car::new(validator_b, 5, vec![], Some(Hash::compute(b"b_car4")));
+        let car_c_at_6 = Car::new(validator_c, 6, vec![], Some(Hash::compute(b"c_car5")));
+
+        state.queue_car_awaiting_gap(car_b_at_5.clone(), 3); // expected was 3
+        state.queue_car_awaiting_gap(car_c_at_6.clone(), 4); // expected was 4
+
+        // Create a decided cut that advances both validators
+        let mut decided_cut = Cut::new(2);
+        let car_b_at_4 = Car::new(validator_b, 4, vec![], Some(Hash::compute(b"b_car3")));
+        let car_c_at_5 = Car::new(validator_c, 5, vec![], Some(Hash::compute(b"c_car4")));
+        decided_cut.cars.insert(validator_b, car_b_at_4);
+        decided_cut.cars.insert(validator_c, car_c_at_5);
+
+        // Sync positions
+        state.sync_positions_from_cut(&decided_cut);
+
+        // Check validator B: expected is now 5, queued CAR is at 5 -> should be ready
+        assert_eq!(state.expected_position(&validator_b), 5);
+        let ready_b = state.get_cars_ready_after_gap_filled(&validator_b);
+        assert_eq!(ready_b.len(), 1);
+        assert_eq!(ready_b[0].position, 5);
+
+        // Check validator C: expected is now 6, queued CAR is at 6 -> should be ready
+        assert_eq!(state.expected_position(&validator_c), 6);
+        let ready_c = state.get_cars_ready_after_gap_filled(&validator_c);
+        assert_eq!(ready_c.len(), 1);
+        assert_eq!(ready_c[0].position, 6);
+    }
+
+    /// Test that sync_positions_from_cut only updates if position is higher
+    #[test]
+    fn test_sync_positions_only_advances() {
+        use crate::car::Car;
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let mut state = PrimaryState::new(our_id, 1000);
+
+        let validator = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
+
+        // Set initial position to 5
+        state.update_last_seen(validator, 5, Hash::compute(b"car5"));
+        assert_eq!(state.expected_position(&validator), 6);
+
+        // Try to sync with a cut that has a lower position (3)
+        let mut old_cut = Cut::new(1);
+        let car_at_3 = Car::new(validator, 3, vec![], None);
+        old_cut.cars.insert(validator, car_at_3);
+
+        state.sync_positions_from_cut(&old_cut);
+
+        // Position should NOT have changed (5 > 3)
+        assert_eq!(
+            state.expected_position(&validator),
+            6,
+            "Position should not go backwards"
+        );
+
+        // Now sync with a higher position (7)
+        let mut new_cut = Cut::new(2);
+        let car_at_7 = Car::new(validator, 7, vec![], Some(Hash::compute(b"car6")));
+        new_cut.cars.insert(validator, car_at_7);
+
+        state.sync_positions_from_cut(&new_cut);
+
+        // Position should now be 7, so expected is 8
+        assert_eq!(
+            state.expected_position(&validator),
+            8,
+            "Position should advance to 8"
+        );
+    }
 }

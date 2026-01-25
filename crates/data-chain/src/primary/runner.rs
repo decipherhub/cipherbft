@@ -468,6 +468,24 @@ impl Primary {
                 // consistent position tracking for subsequent heights
                 self.state.sync_positions_from_cut(&cut);
 
+                // CRITICAL: Process any queued CARs that are now ready after position sync.
+                // When CARs arrive before the consensus decision is processed, they get queued
+                // due to PositionGap errors. After sync_positions_from_cut() updates positions,
+                // these queued CARs may now be at the expected position and should be processed.
+                let validators_to_check: Vec<ValidatorId> = cut.cars.keys().copied().collect();
+                for validator in validators_to_check {
+                    let ready_cars = self.state.get_cars_ready_after_gap_filled(&validator);
+                    for ready_car in ready_cars {
+                        debug!(
+                            proposer = %ready_car.proposer,
+                            position = ready_car.position,
+                            "Processing queued Car after consensus decision synced positions"
+                        );
+                        self.handle_received_car(ready_car.proposer, ready_car)
+                            .await;
+                    }
+                }
+
                 // Advance state to allow producing cuts for the next height
                 self.state.finalize_height(height);
 
