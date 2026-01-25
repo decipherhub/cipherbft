@@ -31,9 +31,13 @@ use cipherbft_data_chain::{
     worker::{Worker, WorkerConfig},
     Cut, DclMessage, WorkerMessage,
 };
-use cipherbft_execution::{ChainConfig, ExecutionResult, InMemoryProvider};
+use cipherbft_execution::{
+    ChainConfig, ExecutionResult, InMemoryProvider, Log as ExecutionLog,
+    TransactionReceipt as ExecutionReceipt,
+};
 use cipherbft_storage::{
-    Block, BlockStore, Database, DatabaseConfig, MdbxBlockStore, MdbxReceiptStore,
+    Block, BlockStore, Database, DatabaseConfig, Log as StorageLog, MdbxBlockStore,
+    MdbxReceiptStore, Receipt as StorageReceipt, ReceiptStore,
 };
 use cipherbft_types::genesis::Genesis;
 use cipherbft_types::ValidatorId;
@@ -908,6 +912,20 @@ impl Node {
                                     } else {
                                         debug!("Stored block {} to MDBX", height.0);
                                     }
+
+                                    // Store receipts for eth_getBlockReceipts queries
+                                    if !result.receipts.is_empty() {
+                                        let storage_receipts: Vec<StorageReceipt> = result
+                                            .receipts
+                                            .iter()
+                                            .map(|r| Self::execution_receipt_to_storage(r))
+                                            .collect();
+                                        if let Err(e) = storage.receipt_store().put_receipts(&storage_receipts).await {
+                                            error!("Failed to store {} receipts for block {}: {}", storage_receipts.len(), height.0, e);
+                                        } else {
+                                            debug!("Stored {} receipts for block {}", storage_receipts.len(), height.0);
+                                        }
+                                    }
                                 }
                             }
                             Err(e) => {
@@ -972,6 +990,53 @@ impl Node {
             transaction_hashes,
             transaction_count,
             total_difficulty: [0u8; 32], // Not used in PoS
+        }
+    }
+
+    /// Convert an execution TransactionReceipt to a storage Receipt for MDBX persistence.
+    ///
+    /// This bridges the execution layer receipt format to the storage layer format.
+    fn execution_receipt_to_storage(receipt: &ExecutionReceipt) -> StorageReceipt {
+        // Convert logs
+        let logs: Vec<StorageLog> = receipt
+            .logs
+            .iter()
+            .enumerate()
+            .map(|(i, log)| {
+                Self::execution_log_to_storage(log, i as u32, receipt.transaction_index as u32)
+            })
+            .collect();
+
+        StorageReceipt {
+            transaction_hash: receipt.transaction_hash.0,
+            block_number: receipt.block_number,
+            block_hash: receipt.block_hash.0,
+            transaction_index: receipt.transaction_index as u32,
+            from: receipt.from.0 .0,
+            to: receipt.to.map(|a| a.0 .0),
+            contract_address: receipt.contract_address.map(|a| a.0 .0),
+            gas_used: receipt.gas_used,
+            cumulative_gas_used: receipt.cumulative_gas_used,
+            status: receipt.status == 1,
+            logs,
+            logs_bloom: receipt.logs_bloom.0.to_vec(),
+            effective_gas_price: receipt.effective_gas_price,
+            transaction_type: receipt.transaction_type,
+        }
+    }
+
+    /// Convert an execution Log to a storage Log.
+    fn execution_log_to_storage(
+        log: &ExecutionLog,
+        log_index: u32,
+        transaction_index: u32,
+    ) -> StorageLog {
+        StorageLog {
+            address: log.address.0 .0,
+            topics: log.topics.iter().map(|t| t.0).collect(),
+            data: log.data.to_vec(),
+            log_index,
+            transaction_index,
         }
     }
 }
