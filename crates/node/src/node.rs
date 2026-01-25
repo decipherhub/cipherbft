@@ -1035,6 +1035,58 @@ impl Node {
                         if let Err(e) = handle.notify_decision(height.0, cut.clone()).await {
                             warn!("Failed to notify Primary of consensus decision: {:?}", e);
                         }
+
+                        // CRITICAL FIX: Drain any pending CutReady events IMMEDIATELY after notify_decision.
+                        // notify_decision() calls finalize_height() which triggers try_form_cut(), which
+                        // may form a Cut for the next height and send CutReady to the event channel.
+                        // We MUST forward this to consensus BEFORE doing execution work, otherwise:
+                        // 1. Consensus starts the next height and requests a value
+                        // 2. ChannelValueBuilder doesn't have the cut (it's stuck in this channel)
+                        // 3. Consensus times out on Propose step, all validators vote NIL
+                        // 4. System gets stuck in a liveness failure
+                        loop {
+                            match handle.try_recv_event() {
+                                Ok(event) => {
+                                    match event {
+                                        PrimaryEvent::CutReady(new_cut) => {
+                                            debug!(
+                                                "Cut ready at height {} with {} validators (drained after decision)",
+                                                new_cut.height,
+                                                new_cut.validator_count()
+                                            );
+                                            if let Err(e) = cut_tx.send(new_cut).await {
+                                                warn!("Failed to send Cut to Consensus Host: {}", e);
+                                            }
+                                        }
+                                        PrimaryEvent::CarCreated(car) => {
+                                            debug!(
+                                                "Car created at position {} with {} batches (drained after decision)",
+                                                car.position,
+                                                car.batch_digests.len()
+                                            );
+                                        }
+                                        PrimaryEvent::AttestationGenerated { car_proposer, .. } => {
+                                            debug!("Generated attestation for Car from {:?} (drained after decision)", car_proposer);
+                                        }
+                                        PrimaryEvent::SyncBatches { digests, target } => {
+                                            debug!(
+                                                "Need to sync {} batches from {:?} (drained after decision)",
+                                                digests.len(),
+                                                target
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                                    // No more events pending, continue with execution
+                                    break;
+                                }
+                                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                                    warn!("Primary event channel disconnected");
+                                    break;
+                                }
+                            }
+                        }
                     }
 
                     // Execute Cut if execution layer is enabled
