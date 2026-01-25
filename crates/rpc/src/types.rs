@@ -11,8 +11,11 @@
 //! compatibility issues with Elixir-based clients (like Blockscout) that expect
 //! strict Ethereum JSON-RPC format with hex-encoded quantities.
 
+use alloy_eips::eip4895::Withdrawal;
 use alloy_primitives::{Address, Bloom, Bytes, B256, B64, U256};
+use alloy_rpc_types_eth::Block;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 /// RPC Block representation with proper hex serialization.
 ///
@@ -39,7 +42,7 @@ pub struct RpcBlock {
     /// Logs bloom filter
     pub logs_bloom: Bloom,
     /// Difficulty (always 0 in PoS)
-    #[serde(serialize_with = "serialize_u256_quantity")]
+    #[serde(serialize_with = "serialize_u256_hex")]
     pub difficulty: U256,
     /// Block number
     #[serde(serialize_with = "alloy_serde::quantity::serialize")]
@@ -59,9 +62,14 @@ pub struct RpcBlock {
     pub mix_hash: B256,
     /// Nonce (always zero bytes in PoS)
     pub nonce: B64,
-    /// Total difficulty (sum of all block difficulties)
-    #[serde(serialize_with = "serialize_u256_quantity")]
-    pub total_difficulty: U256,
+    /// Total difficulty (sum of all block difficulties).
+    /// Returns `None` for post-merge (PoS) blocks per EIP-3675.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_opt_u256_hex"
+    )]
+    pub total_difficulty: Option<U256>,
     /// Base fee per gas (EIP-1559)
     #[serde(
         default,
@@ -96,26 +104,47 @@ pub struct RpcBlock {
     /// Parent beacon block root (EIP-4788)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_beacon_block_root: Option<B256>,
-    /// Block transactions (hashes or full transactions)
+    /// Block transactions (currently always returns hashes).
+    ///
+    /// # Limitations
+    /// The `full_transactions` parameter in `eth_getBlockByNumber` and
+    /// `eth_getBlockByHash` is currently ignored. This field always contains
+    /// transaction hashes. Full transaction bodies will be supported when
+    /// transaction indexing is implemented.
     pub transactions: Vec<B256>,
     /// Uncle block hashes (always empty in PoS)
     pub uncles: Vec<B256>,
-    /// Withdrawals (EIP-4895)
+    /// Withdrawals (EIP-4895).
+    /// Contains validator withdrawals with proper hex serialization.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub withdrawals: Option<Vec<()>>,
+    pub withdrawals: Option<Vec<Withdrawal>>,
 }
 
-/// Serialize U256 as a hex quantity string.
+/// Serialize U256 as a hex string using alloy's default serialization.
 ///
-/// This follows the Ethereum JSON-RPC "quantity" format:
-/// - Values are encoded as hex with "0x" prefix
-/// - Leading zeros are removed (except for 0 which is "0x0")
-fn serialize_u256_quantity<S>(value: &U256, serializer: S) -> Result<S::Ok, S::Error>
+/// This uses alloy_primitives' built-in U256 serialization. Note that this may
+/// produce a different format than Ethereum's "quantity" encoding (which strips
+/// leading zeros). For strict Ethereum JSON-RPC compliance on u64 fields, we use
+/// `alloy_serde::quantity::serialize` which properly implements the quantity format.
+///
+/// For U256 fields like `difficulty` and `total_difficulty`, clients generally
+/// accept both formats since these are typically zero in PoS chains.
+fn serialize_u256_hex<S>(value: &U256, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
-    // Use alloy_primitives built-in serialization which already formats as hex
     value.serialize(serializer)
+}
+
+/// Serialize Option<U256> as a hex string.
+fn serialize_opt_u256_hex<S>(value: &Option<U256>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match value {
+        Some(v) => v.serialize(serializer),
+        None => serializer.serialize_none(),
+    }
 }
 
 impl RpcBlock {
@@ -132,7 +161,16 @@ impl RpcBlock {
             state_root: B256::from(storage_block.state_root),
             transactions_root: B256::from(storage_block.transactions_root),
             receipts_root: B256::from(storage_block.receipts_root),
-            logs_bloom: Bloom::from_slice(&storage_block.logs_bloom),
+            // Use try_from for safe conversion - log and fall back to zero bloom on invalid data
+            logs_bloom: <Bloom as TryFrom<&[u8]>>::try_from(&storage_block.logs_bloom)
+                .unwrap_or_else(|_| {
+                    warn!(
+                        block_number = storage_block.number,
+                        bloom_len = storage_block.logs_bloom.len(),
+                        "Invalid logs_bloom data in storage block, using zero bloom"
+                    );
+                    Bloom::ZERO
+                }),
             difficulty: U256::from_be_bytes(storage_block.difficulty),
             number: storage_block.number,
             gas_limit: storage_block.gas_limit,
@@ -141,7 +179,7 @@ impl RpcBlock {
             extra_data: Bytes::from(storage_block.extra_data),
             mix_hash: B256::from(storage_block.mix_hash),
             nonce: B64::from(storage_block.nonce),
-            total_difficulty: U256::from_be_bytes(storage_block.total_difficulty),
+            total_difficulty: Some(U256::from_be_bytes(storage_block.total_difficulty)),
             base_fee_per_gas: storage_block.base_fee_per_gas,
             size: None,
             withdrawals_root: None,
@@ -155,6 +193,46 @@ impl RpcBlock {
                 .collect(),
             uncles: Vec::new(),
             withdrawals: None,
+        }
+    }
+}
+
+/// Convert from alloy_rpc_types_eth::Block to RpcBlock.
+///
+/// This conversion enables seamless transition from the standard Alloy Block type
+/// (which serializes numeric fields as integers) to our RpcBlock type (which
+/// serializes numeric fields as hex strings per Ethereum JSON-RPC spec).
+impl From<Block> for RpcBlock {
+    fn from(block: Block) -> Self {
+        let header = &block.header.inner;
+
+        Self {
+            hash: block.header.hash,
+            parent_hash: header.parent_hash,
+            ommers_hash: header.ommers_hash,
+            miner: header.beneficiary,
+            state_root: header.state_root,
+            transactions_root: header.transactions_root,
+            receipts_root: header.receipts_root,
+            logs_bloom: header.logs_bloom,
+            difficulty: header.difficulty,
+            number: header.number,
+            gas_limit: header.gas_limit,
+            gas_used: header.gas_used,
+            timestamp: header.timestamp,
+            extra_data: header.extra_data.clone(),
+            mix_hash: header.mix_hash,
+            nonce: header.nonce,
+            total_difficulty: block.header.total_difficulty,
+            base_fee_per_gas: header.base_fee_per_gas,
+            size: block.header.size.map(|v| v.to::<u64>()),
+            withdrawals_root: header.withdrawals_root,
+            blob_gas_used: header.blob_gas_used,
+            excess_blob_gas: header.excess_blob_gas,
+            parent_beacon_block_root: header.parent_beacon_block_root,
+            transactions: block.transactions.hashes().collect(),
+            uncles: block.uncles.clone(),
+            withdrawals: block.withdrawals.clone().map(|w| w.into_inner()),
         }
     }
 }
@@ -182,7 +260,7 @@ mod tests {
             extra_data: Bytes::new(),
             mix_hash: B256::ZERO,
             nonce: B64::ZERO,
-            total_difficulty: U256::ZERO,
+            total_difficulty: Some(U256::ZERO),
             base_fee_per_gas: Some(1_000_000_000),
             size: None,
             withdrawals_root: None,
