@@ -119,16 +119,18 @@ pub struct RpcBlock {
     pub withdrawals: Option<Vec<Withdrawal>>,
 }
 
-/// Serialize U256 as a hex quantity string.
+/// Serialize U256 as a hex string.
 ///
-/// This follows the Ethereum JSON-RPC "quantity" format:
-/// - Values are encoded as hex with "0x" prefix
-/// - Leading zeros are removed (except for 0 which is "0x0")
+/// Uses alloy_primitives' built-in U256 serialization which formats as
+/// a full 64-character hex string with "0x" prefix (e.g., "0x0000...0000").
+///
+/// Note: This differs from Ethereum's "quantity" format which strips leading
+/// zeros. For u64 fields, we use `alloy_serde::quantity::serialize` which
+/// properly strips leading zeros per the JSON-RPC spec.
 fn serialize_u256_quantity<S>(value: &U256, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
-    // Use alloy_primitives built-in serialization which already formats as hex
     value.serialize(serializer)
 }
 
@@ -157,7 +159,9 @@ impl RpcBlock {
             state_root: B256::from(storage_block.state_root),
             transactions_root: B256::from(storage_block.transactions_root),
             receipts_root: B256::from(storage_block.receipts_root),
-            logs_bloom: Bloom::from_slice(&storage_block.logs_bloom),
+            // Use try_from for safe conversion - falls back to zero bloom on invalid data
+            logs_bloom: <Bloom as TryFrom<&[u8]>>::try_from(&storage_block.logs_bloom)
+                .unwrap_or(Bloom::ZERO),
             difficulty: U256::from_be_bytes(storage_block.difficulty),
             number: storage_block.number,
             gas_limit: storage_block.gas_limit,
