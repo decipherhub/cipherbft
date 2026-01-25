@@ -16,6 +16,22 @@ use std::sync::RwLock as StdRwLock;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
+/// Result of block execution with computed block hash and parent hash.
+///
+/// This extends `ExecutionResult` with the properly computed block hash
+/// and parent hash needed for RPC responses and chain connectivity.
+#[derive(Debug, Clone)]
+pub struct BlockExecutionResult {
+    /// The underlying execution result
+    pub execution_result: ExecutionResult,
+    /// The computed block hash (keccak256 of block header fields)
+    pub block_hash: B256,
+    /// The parent block hash (hash of the previous block)
+    pub parent_hash: B256,
+    /// The block timestamp
+    pub timestamp: u64,
+}
+
 /// Bridge between consensus and execution layers
 ///
 /// Maintains the connection between the consensus layer and the execution layer,
@@ -173,11 +189,12 @@ impl ExecutionBridge {
     ///
     /// # Returns
     ///
-    /// Returns execution result with state root and receipts.
+    /// Returns `BlockExecutionResult` containing execution result with properly computed
+    /// block hash and parent hash for RPC responses.
     pub async fn execute_cut(
         &self,
         consensus_cut: cipherbft_data_chain::Cut,
-    ) -> anyhow::Result<ExecutionResult> {
+    ) -> anyhow::Result<BlockExecutionResult> {
         debug!(
             height = consensus_cut.height,
             cars = consensus_cut.cars.len(),
@@ -234,7 +251,12 @@ impl ExecutionBridge {
             "Block hash updated"
         );
 
-        Ok(result)
+        Ok(BlockExecutionResult {
+            execution_result: result,
+            block_hash: new_block_hash,
+            parent_hash,
+            timestamp,
+        })
     }
 
     /// Convert a consensus Cut to an execution Cut

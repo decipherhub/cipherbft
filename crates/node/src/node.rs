@@ -16,7 +16,7 @@
 //! 5. Exit
 
 use crate::config::NodeConfig;
-use crate::execution_bridge::ExecutionBridge;
+use crate::execution_bridge::{BlockExecutionResult, ExecutionBridge};
 use crate::network::{TcpPrimaryNetwork, TcpWorkerNetwork};
 use crate::supervisor::NodeSupervisor;
 use anyhow::{Context, Result};
@@ -32,7 +32,7 @@ use cipherbft_data_chain::{
     Cut, DclMessage, WorkerMessage,
 };
 use cipherbft_execution::{
-    keccak256, ChainConfig, ExecutionResult, InMemoryProvider, Log as ExecutionLog,
+    keccak256, ChainConfig, InMemoryProvider, Log as ExecutionLog,
     TransactionReceipt as ExecutionReceipt,
 };
 use cipherbft_storage::{
@@ -920,11 +920,12 @@ impl Node {
                     // Then store the block to MDBX for RPC queries
                     if let Some(ref bridge) = execution_bridge {
                         match bridge.execute_cut(cut).await {
-                            Ok(result) => {
+                            Ok(block_result) => {
                                 info!(
-                                    "Cut executed successfully - state_root: {}, gas_used: {}",
-                                    result.state_root,
-                                    result.gas_used
+                                    "Cut executed successfully - state_root: {}, gas_used: {}, block_hash: {}",
+                                    block_result.execution_result.state_root,
+                                    block_result.execution_result.gas_used,
+                                    block_result.block_hash
                                 );
 
                                 // Store the block to MDBX for eth_getBlockByNumber queries
@@ -934,16 +935,17 @@ impl Node {
                                     debug!("Updated RPC block number to {}", height.0);
 
                                     // Create and store the block
-                                    let block = Self::execution_result_to_block(height.0, &result);
+                                    let block = Self::execution_result_to_block(height.0, &block_result);
                                     if let Err(e) = storage.block_store().put_block(&block).await {
                                         error!("Failed to store block {} to MDBX: {}", height.0, e);
                                     } else {
-                                        debug!("Stored block {} to MDBX", height.0);
+                                        debug!("Stored block {} to MDBX with hash {}", height.0, block_result.block_hash);
                                     }
 
                                     // Store receipts for eth_getBlockReceipts queries
-                                    if !result.receipts.is_empty() {
-                                        let storage_receipts: Vec<StorageReceipt> = result
+                                    if !block_result.execution_result.receipts.is_empty() {
+                                        let storage_receipts: Vec<StorageReceipt> = block_result
+                                            .execution_result
                                             .receipts
                                             .iter()
                                             .map(Self::execution_receipt_to_storage)
@@ -977,19 +979,15 @@ impl Node {
         self.validator_id
     }
 
-    /// Convert an ExecutionResult to a storage Block for MDBX persistence.
+    /// Convert a BlockExecutionResult to a storage Block for MDBX persistence.
     ///
     /// This creates a Block struct suitable for storage from the execution result.
-    /// The block hash is derived from the execution result's block_hash field.
-    fn execution_result_to_block(block_number: u64, result: &ExecutionResult) -> Block {
-        // Get current timestamp
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+    /// The block hash and parent hash are properly computed by the ExecutionBridge.
+    fn execution_result_to_block(block_number: u64, result: &BlockExecutionResult) -> Block {
+        let exec = &result.execution_result;
 
         // Extract transaction hashes from receipts
-        let transaction_hashes: Vec<[u8; 32]> = result
+        let transaction_hashes: Vec<[u8; 32]> = exec
             .receipts
             .iter()
             .map(|r| r.transaction_hash.0)
@@ -997,20 +995,21 @@ impl Node {
         let transaction_count = transaction_hashes.len() as u32;
 
         // Create the block with execution results
+        // Use the properly computed block_hash and parent_hash from BlockExecutionResult
         Block {
             hash: result.block_hash.0,
             number: block_number,
-            parent_hash: [0u8; 32], // TODO: Track parent hash from previous block
+            parent_hash: result.parent_hash.0,
             ommers_hash: [0u8; 32], // Always empty in PoS
             beneficiary: [0u8; 20], // TODO: Set to validator address
-            state_root: result.state_root.0,
-            transactions_root: result.transactions_root.0,
-            receipts_root: result.receipts_root.0,
-            logs_bloom: result.logs_bloom.0.to_vec(),
+            state_root: exec.state_root.0,
+            transactions_root: exec.transactions_root.0,
+            receipts_root: exec.receipts_root.0,
+            logs_bloom: exec.logs_bloom.0.to_vec(),
             difficulty: [0u8; 32], // Always zero in PoS
             gas_limit: 30_000_000, // TODO: Get from config
-            gas_used: result.gas_used,
-            timestamp,
+            gas_used: exec.gas_used,
+            timestamp: result.timestamp,
             extra_data: Vec::new(),
             mix_hash: [0u8; 32],                   // prevrandao in PoS
             nonce: [0u8; 8],                       // Always zero in PoS
