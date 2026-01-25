@@ -1312,4 +1312,86 @@ mod tests {
         );
         assert_eq!(ready_c[0].position, 5);
     }
+
+    /// Test that a chain of queued CARs can be processed iteratively.
+    ///
+    /// This simulates the scenario where:
+    /// 1. Multiple CARs are queued at consecutive positions (10, 11, 12)
+    /// 2. After sync, position 10 becomes expected
+    /// 3. Processing CAR at 10 should make 11 expected, then 12, etc.
+    ///
+    /// The runner.rs loop should handle this by repeatedly calling
+    /// get_cars_ready_after_gap_filled until no more CARs are ready.
+    #[test]
+    fn test_queued_car_chain_processing() {
+        use crate::car::Car;
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let mut state = PrimaryState::new(our_id, 1000);
+
+        let validator = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
+
+        // Set initial position to 8
+        state.update_last_seen(validator, 8, Hash::compute(b"car8"));
+
+        // Queue CARs at positions 10, 11, 12 (chain with gap)
+        let car_at_10 = Car::new(validator, 10, vec![], Some(Hash::compute(b"car9")));
+        let car_at_11 = Car::new(validator, 11, vec![], Some(Hash::compute(b"car10")));
+        let car_at_12 = Car::new(validator, 12, vec![], Some(Hash::compute(b"car11")));
+
+        state.queue_car_awaiting_gap(car_at_10.clone(), 9);
+        state.queue_car_awaiting_gap(car_at_11.clone(), 9);
+        state.queue_car_awaiting_gap(car_at_12.clone(), 9);
+
+        // Verify all 3 CARs are queued
+        assert!(state.is_awaiting_gap_sync(&validator, 10));
+        assert!(state.is_awaiting_gap_sync(&validator, 11));
+        assert!(state.is_awaiting_gap_sync(&validator, 12));
+
+        // Sync with a cut that has position 9 (filling the immediate gap)
+        let mut decided_cut = Cut::new(2);
+        let car_at_9 = Car::new(validator, 9, vec![], Some(Hash::compute(b"car8")));
+        decided_cut.cars.insert(validator, car_at_9);
+        state.sync_positions_from_cut(&decided_cut);
+
+        // Expected position should now be 10
+        assert_eq!(state.expected_position(&validator), 10);
+
+        // First iteration: CAR at 10 should be ready
+        let ready_1 = state.get_cars_ready_after_gap_filled(&validator);
+        assert_eq!(ready_1.len(), 1);
+        assert_eq!(ready_1[0].position, 10);
+
+        // Simulate processing: update last_seen to 10
+        state.update_last_seen(validator, 10, car_at_10.hash());
+        assert_eq!(state.expected_position(&validator), 11);
+
+        // Second iteration: CAR at 11 should now be ready
+        let ready_2 = state.get_cars_ready_after_gap_filled(&validator);
+        assert_eq!(ready_2.len(), 1);
+        assert_eq!(ready_2[0].position, 11);
+
+        // Simulate processing: update last_seen to 11
+        state.update_last_seen(validator, 11, car_at_11.hash());
+        assert_eq!(state.expected_position(&validator), 12);
+
+        // Third iteration: CAR at 12 should now be ready
+        let ready_3 = state.get_cars_ready_after_gap_filled(&validator);
+        assert_eq!(ready_3.len(), 1);
+        assert_eq!(ready_3[0].position, 12);
+
+        // Simulate processing: update last_seen to 12
+        state.update_last_seen(validator, 12, car_at_12.hash());
+        assert_eq!(state.expected_position(&validator), 13);
+
+        // Fourth iteration: no more CARs should be ready
+        let ready_4 = state.get_cars_ready_after_gap_filled(&validator);
+        assert!(ready_4.is_empty(), "No more CARs should be ready");
+
+        // All queued CARs should have been removed
+        assert!(!state.is_awaiting_gap_sync(&validator, 10));
+        assert!(!state.is_awaiting_gap_sync(&validator, 11));
+        assert!(!state.is_awaiting_gap_sync(&validator, 12));
+    }
 }

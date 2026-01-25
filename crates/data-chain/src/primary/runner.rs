@@ -473,20 +473,35 @@ impl Primary {
                 // due to PositionGap errors. After sync_positions_from_cut() updates positions,
                 // these queued CARs may now be at the expected position and should be processed.
                 //
-                // IMPORTANT: We must check ALL validators that have queued CARs, not just those
-                // in the decided cut. A validator might have CARs queued even if they weren't
-                // included in this particular cut.
-                let validators_to_check = self.state.get_validators_with_queued_cars();
-                for validator in validators_to_check {
-                    let ready_cars = self.state.get_cars_ready_after_gap_filled(&validator);
-                    for ready_car in ready_cars {
-                        debug!(
-                            proposer = %ready_car.proposer,
-                            position = ready_car.position,
-                            "Processing queued Car after consensus decision synced positions"
-                        );
-                        self.handle_received_car(ready_car.proposer, ready_car)
-                            .await;
+                // IMPORTANT: We must process in a LOOP because:
+                // 1. Processing CAR at position N advances expected_position to N+1
+                // 2. This may make another queued CAR at position N+1 become ready
+                // 3. We need to continue until no more CARs become ready
+                //
+                // We also check ALL validators with queued CARs, not just those in the cut.
+                loop {
+                    let validators_to_check = self.state.get_validators_with_queued_cars();
+                    if validators_to_check.is_empty() {
+                        break;
+                    }
+
+                    let mut processed_any = false;
+                    for validator in validators_to_check {
+                        let ready_cars = self.state.get_cars_ready_after_gap_filled(&validator);
+                        for ready_car in ready_cars {
+                            debug!(
+                                proposer = %ready_car.proposer,
+                                position = ready_car.position,
+                                "Processing queued Car after consensus decision synced positions"
+                            );
+                            self.handle_received_car(ready_car.proposer, ready_car)
+                                .await;
+                            processed_any = true;
+                        }
+                    }
+
+                    if !processed_any {
+                        break; // No more CARs became ready, exit loop
                     }
                 }
 
