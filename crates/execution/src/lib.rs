@@ -237,9 +237,9 @@ impl<P: Provider + Clone> ExecutionLayer<P> {
         self.engine
             .database()
             .get_account(address)?
-            .ok_or_else(|| {
-                ExecutionError::Database(error::DatabaseError::AccountNotFound(address))
-            })
+            .ok_or(ExecutionError::Database(
+                error::DatabaseError::AccountNotFound(address),
+            ))
     }
 
     /// Query contract code.
@@ -253,13 +253,13 @@ impl<P: Provider + Clone> ExecutionLayer<P> {
     /// Returns the contract bytecode.
     pub fn get_code(&self, address: Address) -> Result<Bytes> {
         // First get the account to find the code hash
-        let account = self
-            .engine
-            .database()
-            .get_account(address)?
-            .ok_or_else(|| {
-                ExecutionError::Database(error::DatabaseError::AccountNotFound(address))
-            })?;
+        let account =
+            self.engine
+                .database()
+                .get_account(address)?
+                .ok_or(ExecutionError::Database(
+                    error::DatabaseError::AccountNotFound(address),
+                ))?;
 
         // If code_hash is zero, this is an EOA with no code
         if account.code_hash == B256::ZERO || account.code_hash == keccak256([]) {
