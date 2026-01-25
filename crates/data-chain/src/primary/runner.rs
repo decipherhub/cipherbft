@@ -508,6 +508,13 @@ impl Primary {
                 // Advance state to allow producing cuts for the next height
                 self.state.finalize_height(height);
 
+                // CRITICAL: Try to form a cut now that we're in Collecting stage.
+                // This handles the case where queued CARs were processed above and reached
+                // attestation threshold BEFORE finalize_height() was called. At that point,
+                // try_form_cut() would have returned early because pipeline_stage was still
+                // Proposing. Now that we're in Collecting stage, we can form the cut.
+                self.try_form_cut().await;
+
                 debug!(
                     new_height = self.state.current_height,
                     last_finalized = self.state.last_finalized_height,
