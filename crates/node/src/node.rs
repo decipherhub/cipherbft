@@ -32,7 +32,7 @@ use cipherbft_data_chain::{
     Cut, DclMessage, WorkerMessage,
 };
 use cipherbft_execution::{
-    ChainConfig, ExecutionResult, InMemoryProvider, Log as ExecutionLog,
+    keccak256, ChainConfig, ExecutionResult, InMemoryProvider, Log as ExecutionLog,
     TransactionReceipt as ExecutionReceipt,
 };
 use cipherbft_storage::{
@@ -717,7 +717,35 @@ impl Node {
                 chain_id,
             ));
 
+            // Ensure genesis block (block 0) exists for Ethereum RPC compatibility
+            // Block explorers like Blockscout expect block 0 to exist
+            match storage.block_store().get_block_by_number(0).await {
+                Ok(Some(_)) => {
+                    debug!("Genesis block (block 0) already exists in storage");
+                }
+                Ok(None) => {
+                    // Create and store genesis block
+                    let genesis_timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let genesis_block = Self::create_genesis_block(genesis_timestamp);
+                    if let Err(e) = storage.block_store().put_block(&genesis_block).await {
+                        error!("Failed to store genesis block: {}", e);
+                    } else {
+                        info!(
+                            "Created genesis block (block 0) with hash 0x{}",
+                            hex::encode(&genesis_block.hash[..8])
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to check for genesis block: {}", e);
+                }
+            }
+
             // Initialize latest_block from storage (important for restart scenarios)
+            // Note: We check for the latest block AFTER ensuring genesis exists
             if let Ok(Some(latest)) = storage.block_store().get_latest_block_number().await {
                 storage.set_latest_block(latest);
                 info!("Initialized RPC latest_block from storage: {}", latest);
@@ -1037,6 +1065,64 @@ impl Node {
             data: log.data.to_vec(),
             log_index,
             transaction_index,
+        }
+    }
+
+    /// Create a genesis block (block 0) for RPC compatibility.
+    ///
+    /// Ethereum block explorers like Blockscout expect a genesis block to exist.
+    /// This creates a minimal genesis block with empty transactions and standard values.
+    ///
+    /// # Arguments
+    /// * `timestamp` - Genesis block timestamp (Unix seconds)
+    ///
+    /// # Returns
+    /// A Block struct representing the genesis block (block 0).
+    fn create_genesis_block(timestamp: u64) -> Block {
+        // Empty trie root: keccak256(RLP([]))
+        // This is the standard Ethereum empty trie root
+        let empty_trie_root: [u8; 32] = [
+            0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6, 0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0,
+            0xf8, 0x6e, 0x5b, 0x48, 0xe0, 0x1b, 0x99, 0x6c, 0xad, 0xc0, 0x01, 0x62, 0x2f, 0xb5,
+            0xe3, 0x63, 0xb4, 0x21,
+        ];
+
+        // Ommers hash for empty list: keccak256(RLP([]))
+        // In Ethereum, this is the hash of an empty list
+        let empty_ommers_hash: [u8; 32] = [
+            0x1d, 0xcc, 0x4d, 0xe8, 0xde, 0xc7, 0x5d, 0x7a, 0xab, 0x85, 0xb5, 0x67, 0xb6, 0xcc,
+            0xd4, 0x1a, 0xd3, 0x12, 0x45, 0x1b, 0x94, 0x8a, 0x74, 0x13, 0xf0, 0xa1, 0x42, 0xfd,
+            0x40, 0xd4, 0x93, 0x47,
+        ];
+
+        // Create a deterministic genesis block hash based on timestamp
+        // This ensures the same genesis always produces the same hash
+        let mut hash_input = Vec::new();
+        hash_input.extend_from_slice(b"cipherbft-genesis-");
+        hash_input.extend_from_slice(&timestamp.to_be_bytes());
+        let genesis_hash: [u8; 32] = keccak256(&hash_input).0;
+
+        Block {
+            hash: genesis_hash,
+            number: 0,
+            parent_hash: [0u8; 32], // Genesis has no parent
+            ommers_hash: empty_ommers_hash,
+            beneficiary: [0u8; 20], // No validator for genesis
+            state_root: empty_trie_root,
+            transactions_root: empty_trie_root,
+            receipts_root: empty_trie_root,
+            logs_bloom: vec![0u8; 256], // Empty bloom filter
+            difficulty: [0u8; 32],      // Zero in PoS
+            gas_limit: 30_000_000,      // Standard gas limit
+            gas_used: 0,                // No transactions in genesis
+            timestamp,
+            extra_data: b"CipherBFT Genesis".to_vec(),
+            mix_hash: [0u8; 32],                   // Zero in PoS
+            nonce: [0u8; 8],                       // Zero in PoS
+            base_fee_per_gas: Some(1_000_000_000), // 1 gwei
+            transaction_hashes: Vec::new(),        // No transactions
+            transaction_count: 0,
+            total_difficulty: [0u8; 32], // Zero in PoS
         }
     }
 }
