@@ -729,8 +729,9 @@ async fn cmd_start(
 
     info!("Starting node as validator {:?}", validator_id);
 
-    // Create node with keypairs and bootstrap validators from genesis
-    let mut node = Node::new(config, bls_keypair, ed25519_keypair)?;
+    // Create node with keypairs, enable execution layer, and bootstrap validators from genesis
+    let mut node = Node::new(config, bls_keypair, ed25519_keypair)?
+        .with_execution_layer_from_genesis(&genesis)?;
     node.bootstrap_validators_from_genesis(&genesis)?;
 
     // Create a supervisor for structured task management and graceful shutdown
