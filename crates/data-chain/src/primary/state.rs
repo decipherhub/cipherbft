@@ -230,7 +230,7 @@ impl PrimaryState {
         for (validator, car) in &cut.cars {
             let current_pos = self.last_seen_positions.get(validator).copied();
             // Only update if the decided position is higher than our current tracking
-            if current_pos.map_or(true, |p| car.position > p) {
+            if current_pos.is_none_or(|p| car.position > p) {
                 self.last_seen_positions.insert(*validator, car.position);
                 self.last_seen_car_hashes.insert(*validator, car.hash());
             }
