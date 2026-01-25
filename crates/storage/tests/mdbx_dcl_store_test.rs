@@ -5,7 +5,7 @@
 
 #![cfg(feature = "mdbx")]
 
-use cipherbft_crypto::{BlsKeyPair, BlsSignature};
+use cipherbft_crypto::BlsKeyPair;
 use cipherbft_data_chain::{AggregatedAttestation, Batch, BatchDigest, Car, Cut};
 use cipherbft_storage::dcl::{DclStore, DclStoreExt, DclStoreTx};
 use cipherbft_storage::mdbx::{Database, DatabaseConfig, MdbxDclStore};
@@ -42,15 +42,7 @@ fn create_validator_id(seed: u8) -> ValidatorId {
     ValidatorId::from_bytes(bytes)
 }
 
-/// Helper to create a dummy BLS signature
-fn create_dummy_signature() -> BlsSignature {
-    // Generate a keypair just for testing
-    let keypair = BlsKeyPair::generate(&mut rand::thread_rng());
-    // Use sign_car for a generic signature (domain-separated)
-    keypair.sign_car(b"test message for car signature")
-}
-
-/// Helper to create a test Car
+/// Helper to create a test Car with proper signature
 fn create_test_car(proposer: ValidatorId, position: u64, batch_hashes: &[Hash]) -> Car {
     let batch_digests: Vec<BatchDigest> = batch_hashes
         .iter()
@@ -63,38 +55,33 @@ fn create_test_car(proposer: ValidatorId, position: u64, batch_hashes: &[Hash]) 
         })
         .collect();
 
-    let signature = create_dummy_signature();
-
-    Car {
-        proposer,
-        position,
-        batch_digests,
-        parent_ref: None,
-        signature,
-    }
+    // Create Car and sign it properly
+    let mut car = Car::new(proposer, position, batch_digests, None);
+    let keypair = BlsKeyPair::generate(&mut rand::thread_rng());
+    let signing_bytes = car.signing_bytes();
+    car.signature = keypair.sign_car(&signing_bytes);
+    car
 }
 
-/// Helper to create a test attestation
+/// Helper to create a test attestation with proper signatures
 fn create_test_attestation(car: &Car) -> AggregatedAttestation {
-    use bitvec::prelude::*;
+    use cipherbft_data_chain::Attestation;
 
-    let mut validators = BitVec::<u8, Lsb0>::new();
-    validators.push(true);
-    validators.push(true);
-    validators.push(false);
-    validators.push(true);
+    // Create attestations at indices 0, 1, 3 (matching the original bitmap pattern)
+    let attester_indices = [0usize, 1, 3];
+    let attestations_with_indices: Vec<(Attestation, usize)> = attester_indices
+        .iter()
+        .map(|&idx| {
+            let keypair = BlsKeyPair::generate(&mut rand::thread_rng());
+            let attester_id = create_validator_id(idx as u8);
+            let mut att = Attestation::from_car(car, attester_id);
+            att.signature = keypair.sign_attestation(&att.get_signing_bytes());
+            (att, idx)
+        })
+        .collect();
 
-    let keypair = BlsKeyPair::generate(&mut rand::thread_rng());
-    let sig = keypair.sign_attestation(car.hash().as_bytes());
-    let agg_sig = cipherbft_crypto::BlsAggregateSignature::from_signature(&sig);
-
-    AggregatedAttestation {
-        car_hash: car.hash(),
-        car_position: car.position,
-        car_proposer: car.proposer,
-        aggregated_signature: agg_sig,
-        validators,
-    }
+    AggregatedAttestation::aggregate_with_indices(&attestations_with_indices, 4)
+        .expect("aggregation should succeed")
 }
 
 // ============================================================

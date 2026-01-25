@@ -400,21 +400,25 @@ mod tests {
 
     #[test]
     fn test_attester_indices() {
-        let mut validators = bitvec![u8, Lsb0; 0; 10];
-        validators.set(1, true);
-        validators.set(3, true);
-        validators.set(7, true);
+        // Create a test car to attest
+        let proposer_kp = BlsKeyPair::generate(&mut rand::thread_rng());
+        let car = make_test_car(&proposer_kp);
 
-        let agg = AggregatedAttestation {
-            car_hash: Hash::ZERO,
-            car_position: 0,
-            car_proposer: ValidatorId::ZERO,
-            validators,
-            aggregated_signature: {
+        // Create attestations at specific indices (1, 3, 7)
+        let attester_indices = [1usize, 3, 7];
+        let attestations_with_indices: Vec<(Attestation, usize)> = attester_indices
+            .iter()
+            .map(|&idx| {
                 let kp = BlsKeyPair::generate(&mut rand::thread_rng());
-                BlsAggregateSignature::from_signature(&kp.sign_attestation(b"dummy"))
-            },
-        };
+                let attester_id = validator_id_from_bls_pubkey(&kp.public_key);
+                let mut att = Attestation::from_car(&car, attester_id);
+                att.signature = kp.sign_attestation(&att.get_signing_bytes());
+                (att, idx)
+            })
+            .collect();
+
+        let agg = AggregatedAttestation::aggregate_with_indices(&attestations_with_indices, 10)
+            .expect("aggregation should succeed");
 
         assert_eq!(agg.attester_indices(), vec![1, 3, 7]);
         assert!(agg.has_attested(1));

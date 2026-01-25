@@ -755,18 +755,35 @@ pub struct PipelineSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cipherbft_crypto::BlsKeyPair;
     use cipherbft_types::VALIDATOR_ID_SIZE;
 
-    /// Create a dummy signature for testing
-    fn dummy_signature() -> cipherbft_crypto::BlsSignature {
-        let kp = cipherbft_crypto::BlsKeyPair::generate(&mut rand::thread_rng());
-        kp.sign_attestation(b"dummy")
+    /// Create a properly signed attestation for testing
+    fn create_signed_attestation(
+        car: &crate::car::Car,
+        attester_index: usize,
+    ) -> crate::attestation::Attestation {
+        let kp = BlsKeyPair::generate(&mut rand::thread_rng());
+        let attester_id = ValidatorId::from_bytes([attester_index as u8; VALIDATOR_ID_SIZE]);
+        let mut att = crate::attestation::Attestation::from_car(car, attester_id);
+        att.signature = kp.sign_attestation(&att.get_signing_bytes());
+        att
     }
 
-    /// Create a dummy aggregate signature for testing
-    fn dummy_aggregate_signature() -> cipherbft_crypto::BlsAggregateSignature {
-        let sig = dummy_signature();
-        cipherbft_crypto::BlsAggregateSignature::from_signature(&sig)
+    /// Create a properly aggregated attestation for testing
+    fn create_aggregated_attestation(
+        car: &crate::car::Car,
+        attester_indices: &[usize],
+        validator_count: usize,
+    ) -> AggregatedAttestation {
+        let attestations_with_indices: Vec<(crate::attestation::Attestation, usize)> =
+            attester_indices
+                .iter()
+                .map(|&idx| (create_signed_attestation(car, idx), idx))
+                .collect();
+
+        AggregatedAttestation::aggregate_with_indices(&attestations_with_indices, validator_count)
+            .expect("aggregation should succeed with valid attestations")
     }
 
     #[test]
@@ -847,7 +864,6 @@ mod tests {
     #[test]
     fn test_preserve_attested_cars_on_timeout() {
         use crate::car::Car;
-        use bitvec::prelude::*;
 
         let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
         let mut state = PrimaryState::new(our_id, 1000);
@@ -859,24 +875,9 @@ mod tests {
         let car1 = Car::new(validator1, 5, vec![], None);
         let car2 = Car::new(validator2, 3, vec![], None);
 
-        let mut bv = bitvec![u8, Lsb0; 0; 4];
-        bv.set(0, true);
-        bv.set(1, true);
-
-        let agg1 = AggregatedAttestation {
-            car_hash: car1.hash(),
-            car_position: car1.position,
-            car_proposer: car1.proposer,
-            validators: bv.clone(),
-            aggregated_signature: dummy_aggregate_signature(),
-        };
-        let agg2 = AggregatedAttestation {
-            car_hash: car2.hash(),
-            car_position: car2.position,
-            car_proposer: car2.proposer,
-            validators: bv,
-            aggregated_signature: dummy_aggregate_signature(),
-        };
+        // Create properly aggregated attestations (validators 0 and 1 attesting)
+        let agg1 = create_aggregated_attestation(&car1, &[0, 1], 4);
+        let agg2 = create_aggregated_attestation(&car2, &[0, 1], 4);
 
         state.mark_attested(car1.clone(), agg1.clone());
         state.mark_attested(car2.clone(), agg2.clone());
@@ -899,21 +900,20 @@ mod tests {
 
     #[test]
     fn test_next_height_attestations() {
+        use crate::car::Car;
+
         let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
         let mut state = PrimaryState::new(our_id, 1000);
         state.current_height = 5;
 
         let attester = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
-        let car_hash = Hash::compute(b"car_for_height_6");
 
-        // Create attestation for future height
-        let attestation = Attestation {
-            car_hash,
-            car_position: 0,
-            car_proposer: attester,
-            attester,
-            signature: dummy_signature(),
-        };
+        // Create a car for the attestation
+        let car = Car::new(attester, 0, vec![], None);
+        let car_hash = car.hash();
+
+        // Create properly signed attestation for future height
+        let attestation = create_signed_attestation(&car, 2);
 
         // Store for height 6 (next height)
         state.store_next_height_attestation(6, attestation.clone());
@@ -932,18 +932,18 @@ mod tests {
 
     #[test]
     fn test_finalize_height() {
+        use crate::car::Car;
+
         let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
         let mut state = PrimaryState::new(our_id, 1000);
         state.current_height = 5;
 
-        // Store some next-height attestations
-        let attestation = Attestation {
-            car_hash: Hash::compute(b"car"),
-            car_position: 0,
-            car_proposer: our_id,
-            attester: our_id,
-            signature: dummy_signature(),
-        };
+        // Create a car for the attestation
+        let car = Car::new(our_id, 0, vec![], None);
+
+        // Create properly signed attestation
+        let attestation = create_signed_attestation(&car, 0);
+
         state.store_next_height_attestation(4, attestation.clone()); // Old - should be cleared
         state.store_next_height_attestation(6, attestation.clone()); // Future - should be kept
 
@@ -962,38 +962,22 @@ mod tests {
     #[test]
     fn test_get_all_attested_cars_merges_preserved() {
         use crate::car::Car;
-        use bitvec::prelude::*;
 
         let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
         let mut state = PrimaryState::new(our_id, 1000);
 
         let validator = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
 
-        // Create preserved car at position 3
+        // Create preserved car at position 3 with proper aggregated attestation
         let car_old = Car::new(validator, 3, vec![], None);
-        let mut bv = bitvec![u8, Lsb0; 0; 4];
-        bv.set(0, true);
-        bv.set(1, true);
-        let agg_old = AggregatedAttestation {
-            car_hash: car_old.hash(),
-            car_position: car_old.position,
-            car_proposer: car_old.proposer,
-            validators: bv.clone(),
-            aggregated_signature: dummy_aggregate_signature(),
-        };
+        let agg_old = create_aggregated_attestation(&car_old, &[0, 1], 4);
         state
             .preserved_attested_cars
             .insert(validator, (car_old.clone(), agg_old));
 
-        // Create current car at position 5 (newer)
+        // Create current car at position 5 (newer) with proper aggregated attestation
         let car_new = Car::new(validator, 5, vec![], None);
-        let agg_new = AggregatedAttestation {
-            car_hash: car_new.hash(),
-            car_position: car_new.position,
-            car_proposer: car_new.proposer,
-            validators: bv,
-            aggregated_signature: dummy_aggregate_signature(),
-        };
+        let agg_new = create_aggregated_attestation(&car_new, &[0, 1], 4);
         state
             .attested_cars
             .insert(validator, (car_new.clone(), agg_new));
