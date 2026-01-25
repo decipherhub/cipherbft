@@ -201,27 +201,28 @@ mod tests {
         attestation_count: usize,
         validator_count: usize,
     ) -> (Car, AggregatedAttestation) {
-        use bitvec::prelude::*;
+        use crate::attestation::Attestation;
 
         let car = Car::new(validator, position, vec![], None);
-        let car_hash = car.hash();
 
-        let mut validators_bv = bitvec![u8, Lsb0; 0; validator_count];
-        for i in 0..attestation_count {
-            validators_bv.set(i, true);
-        }
+        // Generate keypairs for each attester and create proper signed attestations
+        let attestations_with_indices: Vec<(Attestation, usize)> = (0..attestation_count)
+            .map(|i| {
+                let kp = BlsKeyPair::generate(&mut rand::thread_rng());
+                let attester_id = ValidatorId::from_bytes([i as u8; VALIDATOR_ID_SIZE]);
+                let mut att = Attestation::from_car(&car, attester_id);
+                let signing_bytes = att.get_signing_bytes();
+                att.signature = kp.sign_attestation(&signing_bytes);
+                (att, i)
+            })
+            .collect();
 
-        // Create dummy aggregate signature
-        let kp = BlsKeyPair::generate(&mut rand::thread_rng());
-        let sig = kp.sign_attestation(b"dummy");
-
-        let attestation = AggregatedAttestation {
-            car_hash,
-            car_position: position,
-            car_proposer: validator,
-            validators: validators_bv,
-            aggregated_signature: cipherbft_crypto::BlsAggregateSignature::from_signature(&sig),
-        };
+        // Use proper aggregation instead of dummy signature
+        let attestation = AggregatedAttestation::aggregate_with_indices(
+            &attestations_with_indices,
+            validator_count,
+        )
+        .expect("aggregation should succeed with valid attestations");
 
         (car, attestation)
     }
