@@ -1935,6 +1935,7 @@ impl crate::traits::DebugExecutionApi for StubDebugExecutionApi {
         debug!("StubDebugExecutionApi::trace_block(block={:?})", block);
         // Return empty traces for now
         Ok(vec![])
+    }
 }
 
 // ============================================================================

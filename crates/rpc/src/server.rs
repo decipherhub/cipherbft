@@ -85,6 +85,7 @@ where
             mempool,
             executor,
             network,
+            debug_executor,
             Arc::new(SubscriptionManager::default()),
         )
     }
@@ -100,6 +101,7 @@ where
         mempool: Arc<M>,
         executor: Arc<E>,
         network: Arc<N>,
+        debug_executor: Arc<D>,
         subscription_manager: Arc<SubscriptionManager>,
     ) -> Self {
         Self {

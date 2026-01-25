@@ -172,7 +172,7 @@ where
             .map_err(Self::to_json_rpc_error)?
             .ok_or_else(|| RpcError::Internal(format!("Block {} not found", block_hash)))?;
 
-        let block_number = block.header.number;
+        let block_number = block.number;
 
         self.debug_executor
             .trace_transaction(tx_hash, BlockNumberOrTag::Number(block_number), options)
@@ -235,7 +235,7 @@ where
             .map_err(Self::to_json_rpc_error)?
             .ok_or_else(|| RpcError::Internal(format!("Block {} not found", block_hash)))?;
 
-        let block_number = block.header.number;
+        let block_number = block.number;
 
         self.debug_executor
             .trace_block(BlockNumberOrTag::Number(block_number), options)
