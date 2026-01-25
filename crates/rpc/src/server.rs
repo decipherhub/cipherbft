@@ -14,6 +14,7 @@ use crate::eth::{EthApi, EthRpcServer};
 use crate::net::{NetApi, NetRpcServer};
 use crate::pubsub::{EthPubSubApi, EthPubSubRpcServer, SubscriptionManager};
 use crate::traits::{ExecutionApi, MempoolApi, NetworkApi, RpcStorage};
+use crate::txpool::{TxPoolApi, TxPoolRpcServer};
 use crate::web3::{Web3Api, Web3RpcServer};
 
 /// RPC server state.
@@ -129,6 +130,13 @@ where
             crate::error::RpcError::Internal(format!("Failed to merge web3 module: {}", e))
         })?;
         info!("Registered web3_* namespace");
+
+        // Register txpool_* namespace
+        let txpool_api = TxPoolApi::new(Arc::clone(&self.mempool));
+        module.merge(txpool_api.into_rpc()).map_err(|e| {
+            crate::error::RpcError::Internal(format!("Failed to merge txpool module: {}", e))
+        })?;
+        info!("Registered txpool_* namespace");
 
         // Register eth pubsub (WebSocket subscriptions)
         let pubsub_api = EthPubSubApi::new(Arc::clone(&self.subscription_manager));
