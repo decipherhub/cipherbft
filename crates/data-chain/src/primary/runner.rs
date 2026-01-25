@@ -472,7 +472,11 @@ impl Primary {
                 // When CARs arrive before the consensus decision is processed, they get queued
                 // due to PositionGap errors. After sync_positions_from_cut() updates positions,
                 // these queued CARs may now be at the expected position and should be processed.
-                let validators_to_check: Vec<ValidatorId> = cut.cars.keys().copied().collect();
+                //
+                // IMPORTANT: We must check ALL validators that have queued CARs, not just those
+                // in the decided cut. A validator might have CARs queued even if they weren't
+                // included in this particular cut.
+                let validators_to_check = self.state.get_validators_with_queued_cars();
                 for validator in validators_to_check {
                     let ready_cars = self.state.get_cars_ready_after_gap_filled(&validator);
                     for ready_car in ready_cars {
