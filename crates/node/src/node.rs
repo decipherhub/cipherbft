@@ -918,7 +918,7 @@ impl Node {
                                         let storage_receipts: Vec<StorageReceipt> = result
                                             .receipts
                                             .iter()
-                                            .map(|r| Self::execution_receipt_to_storage(r))
+                                            .map(Self::execution_receipt_to_storage)
                                             .collect();
                                         if let Err(e) = storage.receipt_store().put_receipts(&storage_receipts).await {
                                             error!("Failed to store {} receipts for block {}: {}", storage_receipts.len(), height.0, e);
