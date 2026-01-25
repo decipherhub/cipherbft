@@ -563,8 +563,7 @@ impl Node {
             // the cut buffer filling up before consensus can use them
             info!("DCL DISABLED - spawning empty cut sender for consensus bypass");
             let cut_tx_bypass = cut_tx.clone();
-            let token = cancel_token.clone();
-            tokio::spawn(async move {
+            supervisor.spawn_cancellable("empty-cut-sender", move |token| async move {
                 let mut height = 1u64;
 
                 // Send the first cut immediately at height 1
@@ -572,7 +571,7 @@ impl Node {
                 info!("Sending initial empty cut for height {}", height);
                 if let Err(e) = cut_tx_bypass.send(empty_cut).await {
                     warn!("Failed to send initial empty cut: {}", e);
-                    return;
+                    return Ok(());
                 }
                 height += 1;
 
@@ -605,6 +604,7 @@ impl Node {
                         }
                     }
                 }
+                Ok(())
             });
         }
 
@@ -1100,8 +1100,10 @@ impl Node {
 
                     // Signal empty cut sender to advance (when DCL disabled)
                     // This creates lockstep: cut -> propose -> decide -> next cut
-                    // Note: When DCL is enabled, the receiver is dropped, so this send will fail silently
-                    let _ = cut_advance_tx.try_send(());
+                    // Using send().await ensures strict synchronization - consensus waits until
+                    // the empty cut sender has processed the previous signal before continuing.
+                    // Note: When DCL is enabled, the receiver is dropped, so this send will fail silently.
+                    let _ = cut_advance_tx.send(()).await;
                 }
             }
         }
