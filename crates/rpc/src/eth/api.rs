@@ -6,8 +6,8 @@ use alloy_consensus::transaction::SignerRecoverable;
 use alloy_consensus::{Transaction as TxTrait, TxEnvelope};
 use alloy_primitives::{Address, Bytes, B256, U256, U64};
 use alloy_rpc_types_eth::{
-    transaction::AccessListResult, EIP1186AccountProofResponse, FeeHistory, Filter, Log,
-    SyncInfo, SyncStatus as EthSyncStatus, Transaction, TransactionReceipt,
+    transaction::AccessListResult, EIP1186AccountProofResponse, FeeHistory, Filter, Log, SyncInfo,
+    SyncStatus as EthSyncStatus, Transaction, TransactionReceipt,
 };
 
 use crate::types::RpcBlock;
