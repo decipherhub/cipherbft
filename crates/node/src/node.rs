@@ -987,11 +987,8 @@ impl Node {
         let exec = &result.execution_result;
 
         // Extract transaction hashes from receipts
-        let transaction_hashes: Vec<[u8; 32]> = exec
-            .receipts
-            .iter()
-            .map(|r| r.transaction_hash.0)
-            .collect();
+        let transaction_hashes: Vec<[u8; 32]> =
+            exec.receipts.iter().map(|r| r.transaction_hash.0).collect();
         let transaction_count = transaction_hashes.len() as u32;
 
         // Create the block with execution results
