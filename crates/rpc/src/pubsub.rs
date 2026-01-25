@@ -12,7 +12,9 @@ use tokio::sync::broadcast;
 use tracing::{debug, trace, warn};
 
 use alloy_primitives::B256;
-use alloy_rpc_types_eth::{Block, Filter, Log, SyncStatus, Transaction};
+use alloy_rpc_types_eth::{Filter, Log, SyncStatus, Transaction};
+
+use crate::types::RpcBlock;
 
 use crate::error::RpcError;
 
@@ -88,7 +90,7 @@ pub struct Subscription {
 #[derive(Debug, Clone)]
 pub enum SubscriptionEvent {
     /// New block header.
-    NewHead(Box<Block>),
+    NewHead(Box<RpcBlock>),
     /// New log entry.
     Log(Box<Log>),
     /// New pending transaction hash.
@@ -106,7 +108,7 @@ pub struct SubscriptionManager {
     /// Counter for generating unique subscription IDs.
     next_id: AtomicU64,
     /// Broadcast channel for new block headers.
-    block_tx: broadcast::Sender<Box<Block>>,
+    block_tx: broadcast::Sender<Box<RpcBlock>>,
     /// Broadcast channel for logs.
     log_tx: broadcast::Sender<Box<Log>>,
     /// Broadcast channel for pending transaction hashes.
@@ -164,7 +166,7 @@ impl SubscriptionManager {
     }
 
     /// Broadcast a new block header to all newHeads subscribers.
-    pub fn broadcast_block(&self, block: Block) {
+    pub fn broadcast_block(&self, block: RpcBlock) {
         let _ = self.block_tx.send(Box::new(block));
     }
 
@@ -184,7 +186,7 @@ impl SubscriptionManager {
     }
 
     /// Subscribe to new block headers channel.
-    pub fn subscribe_blocks(&self) -> broadcast::Receiver<Box<Block>> {
+    pub fn subscribe_blocks(&self) -> broadcast::Receiver<Box<RpcBlock>> {
         self.block_tx.subscribe()
     }
 

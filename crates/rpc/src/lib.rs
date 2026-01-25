@@ -151,6 +151,7 @@ pub mod pubsub;
 pub mod server;
 pub mod traits;
 pub mod txpool;
+pub mod types;
 pub mod web3;
 
 // Core types
@@ -169,6 +170,9 @@ pub use adapters::{EvmExecutionApi, MdbxRpcStorage, PoolMempoolApi, ProviderBase
 
 // Block conversion utilities for subscription broadcasting
 pub use adapters::storage_block_to_rpc_block;
+
+// Custom RPC types with proper hex serialization
+pub use types::RpcBlock;
 
 // RPC server traits (for method registration)
 pub use eth::EthRpcServer;
