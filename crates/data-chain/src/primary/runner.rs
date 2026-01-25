@@ -481,7 +481,8 @@ impl Primary {
                             position = ready_car.position,
                             "Processing queued Car after consensus decision synced positions"
                         );
-                        self.handle_received_car(ready_car.proposer, ready_car).await;
+                        self.handle_received_car(ready_car.proposer, ready_car)
+                            .await;
                     }
                 }
 
