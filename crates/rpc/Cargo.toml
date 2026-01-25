@@ -27,6 +27,7 @@ alloy-rlp = "0.3"
 alloy-rpc-types = { workspace = true }
 alloy-rpc-types-eth = { workspace = true }
 alloy-consensus = { workspace = true }
+alloy-eips = { version = "1", default-features = false, features = ["serde"] }
 alloy-serde = "1"
 
 # Reth primitives for Ethereum compatibility

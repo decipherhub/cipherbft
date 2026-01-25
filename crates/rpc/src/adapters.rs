@@ -20,9 +20,7 @@
 //! - `StubNetworkApi`: Placeholder until P2P integration
 
 use alloy_primitives::{Address, Bytes, B256, U256};
-use alloy_rpc_types_eth::{
-    Block, BlockTransactions, Filter, Header, Log, Transaction, TransactionReceipt,
-};
+use alloy_rpc_types_eth::{Filter, Log, Transaction, TransactionReceipt};
 use async_trait::async_trait;
 use cipherbft_execution::database::Provider;
 use cipherbft_mempool::pool::RecoveredTx;
@@ -502,85 +500,6 @@ impl<P: Provider> MdbxRpcStorage<P> {
         }
     }
 
-    /// Convert a storage block to an RPC block.
-    ///
-    /// # Arguments
-    ///
-    /// * `storage_block` - The block from storage
-    /// * `full_txs` - If true, include full transaction objects; otherwise just hashes
-    ///
-    /// # Returns
-    ///
-    /// An RPC Block suitable for JSON-RPC responses.
-    fn storage_block_to_rpc(
-        &self,
-        storage_block: cipherbft_storage::blocks::Block,
-        full_txs: bool,
-    ) -> Block {
-        use alloy_primitives::{Bloom, B64};
-
-        // Convert transaction hashes to B256
-        let tx_hashes: Vec<B256> = storage_block
-            .transaction_hashes
-            .iter()
-            .map(|h| B256::from(*h))
-            .collect();
-
-        // Build transactions field based on full_txs flag
-        // For now, we only support returning hashes (full tx bodies will come later)
-        let transactions = if full_txs {
-            // TODO: In the future, this should return full Transaction objects
-            // For now, return hashes even when full_txs is true
-            BlockTransactions::Hashes(tx_hashes)
-        } else {
-            BlockTransactions::Hashes(tx_hashes)
-        };
-
-        // Build the consensus header
-        let consensus_header = alloy_consensus::Header {
-            parent_hash: B256::from(storage_block.parent_hash),
-            ommers_hash: B256::from(storage_block.ommers_hash),
-            beneficiary: Address::from(storage_block.beneficiary),
-            state_root: B256::from(storage_block.state_root),
-            transactions_root: B256::from(storage_block.transactions_root),
-            receipts_root: B256::from(storage_block.receipts_root),
-            logs_bloom: Bloom::from_slice(&storage_block.logs_bloom),
-            difficulty: U256::from_be_bytes(storage_block.difficulty),
-            number: storage_block.number,
-            gas_limit: storage_block.gas_limit,
-            gas_used: storage_block.gas_used,
-            timestamp: storage_block.timestamp,
-            extra_data: Bytes::from(storage_block.extra_data),
-            mix_hash: B256::from(storage_block.mix_hash),
-            nonce: B64::from(storage_block.nonce),
-            base_fee_per_gas: storage_block.base_fee_per_gas,
-            withdrawals_root: None,
-            blob_gas_used: None,
-            excess_blob_gas: None,
-            parent_beacon_block_root: None,
-            requests_hash: None,
-        };
-
-        // Build the RPC header with hash and total difficulty
-        let block_hash = B256::from(storage_block.hash);
-        let total_difficulty = U256::from_be_bytes(storage_block.total_difficulty);
-
-        let rpc_header = Header {
-            hash: block_hash,
-            inner: consensus_header,
-            total_difficulty: Some(total_difficulty),
-            size: None,
-        };
-
-        // Build the final RPC block
-        Block {
-            header: rpc_header,
-            uncles: Vec::new(),
-            transactions,
-            withdrawals: None,
-        }
-    }
-
     /// Convert a storage receipt to an RPC transaction receipt.
     fn storage_receipt_to_rpc(
         &self,
@@ -729,9 +648,10 @@ impl<P: Provider + 'static> RpcStorage for MdbxRpcStorage<P> {
                     "Found block {} with hash {:?}",
                     resolved, storage_block.hash
                 );
-                let block = self.storage_block_to_rpc(storage_block, full_transactions);
-                // Convert to RpcBlock for proper hex serialization
-                Ok(Some(RpcBlock::from(block)))
+                // Convert directly to RpcBlock for proper hex serialization
+                // Note: full_transactions is currently ignored (always returns hashes)
+                let _ = full_transactions; // TODO: Support full transaction bodies
+                Ok(Some(RpcBlock::from_storage(storage_block)))
             }
             Ok(None) => {
                 trace!("Block {} not found", resolved);
@@ -757,9 +677,10 @@ impl<P: Provider + 'static> RpcStorage for MdbxRpcStorage<P> {
         match self.block_store.get_block_by_hash(&hash_bytes).await {
             Ok(Some(storage_block)) => {
                 debug!("Found block {} with hash {}", storage_block.number, hash);
-                let block = self.storage_block_to_rpc(storage_block, full_transactions);
-                // Convert to RpcBlock for proper hex serialization
-                Ok(Some(RpcBlock::from(block)))
+                // Convert directly to RpcBlock for proper hex serialization
+                // Note: full_transactions is currently ignored (always returns hashes)
+                let _ = full_transactions; // TODO: Support full transaction bodies
+                Ok(Some(RpcBlock::from_storage(storage_block)))
             }
             Ok(None) => {
                 trace!("Block with hash {} not found", hash);
