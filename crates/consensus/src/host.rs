@@ -114,6 +114,21 @@ pub trait ValueBuilder: Send + Sync + 'static {
     /// The value is stored so it can be retrieved later when consensus decides.
     /// This enables non-proposer nodes to process the decision correctly.
     async fn store_received_value(&self, value_id: ConsensusValueId, value: ConsensusValue);
+
+    /// Wait for a cut to be available at the specified height.
+    ///
+    /// Called after a decision is made to ensure the next height's cut is ready
+    /// before starting the next consensus round. This prevents a race condition
+    /// where consensus starts requesting a value before the cut is stored.
+    ///
+    /// # Arguments
+    /// * `height` - The height to wait for
+    /// * `timeout` - Maximum time to wait
+    ///
+    /// # Returns
+    /// * `true` if the cut is available
+    /// * `false` if the timeout expired before the cut was available
+    async fn wait_for_cut(&self, height: ConsensusHeight, timeout: std::time::Duration) -> bool;
 }
 
 /// Handler for processing decided values.
@@ -579,6 +594,32 @@ impl Actor for CipherBftHost {
 
                 // Reply with the next height to start
                 let next_height = height.next();
+
+                // CRITICAL: Wait for the next cut to be available before starting next height.
+                //
+                // This fixes a race condition where:
+                // 1. on_decided() sends the decision to the node's event loop
+                // 2. We immediately reply with Next::Start(next_height)
+                // 3. Malachite starts next_height and requests a value
+                // 4. But the node hasn't processed the decision yet, so no Cut exists
+                // 5. ChannelValueBuilder times out waiting for Cut, validators vote NIL
+                //
+                // By waiting here, we ensure the node has processed the decision and
+                // Primary has formed the next Cut before consensus starts requesting it.
+                //
+                // Timeout of 500ms should be sufficient for the node to process the
+                // decision and form the Cut. If it times out, consensus will still
+                // start but may vote NIL on the first round.
+                let wait_timeout = std::time::Duration::from_millis(500);
+                if !self.value_builder.wait_for_cut(next_height, wait_timeout).await {
+                    warn!(
+                        parent: &self.span,
+                        next_height = next_height.0,
+                        "Cut not ready for next height after {:?}, proceeding anyway",
+                        wait_timeout
+                    );
+                }
+
                 match self.get_validator_set(next_height) {
                     Ok(validator_set) => {
                         // Instruct consensus to start the next height
@@ -1142,6 +1183,42 @@ impl ValueBuilder for ChannelValueBuilder {
             cut.height, value_id
         );
         self.cuts_by_value_id.write().await.insert(value_id, cut);
+    }
+
+    async fn wait_for_cut(&self, height: ConsensusHeight, timeout: std::time::Duration) -> bool {
+        let start = std::time::Instant::now();
+
+        loop {
+            // Check if we have a cut at this height
+            {
+                let pending = self.pending_cuts.read().await;
+                if pending.contains_key(&height) {
+                    debug!(
+                        "ChannelValueBuilder: Cut available at height {} (waited {:?})",
+                        height.0,
+                        start.elapsed()
+                    );
+                    return true;
+                }
+            }
+
+            // Check timeout
+            if start.elapsed() > timeout {
+                let available = self.available_heights().await;
+                warn!(
+                    "ChannelValueBuilder: Timeout waiting for cut at height {} after {:?}. \
+                     Available heights: {:?}",
+                    height.0, timeout, available
+                );
+                return false;
+            }
+
+            // Wait for notification or short sleep
+            tokio::select! {
+                _ = self.cut_notify.notified() => {}
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+            }
+        }
     }
 }
 
