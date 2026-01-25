@@ -24,8 +24,8 @@
 //! ```rust,ignore
 //! use cipherbft_execution::*;
 //!
-//! // Create execution layer instance
-//! let execution_layer = ExecutionLayer::new(db_path, config)?;
+//! // Create execution layer instance with in-memory storage
+//! let mut execution_layer = ExecutionLayer::new(ChainConfig::default())?;
 //!
 //! // Execute a finalized Cut from consensus
 //! let input = BlockInput {
@@ -182,7 +182,22 @@ impl<P: Provider + Clone> ExecutionLayer<P> {
     /// # Returns
     ///
     /// Returns `ExecutionResult` with state root, receipts root, and gas usage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Block number is not sequential
+    /// - Gas limit is zero
+    /// - Transaction execution fails
     pub fn execute_cut(&mut self, cut: Cut) -> Result<ExecutionResult> {
+        // Verify Cars are sorted by validator_id (invariant from consensus layer)
+        // This is a debug assertion since consensus layer guarantees ordering,
+        // but we verify it in debug builds to catch integration bugs early
+        debug_assert!(
+            cut.cars.windows(2).all(|w| w[0].validator_id <= w[1].validator_id),
+            "Cars must be sorted by validator_id (consensus layer invariant violated)"
+        );
+
         // Convert Cut to BlockInput by flattening Cars into ordered transactions
         let block_input = BlockInput {
             block_number: cut.block_number,
@@ -198,7 +213,6 @@ impl<P: Provider + Clone> ExecutionLayer<P> {
             base_fee_per_gas: cut.base_fee_per_gas,
         };
 
-        // Delegate to the engine's execute_block
         self.engine.execute_block(block_input)
     }
 
@@ -220,20 +234,29 @@ impl<P: Provider + Clone> ExecutionLayer<P> {
 
     /// Query account state at a specific block height.
     ///
-    /// Note: Currently returns the current account state. Historical state queries
+    /// **Note:** Currently returns the current account state. Historical state queries
     /// at specific block heights will be implemented with state snapshot support.
+    /// Pass `0` for the block number to query current state without a warning.
     ///
     /// # Arguments
     ///
     /// * `address` - Account address to query
-    /// * `_block_number` - Block height for the query (currently unused)
+    /// * `block_number` - Block height for the query (currently only 0 for "latest" is fully supported)
     ///
     /// # Returns
     ///
     /// Returns the account state (balance, nonce, code hash, storage root).
-    pub fn get_account(&self, address: Address, _block_number: u64) -> Result<Account> {
-        // Get current account state from the engine's database
-        // TODO: Support historical state queries once state snapshot replay is implemented
+    pub fn get_account(&self, address: Address, block_number: u64) -> Result<Account> {
+        // Warn if caller expects historical state (non-zero block number)
+        // TODO(#issue): Support historical state queries via StateManager.get_state_at()
+        // and block replay from nearest snapshot
+        if block_number != 0 {
+            tracing::warn!(
+                block_number,
+                "Historical state queries not yet supported, returning current state"
+            );
+        }
+
         self.engine
             .database()
             .get_account(address)?
@@ -250,7 +273,9 @@ impl<P: Provider + Clone> ExecutionLayer<P> {
     ///
     /// # Returns
     ///
-    /// Returns the contract bytecode.
+    /// - `Ok(Bytes::new())` for EOAs (accounts with empty code hash)
+    /// - `Ok(bytecode)` for contract accounts
+    /// - `Err` if the account does not exist or has corrupted state
     pub fn get_code(&self, address: Address) -> Result<Bytes> {
         // First get the account to find the code hash
         let account =
@@ -261,12 +286,23 @@ impl<P: Provider + Clone> ExecutionLayer<P> {
                     error::DatabaseError::AccountNotFound(address),
                 ))?;
 
-        // If code_hash is zero, this is an EOA with no code
-        if account.code_hash == B256::ZERO || account.code_hash == keccak256([]) {
+        // KECCAK_EMPTY is the canonical code hash for EOAs (accounts without code)
+        // This is keccak256([]) = 0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470
+        let keccak_empty = keccak256([]);
+        if account.code_hash == keccak_empty {
             return Ok(Bytes::new());
         }
 
-        // Get the code by hash
+        // B256::ZERO is not a valid code hash - it indicates uninitialized or corrupted state
+        if account.code_hash == B256::ZERO {
+            return Err(ExecutionError::Database(error::DatabaseError::Corruption(
+                format!(
+                    "Account {} has zero code_hash, indicating uninitialized state",
+                    address
+                ),
+            )));
+        }
+
         use revm::DatabaseRef;
         let bytecode = self.engine.database().code_by_hash_ref(account.code_hash)?;
 
@@ -275,21 +311,31 @@ impl<P: Provider + Clone> ExecutionLayer<P> {
 
     /// Query storage slot at a specific block height.
     ///
-    /// Note: Currently returns the current storage value. Historical state queries
+    /// **Note:** Currently returns the current storage value. Historical state queries
     /// at specific block heights will be implemented with state snapshot support.
+    /// Pass `0` for the block number to query current state without a warning.
     ///
     /// # Arguments
     ///
     /// * `address` - Contract address
     /// * `slot` - Storage slot key
-    /// * `_block_number` - Block height for the query (currently unused)
+    /// * `block_number` - Block height for the query (currently only 0 for "latest" is fully supported)
     ///
     /// # Returns
     ///
     /// Returns the storage slot value.
-    pub fn get_storage(&self, address: Address, slot: U256, _block_number: u64) -> Result<U256> {
-        // Get current storage value from the engine's database
-        // TODO: Support historical state queries once state snapshot replay is implemented
+    pub fn get_storage(&self, address: Address, slot: U256, block_number: u64) -> Result<U256> {
+        // Warn if caller expects historical state (non-zero block number)
+        // TODO(#issue): Support historical state queries via StateManager.get_state_at()
+        // and block replay from nearest snapshot
+        if block_number != 0 {
+            tracing::warn!(
+                block_number,
+                %address,
+                "Historical storage queries not yet supported, returning current value"
+            );
+        }
+
         use revm::DatabaseRef;
         Ok(self.engine.database().storage_ref(address, slot)?)
     }
@@ -534,5 +580,179 @@ mod tests {
             .unwrap();
         assert_eq!(sealed.header.number, 1);
         assert_ne!(sealed.hash, B256::ZERO);
+    }
+
+    // ==================== Tests for with_genesis_validators ====================
+
+    #[test]
+    fn test_with_genesis_validators_empty_list() {
+        let config = ChainConfig::default();
+        let provider = InMemoryProvider::new();
+
+        // Create with empty validator list (equivalent to new())
+        let execution_layer =
+            ExecutionLayer::with_genesis_validators(config, provider, vec![]);
+
+        // Should initialize successfully with zero state root
+        assert_eq!(execution_layer.state_root(), B256::ZERO);
+    }
+
+    #[test]
+    fn test_with_genesis_validators_single_validator() {
+        let config = ChainConfig::default();
+        let provider = InMemoryProvider::new();
+
+        let validator = GenesisValidatorData {
+            address: Address::repeat_byte(0x01),
+            bls_pubkey: [0u8; 48],
+            stake: U256::from(32_000_000_000_000_000_000u128), // 32 ETH
+        };
+
+        let execution_layer =
+            ExecutionLayer::with_genesis_validators(config, provider, vec![validator]);
+
+        // Should initialize successfully
+        assert_eq!(execution_layer.state_root(), B256::ZERO);
+    }
+
+    #[test]
+    fn test_with_genesis_validators_multiple_validators() {
+        let config = ChainConfig::default();
+        let provider = InMemoryProvider::new();
+
+        let validators = vec![
+            GenesisValidatorData {
+                address: Address::repeat_byte(0x01),
+                bls_pubkey: [0u8; 48],
+                stake: U256::from(32_000_000_000_000_000_000u128), // 32 ETH
+            },
+            GenesisValidatorData {
+                address: Address::repeat_byte(0x02),
+                bls_pubkey: [1u8; 48],
+                stake: U256::from(64_000_000_000_000_000_000u128), // 64 ETH
+            },
+            GenesisValidatorData {
+                address: Address::repeat_byte(0x03),
+                bls_pubkey: [2u8; 48],
+                stake: U256::from(100_000_000_000_000_000_000u128), // 100 ETH
+            },
+        ];
+
+        let execution_layer =
+            ExecutionLayer::with_genesis_validators(config, provider, validators);
+
+        // Should initialize successfully
+        assert_eq!(execution_layer.state_root(), B256::ZERO);
+    }
+
+    // ==================== Tests for validate_transaction ====================
+
+    #[test]
+    fn test_validate_transaction_invalid_rlp() {
+        let config = ChainConfig::default();
+        let execution_layer = ExecutionLayer::new(config).unwrap();
+
+        // Invalid RLP bytes
+        let invalid_tx = Bytes::from(vec![0x00, 0x01, 0x02, 0x03]);
+        let result = execution_layer.validate_transaction(&invalid_tx);
+
+        assert!(result.is_err());
+        // Should fail during RLP decoding or signature recovery
+    }
+
+    #[test]
+    fn test_validate_transaction_empty_bytes() {
+        let config = ChainConfig::default();
+        let execution_layer = ExecutionLayer::new(config).unwrap();
+
+        // Empty transaction bytes
+        let empty_tx = Bytes::new();
+        let result = execution_layer.validate_transaction(&empty_tx);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_transaction_truncated_tx() {
+        let config = ChainConfig::default();
+        let execution_layer = ExecutionLayer::new(config).unwrap();
+
+        // Truncated transaction (starts with valid EIP-1559 prefix but incomplete)
+        let truncated_tx = Bytes::from(vec![0x02, 0xf8, 0x50]); // EIP-1559 prefix + incomplete RLP
+        let result = execution_layer.validate_transaction(&truncated_tx);
+
+        assert!(result.is_err());
+    }
+
+    // ==================== Tests for error handling improvements ====================
+
+    #[test]
+    fn test_get_account_error_contains_address() {
+        let config = ChainConfig::default();
+        let execution_layer = ExecutionLayer::new(config).unwrap();
+
+        let test_address = Address::repeat_byte(0xAB);
+        let result = execution_layer.get_account(test_address, 0);
+
+        assert!(result.is_err());
+        let error_msg = format!("{}", result.unwrap_err());
+        // Verify error message contains the address for debugging
+        assert!(
+            error_msg.to_lowercase().contains(&test_address.to_string().to_lowercase()),
+            "Error should contain address: {}",
+            error_msg
+        );
+    }
+
+    #[test]
+    fn test_rollback_error_contains_block_number() {
+        let config = ChainConfig::default();
+        let mut execution_layer = ExecutionLayer::new(config).unwrap();
+
+        let result = execution_layer.rollback_to(42);
+
+        assert!(result.is_err());
+        let error_msg = format!("{}", result.unwrap_err());
+        // Verify error message contains the block number for debugging
+        assert!(
+            error_msg.contains("42"),
+            "Error should contain block number: {}",
+            error_msg
+        );
+    }
+
+    // ==================== Tests for execute_cut with Cars ====================
+
+    #[test]
+    fn test_execute_cut_cars_ordering_preserved() {
+        let config = ChainConfig::default();
+        let mut execution_layer = ExecutionLayer::new(config).unwrap();
+
+        // Create Cars sorted by validator_id (required invariant)
+        let cut = Cut {
+            block_number: 1,
+            timestamp: 1234567890,
+            parent_hash: B256::ZERO,
+            cars: vec![
+                Car {
+                    validator_id: U256::from(1),
+                    transactions: vec![],
+                },
+                Car {
+                    validator_id: U256::from(5),
+                    transactions: vec![],
+                },
+                Car {
+                    validator_id: U256::from(10),
+                    transactions: vec![],
+                },
+            ],
+            gas_limit: 30_000_000,
+            base_fee_per_gas: Some(1_000_000_000),
+        };
+
+        // Should succeed - Cars are properly sorted
+        let result = execution_layer.execute_cut(cut);
+        assert!(result.is_ok());
     }
 }
