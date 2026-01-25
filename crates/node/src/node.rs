@@ -1030,8 +1030,9 @@ impl Node {
 
                     // Notify Primary that consensus has decided on this height (only when DCL enabled)
                     // This allows Primary to advance its state and produce cuts for the next height
+                    // CRITICAL: We pass the cut so Primary can sync position tracking from decided CARs
                     if let Some(ref mut handle) = primary_handle {
-                        if let Err(e) = handle.notify_decision(height.0).await {
+                        if let Err(e) = handle.notify_decision(height.0, cut.clone()).await {
                             warn!("Failed to notify Primary of consensus decision: {:?}", e);
                         }
                     }

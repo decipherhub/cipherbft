@@ -3,6 +3,7 @@
 use crate::attestation::{AggregatedAttestation, Attestation};
 use crate::batch::BatchDigest;
 use crate::car::Car;
+use crate::cut::Cut;
 use cipherbft_types::{Hash, ValidatorId};
 use std::collections::HashMap;
 use std::time::Instant;
@@ -213,6 +214,27 @@ impl PrimaryState {
     pub fn update_last_seen(&mut self, validator: ValidatorId, position: u64, car_hash: Hash) {
         self.last_seen_positions.insert(validator, position);
         self.last_seen_car_hashes.insert(validator, car_hash);
+    }
+
+    /// Sync position tracking from a decided Cut
+    ///
+    /// When consensus decides on a Cut, all validators must update their position
+    /// tracking to reflect the decided state. This is critical because:
+    /// 1. A validator may not have received all CARs during the collection phase
+    /// 2. Position validation requires sequential positions (no gaps)
+    /// 3. Without syncing, future CARs will be rejected with PositionGap errors
+    ///
+    /// This method updates `last_seen_positions` and `last_seen_car_hashes` for
+    /// each CAR in the decided Cut if the position is higher than what we've seen.
+    pub fn sync_positions_from_cut(&mut self, cut: &Cut) {
+        for (validator, car) in &cut.cars {
+            let current_pos = self.last_seen_positions.get(validator).copied();
+            // Only update if the decided position is higher than our current tracking
+            if current_pos.is_none_or(|p| car.position > p) {
+                self.last_seen_positions.insert(*validator, car.position);
+                self.last_seen_car_hashes.insert(*validator, car.hash());
+            }
+        }
     }
 
     /// Get last seen Car hash for parent_ref validation

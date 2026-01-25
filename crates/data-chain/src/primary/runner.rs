@@ -55,6 +55,8 @@ pub enum PrimaryCommand {
     ConsensusDecided {
         /// The height that was decided
         height: u64,
+        /// The Cut that was decided (used to sync positions)
+        cut: Cut,
     },
 }
 
@@ -140,12 +142,16 @@ impl PrimaryHandle {
     /// Notify the Primary that consensus has decided on a height
     ///
     /// This triggers the Primary to advance its state and continue producing cuts.
+    /// The Cut is passed so that the Primary can sync its position tracking with
+    /// the authoritative decided state - this ensures validators that missed some
+    /// CARs during collection still have consistent position tracking.
     pub async fn notify_decision(
         &self,
         height: u64,
+        cut: Cut,
     ) -> Result<(), mpsc::error::SendError<PrimaryCommand>> {
         self.command_sender
-            .send(PrimaryCommand::ConsensusDecided { height })
+            .send(PrimaryCommand::ConsensusDecided { height, cut })
             .await
     }
 }
@@ -449,12 +455,18 @@ impl Primary {
     /// Handle commands from external sources (e.g., node)
     async fn handle_command(&mut self, cmd: PrimaryCommand) {
         match cmd {
-            PrimaryCommand::ConsensusDecided { height } => {
+            PrimaryCommand::ConsensusDecided { height, cut } => {
                 debug!(
                     height,
                     validator = %self.config.validator_id,
+                    cut_cars = cut.cars.len(),
                     "Received consensus decision notification"
                 );
+
+                // CRITICAL: Sync position tracking from the decided Cut BEFORE advancing state
+                // This ensures validators that missed some CARs during collection still have
+                // consistent position tracking for subsequent heights
+                self.state.sync_positions_from_cut(&cut);
 
                 // Advance state to allow producing cuts for the next height
                 self.state.finalize_height(height);
