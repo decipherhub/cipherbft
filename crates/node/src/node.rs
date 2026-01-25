@@ -552,7 +552,10 @@ impl Node {
             }
 
             primary_handle_opt = Some(primary_handle);
-            info!("DCL layer spawned with Primary and {} workers", self.config.num_workers);
+            info!(
+                "DCL layer spawned with Primary and {} workers",
+                self.config.num_workers
+            );
         } else {
             // DCL disabled: spawn a task that sends empty cuts directly to consensus
             // This allows consensus to proceed without data availability attestations
