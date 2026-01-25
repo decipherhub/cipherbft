@@ -859,6 +859,7 @@ impl Node {
     }
 
     /// Internal event loop that handles messages and can be cancelled.
+    #[allow(clippy::too_many_arguments)]
     async fn run_event_loop(
         cancel_token: CancellationToken,
         primary_incoming_rx: &mut mpsc::Receiver<(ValidatorId, DclMessage)>,
