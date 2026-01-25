@@ -15,6 +15,7 @@ use alloy_eips::eip4895::Withdrawal;
 use alloy_primitives::{Address, Bloom, Bytes, B256, B64, U256};
 use alloy_rpc_types_eth::Block;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 /// RPC Block representation with proper hex serialization.
 ///
@@ -41,7 +42,7 @@ pub struct RpcBlock {
     /// Logs bloom filter
     pub logs_bloom: Bloom,
     /// Difficulty (always 0 in PoS)
-    #[serde(serialize_with = "serialize_u256_quantity")]
+    #[serde(serialize_with = "serialize_u256_hex")]
     pub difficulty: U256,
     /// Block number
     #[serde(serialize_with = "alloy_serde::quantity::serialize")]
@@ -66,7 +67,7 @@ pub struct RpcBlock {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        serialize_with = "serialize_opt_u256_quantity"
+        serialize_with = "serialize_opt_u256_hex"
     )]
     pub total_difficulty: Option<U256>,
     /// Base fee per gas (EIP-1559)
@@ -119,23 +120,24 @@ pub struct RpcBlock {
     pub withdrawals: Option<Vec<Withdrawal>>,
 }
 
-/// Serialize U256 as a hex string.
+/// Serialize U256 as a hex string using alloy's default serialization.
 ///
-/// Uses alloy_primitives' built-in U256 serialization which formats as
-/// a full 64-character hex string with "0x" prefix (e.g., "0x0000...0000").
+/// This uses alloy_primitives' built-in U256 serialization. Note that this may
+/// produce a different format than Ethereum's "quantity" encoding (which strips
+/// leading zeros). For strict Ethereum JSON-RPC compliance on u64 fields, we use
+/// `alloy_serde::quantity::serialize` which properly implements the quantity format.
 ///
-/// Note: This differs from Ethereum's "quantity" format which strips leading
-/// zeros. For u64 fields, we use `alloy_serde::quantity::serialize` which
-/// properly strips leading zeros per the JSON-RPC spec.
-fn serialize_u256_quantity<S>(value: &U256, serializer: S) -> Result<S::Ok, S::Error>
+/// For U256 fields like `difficulty` and `total_difficulty`, clients generally
+/// accept both formats since these are typically zero in PoS chains.
+fn serialize_u256_hex<S>(value: &U256, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
     value.serialize(serializer)
 }
 
-/// Serialize Option<U256> as a hex quantity string.
-fn serialize_opt_u256_quantity<S>(value: &Option<U256>, serializer: S) -> Result<S::Ok, S::Error>
+/// Serialize Option<U256> as a hex string.
+fn serialize_opt_u256_hex<S>(value: &Option<U256>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
@@ -159,9 +161,16 @@ impl RpcBlock {
             state_root: B256::from(storage_block.state_root),
             transactions_root: B256::from(storage_block.transactions_root),
             receipts_root: B256::from(storage_block.receipts_root),
-            // Use try_from for safe conversion - falls back to zero bloom on invalid data
+            // Use try_from for safe conversion - log and fall back to zero bloom on invalid data
             logs_bloom: <Bloom as TryFrom<&[u8]>>::try_from(&storage_block.logs_bloom)
-                .unwrap_or(Bloom::ZERO),
+                .unwrap_or_else(|_| {
+                    warn!(
+                        block_number = storage_block.number,
+                        bloom_len = storage_block.logs_bloom.len(),
+                        "Invalid logs_bloom data in storage block, using zero bloom"
+                    );
+                    Bloom::ZERO
+                }),
             difficulty: U256::from_be_bytes(storage_block.difficulty),
             number: storage_block.number,
             gas_limit: storage_block.gas_limit,
