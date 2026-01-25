@@ -32,7 +32,9 @@ use cipherbft_data_chain::{
     Cut, DclMessage, WorkerMessage,
 };
 use cipherbft_execution::{ChainConfig, ExecutionResult, InMemoryProvider};
-use cipherbft_storage::{Block, BlockStore, Database, DatabaseConfig, MdbxBlockStore, MdbxReceiptStore};
+use cipherbft_storage::{
+    Block, BlockStore, Database, DatabaseConfig, MdbxBlockStore, MdbxReceiptStore,
+};
 use cipherbft_types::genesis::Genesis;
 use cipherbft_types::ValidatorId;
 use informalsystems_malachitebft_metrics::SharedRegistry;
@@ -686,12 +688,13 @@ impl Node {
         // RPC storage reference - used to update block number when consensus decides
         // Moved outside the `if` block so it can be passed to run_event_loop
         use cipherbft_rpc::MdbxRpcStorage;
-        let rpc_storage: Option<Arc<MdbxRpcStorage<InMemoryProvider>>> = if self.config.rpc_enabled {
+        let rpc_storage: Option<Arc<MdbxRpcStorage<InMemoryProvider>>> = if self.config.rpc_enabled
+        {
             // Create MDBX database for block/receipt storage
             let db_path = self.config.data_dir.join("rpc_storage");
             let db_config = DatabaseConfig::new(&db_path);
-            let database = Database::open(db_config)
-                .context("Failed to open RPC storage database")?;
+            let database =
+                Database::open(db_config).context("Failed to open RPC storage database")?;
             let db_env = database.env().clone();
 
             // Create block and receipt stores
@@ -963,8 +966,8 @@ impl Node {
             gas_used: result.gas_used,
             timestamp,
             extra_data: Vec::new(),
-            mix_hash: [0u8; 32], // prevrandao in PoS
-            nonce: [0u8; 8],     // Always zero in PoS
+            mix_hash: [0u8; 32],                   // prevrandao in PoS
+            nonce: [0u8; 8],                       // Always zero in PoS
             base_fee_per_gas: Some(1_000_000_000), // 1 gwei default
             transaction_hashes,
             transaction_count,
