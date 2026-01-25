@@ -1811,6 +1811,76 @@ impl NetworkApi for StubNetworkApi {
     }
 }
 
+/// Convert a storage block to an RPC block format.
+///
+/// This is a standalone function for use by the node when broadcasting
+/// new blocks to WebSocket subscribers via `eth_subscribe("newHeads")`.
+pub fn storage_block_to_rpc_block(
+    storage_block: cipherbft_storage::blocks::Block,
+    full_txs: bool,
+) -> Block {
+    use alloy_primitives::{Bloom, B64};
+
+    // Convert transaction hashes to B256
+    let tx_hashes: Vec<B256> = storage_block
+        .transaction_hashes
+        .iter()
+        .map(|h| B256::from(*h))
+        .collect();
+
+    // Build transactions field based on full_txs flag
+    let transactions = if full_txs {
+        // TODO: In the future, this should return full Transaction objects
+        BlockTransactions::Hashes(tx_hashes)
+    } else {
+        BlockTransactions::Hashes(tx_hashes)
+    };
+
+    // Build the consensus header
+    let consensus_header = alloy_consensus::Header {
+        parent_hash: B256::from(storage_block.parent_hash),
+        ommers_hash: B256::from(storage_block.ommers_hash),
+        beneficiary: Address::from(storage_block.beneficiary),
+        state_root: B256::from(storage_block.state_root),
+        transactions_root: B256::from(storage_block.transactions_root),
+        receipts_root: B256::from(storage_block.receipts_root),
+        logs_bloom: Bloom::from_slice(&storage_block.logs_bloom),
+        difficulty: U256::from_be_bytes(storage_block.difficulty),
+        number: storage_block.number,
+        gas_limit: storage_block.gas_limit,
+        gas_used: storage_block.gas_used,
+        timestamp: storage_block.timestamp,
+        extra_data: Bytes::from(storage_block.extra_data.clone()),
+        mix_hash: B256::from(storage_block.mix_hash),
+        nonce: B64::from(storage_block.nonce),
+        base_fee_per_gas: storage_block.base_fee_per_gas,
+        withdrawals_root: None,
+        blob_gas_used: None,
+        excess_blob_gas: None,
+        parent_beacon_block_root: None,
+        requests_hash: None,
+    };
+
+    // Build the RPC header with hash and total difficulty
+    let block_hash = B256::from(storage_block.hash);
+    let total_difficulty = U256::from_be_bytes(storage_block.total_difficulty);
+
+    let rpc_header = Header {
+        hash: block_hash,
+        inner: consensus_header,
+        total_difficulty: Some(total_difficulty),
+        size: None,
+    };
+
+    // Build the final RPC block
+    Block {
+        header: rpc_header,
+        uncles: Vec::new(),
+        transactions,
+        withdrawals: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

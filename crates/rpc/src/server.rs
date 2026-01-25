@@ -73,13 +73,36 @@ where
         executor: Arc<E>,
         network: Arc<N>,
     ) -> Self {
+        Self::with_subscription_manager(
+            config,
+            storage,
+            mempool,
+            executor,
+            network,
+            Arc::new(SubscriptionManager::default()),
+        )
+    }
+
+    /// Create a new RPC server with an external subscription manager.
+    ///
+    /// This allows sharing the subscription manager with other components
+    /// (e.g., the node's event loop) to enable broadcasting events to
+    /// WebSocket subscribers.
+    pub fn with_subscription_manager(
+        config: RpcConfig,
+        storage: Arc<S>,
+        mempool: Arc<M>,
+        executor: Arc<E>,
+        network: Arc<N>,
+        subscription_manager: Arc<SubscriptionManager>,
+    ) -> Self {
         Self {
             config: Arc::new(config),
             storage,
             mempool,
             executor,
             network,
-            subscription_manager: Arc::new(SubscriptionManager::default()),
+            subscription_manager,
             state: Arc::new(RwLock::new(ServerState::Stopped)),
             http_handle: Arc::new(RwLock::new(None)),
             ws_handle: Arc::new(RwLock::new(None)),
@@ -94,6 +117,14 @@ where
     /// Get the subscription manager.
     pub fn subscription_manager(&self) -> &SubscriptionManager {
         &self.subscription_manager
+    }
+
+    /// Get the subscription manager as an Arc.
+    ///
+    /// This is useful for sharing the subscription manager with other components
+    /// that need to broadcast events to WebSocket subscribers.
+    pub fn subscription_manager_arc(&self) -> Arc<SubscriptionManager> {
+        Arc::clone(&self.subscription_manager)
     }
 
     /// Get the current server state.

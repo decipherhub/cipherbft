@@ -167,6 +167,9 @@ pub use adapters::{StubExecutionApi, StubMempoolApi, StubNetworkApi, StubRpcStor
 // Real implementations backed by storage
 pub use adapters::{EvmExecutionApi, MdbxRpcStorage, PoolMempoolApi, ProviderBasedRpcStorage};
 
+// Block conversion utilities for subscription broadcasting
+pub use adapters::storage_block_to_rpc_block;
+
 // RPC server traits (for method registration)
 pub use eth::EthRpcServer;
 pub use net::NetRpcServer;

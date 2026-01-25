@@ -756,6 +756,16 @@ impl Node {
             None
         };
 
+        // Create subscription manager for WebSocket subscriptions (eth_subscribe)
+        // This needs to be shared between the RPC server and the event loop
+        // so that new blocks can be broadcast to subscribers
+        let subscription_manager = if rpc_storage.is_some() {
+            use cipherbft_rpc::SubscriptionManager;
+            Some(Arc::new(SubscriptionManager::default()))
+        } else {
+            None
+        };
+
         // Start RPC server if enabled
         if let Some(ref storage) = rpc_storage {
             use cipherbft_rpc::{
@@ -772,8 +782,16 @@ impl Node {
             let executor = Arc::new(StubExecutionApi::new());
             let network = Arc::new(StubNetworkApi::new());
 
-            let rpc_server =
-                RpcServer::new(rpc_config, storage.clone(), mempool, executor, network);
+            // Use with_subscription_manager to share the subscription manager
+            // between the RPC server and the event loop for broadcasting blocks
+            let rpc_server = RpcServer::with_subscription_manager(
+                rpc_config,
+                storage.clone(),
+                mempool,
+                executor,
+                network,
+                subscription_manager.clone().unwrap(),
+            );
 
             let http_port = self.config.rpc_http_port;
             let ws_port = self.config.rpc_ws_port;
@@ -819,6 +837,7 @@ impl Node {
             &mut decided_rx,
             execution_bridge,
             rpc_storage,
+            subscription_manager,
         )
         .await;
 
@@ -848,6 +867,7 @@ impl Node {
         decided_rx: &mut mpsc::Receiver<(ConsensusHeight, Cut)>,
         execution_bridge: Option<Arc<ExecutionBridge>>,
         rpc_storage: Option<Arc<cipherbft_rpc::MdbxRpcStorage<InMemoryProvider>>>,
+        subscription_manager: Option<Arc<cipherbft_rpc::SubscriptionManager>>,
     ) -> Result<()> {
         loop {
             tokio::select! {
@@ -939,6 +959,14 @@ impl Node {
                                         error!("Failed to store block {} to MDBX: {}", height.0, e);
                                     } else {
                                         debug!("Stored block {} to MDBX", height.0);
+
+                                        // Broadcast to WebSocket subscribers (eth_subscribe("newHeads"))
+                                        if let Some(ref sub_mgr) = subscription_manager {
+                                            use cipherbft_rpc::storage_block_to_rpc_block;
+                                            let rpc_block = storage_block_to_rpc_block(block.clone(), false);
+                                            sub_mgr.broadcast_block(rpc_block);
+                                            debug!("Broadcast block {} to WebSocket subscribers", height.0);
+                                        }
                                     }
 
                                     // Store receipts for eth_getBlockReceipts queries
