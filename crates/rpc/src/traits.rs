@@ -8,10 +8,11 @@
 use std::collections::HashMap;
 
 use alloy_primitives::{Address, Bytes, B256, U256};
-use alloy_rpc_types_eth::{Block, Filter, Log, Transaction, TransactionReceipt};
+use alloy_rpc_types_eth::{Filter, Log, Transaction, TransactionReceipt};
 use async_trait::async_trait;
 
 use crate::error::RpcResult;
+use crate::types::RpcBlock;
 
 /// Block number or tag for state queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -64,18 +65,24 @@ impl SyncStatus {
 #[async_trait]
 pub trait RpcStorage: Send + Sync {
     /// Get a block by its number or tag.
+    ///
+    /// Returns `RpcBlock` which serializes numeric fields as hex strings
+    /// per Ethereum JSON-RPC specification.
     async fn get_block_by_number(
         &self,
         number: BlockNumberOrTag,
         full_transactions: bool,
-    ) -> RpcResult<Option<Block>>;
+    ) -> RpcResult<Option<RpcBlock>>;
 
     /// Get a block by its hash.
+    ///
+    /// Returns `RpcBlock` which serializes numeric fields as hex strings
+    /// per Ethereum JSON-RPC specification.
     async fn get_block_by_hash(
         &self,
         hash: B256,
         full_transactions: bool,
-    ) -> RpcResult<Option<Block>>;
+    ) -> RpcResult<Option<RpcBlock>>;
 
     /// Get a transaction by its hash.
     async fn get_transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction>>;

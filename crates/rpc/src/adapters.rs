@@ -42,6 +42,7 @@ use crate::error::{RpcError, RpcResult};
 use crate::traits::{
     BlockNumberOrTag, ExecutionApi, MempoolApi, NetworkApi, RpcStorage, SyncStatus,
 };
+use crate::types::RpcBlock;
 
 /// Provider-based RPC storage adapter.
 ///
@@ -129,7 +130,7 @@ impl<P: Provider + 'static> RpcStorage for ProviderBasedRpcStorage<P> {
         &self,
         number: BlockNumberOrTag,
         _full_transactions: bool,
-    ) -> RpcResult<Option<Block>> {
+    ) -> RpcResult<Option<RpcBlock>> {
         let resolved = self.resolve_block_number(number);
         trace!(
             "ProviderBasedRpcStorage::get_block_by_number({:?} -> {})",
@@ -145,7 +146,7 @@ impl<P: Provider + 'static> RpcStorage for ProviderBasedRpcStorage<P> {
         &self,
         hash: B256,
         _full_transactions: bool,
-    ) -> RpcResult<Option<Block>> {
+    ) -> RpcResult<Option<RpcBlock>> {
         trace!("ProviderBasedRpcStorage::get_block_by_hash({})", hash);
         // Block indexing not yet implemented - return None
         // TODO: Implement when block storage is added
@@ -713,7 +714,7 @@ impl<P: Provider + 'static> RpcStorage for MdbxRpcStorage<P> {
         &self,
         number: BlockNumberOrTag,
         full_transactions: bool,
-    ) -> RpcResult<Option<Block>> {
+    ) -> RpcResult<Option<RpcBlock>> {
         let resolved = self.resolve_block_number(number);
         trace!(
             "MdbxRpcStorage::get_block_by_number({:?} -> {})",
@@ -728,8 +729,9 @@ impl<P: Provider + 'static> RpcStorage for MdbxRpcStorage<P> {
                     "Found block {} with hash {:?}",
                     resolved, storage_block.hash
                 );
-                let rpc_block = self.storage_block_to_rpc(storage_block, full_transactions);
-                Ok(Some(rpc_block))
+                let block = self.storage_block_to_rpc(storage_block, full_transactions);
+                // Convert to RpcBlock for proper hex serialization
+                Ok(Some(RpcBlock::from(block)))
             }
             Ok(None) => {
                 trace!("Block {} not found", resolved);
@@ -746,7 +748,7 @@ impl<P: Provider + 'static> RpcStorage for MdbxRpcStorage<P> {
         &self,
         hash: B256,
         full_transactions: bool,
-    ) -> RpcResult<Option<Block>> {
+    ) -> RpcResult<Option<RpcBlock>> {
         trace!("MdbxRpcStorage::get_block_by_hash({})", hash);
 
         let hash_bytes: [u8; 32] = hash.into();
@@ -755,8 +757,9 @@ impl<P: Provider + 'static> RpcStorage for MdbxRpcStorage<P> {
         match self.block_store.get_block_by_hash(&hash_bytes).await {
             Ok(Some(storage_block)) => {
                 debug!("Found block {} with hash {}", storage_block.number, hash);
-                let rpc_block = self.storage_block_to_rpc(storage_block, full_transactions);
-                Ok(Some(rpc_block))
+                let block = self.storage_block_to_rpc(storage_block, full_transactions);
+                // Convert to RpcBlock for proper hex serialization
+                Ok(Some(RpcBlock::from(block)))
             }
             Ok(None) => {
                 trace!("Block with hash {} not found", hash);
@@ -1073,7 +1076,7 @@ impl RpcStorage for StubRpcStorage {
         &self,
         number: BlockNumberOrTag,
         _full_transactions: bool,
-    ) -> RpcResult<Option<Block>> {
+    ) -> RpcResult<Option<RpcBlock>> {
         trace!("StubRpcStorage::get_block_by_number({:?})", number);
         Ok(None)
     }
@@ -1082,7 +1085,7 @@ impl RpcStorage for StubRpcStorage {
         &self,
         hash: B256,
         _full_transactions: bool,
-    ) -> RpcResult<Option<Block>> {
+    ) -> RpcResult<Option<RpcBlock>> {
         trace!("StubRpcStorage::get_block_by_hash({})", hash);
         Ok(None)
     }

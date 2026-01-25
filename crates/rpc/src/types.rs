@@ -12,6 +12,7 @@
 //! strict Ethereum JSON-RPC format with hex-encoded quantities.
 
 use alloy_primitives::{Address, Bloom, Bytes, B256, B64, U256};
+use alloy_rpc_types_eth::Block;
 use serde::{Deserialize, Serialize};
 
 /// RPC Block representation with proper hex serialization.
@@ -155,6 +156,46 @@ impl RpcBlock {
                 .collect(),
             uncles: Vec::new(),
             withdrawals: None,
+        }
+    }
+}
+
+/// Convert from alloy_rpc_types_eth::Block to RpcBlock.
+///
+/// This conversion enables seamless transition from the standard Alloy Block type
+/// (which serializes numeric fields as integers) to our RpcBlock type (which
+/// serializes numeric fields as hex strings per Ethereum JSON-RPC spec).
+impl From<Block> for RpcBlock {
+    fn from(block: Block) -> Self {
+        let header = &block.header.inner;
+
+        Self {
+            hash: block.header.hash,
+            parent_hash: header.parent_hash,
+            ommers_hash: header.ommers_hash,
+            miner: header.beneficiary,
+            state_root: header.state_root,
+            transactions_root: header.transactions_root,
+            receipts_root: header.receipts_root,
+            logs_bloom: header.logs_bloom,
+            difficulty: header.difficulty,
+            number: header.number,
+            gas_limit: header.gas_limit,
+            gas_used: header.gas_used,
+            timestamp: header.timestamp,
+            extra_data: header.extra_data.clone(),
+            mix_hash: header.mix_hash,
+            nonce: header.nonce,
+            total_difficulty: block.header.total_difficulty.unwrap_or(U256::ZERO),
+            base_fee_per_gas: header.base_fee_per_gas.map(|v| v as u64),
+            size: block.header.size.map(|v| v.to::<u64>()),
+            withdrawals_root: header.withdrawals_root,
+            blob_gas_used: header.blob_gas_used.map(|v| v as u64),
+            excess_blob_gas: header.excess_blob_gas.map(|v| v as u64),
+            parent_beacon_block_root: header.parent_beacon_block_root,
+            transactions: block.transactions.hashes().collect(),
+            uncles: block.uncles.clone(),
+            withdrawals: block.withdrawals.as_ref().map(|_| Vec::new()),
         }
     }
 }
