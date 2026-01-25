@@ -80,6 +80,7 @@ impl MdbxBlockStore {
             transaction_hashes: block.transaction_hashes.clone(),
             transaction_count: block.transaction_count,
             total_difficulty: block.total_difficulty,
+            size: block.size,
         }
     }
 
@@ -106,6 +107,7 @@ impl MdbxBlockStore {
             transaction_hashes: stored.transaction_hashes,
             transaction_count: stored.transaction_count,
             total_difficulty: stored.total_difficulty,
+            size: stored.size,
         }
     }
 }
@@ -259,7 +261,7 @@ mod tests {
         hash[0] = (number & 0xff) as u8;
         hash[1] = ((number >> 8) & 0xff) as u8;
 
-        Block {
+        let mut block = Block {
             hash,
             number,
             parent_hash: [number.saturating_sub(1) as u8; 32],
@@ -280,7 +282,10 @@ mod tests {
             transaction_hashes: vec![[6u8; 32], [7u8; 32]],
             transaction_count: 2,
             total_difficulty: [0u8; 32],
-        }
+            size: 0, // Calculated below
+        };
+        block.size = block.calculate_size();
+        block
     }
 
     #[tokio::test]

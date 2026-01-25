@@ -85,6 +85,7 @@ dashmap = "6.1"
 # Alloy types (v1.x for reth v1.10.0 compatibility)
 # IMPORTANT: serde feature required for proper hex serialization in JSON-RPC responses
 alloy-primitives = { version = "1", features = ["serde", "rlp"] }
+alloy-rlp = { version = "0.3" }
 alloy-rpc-types = { version = "1" }
 alloy-rpc-types-eth = { version = "1", features = ["serde"] }
 alloy-consensus = { version = "1", features = ["serde"] }
