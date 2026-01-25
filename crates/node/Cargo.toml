@@ -15,7 +15,7 @@ path = "src/main.rs"
 cipherbft-types = { path = "../types" }
 cipherbft-crypto = { path = "../crypto" }
 cipherbft-data-chain = { path = "../data-chain" }
-cipherbft-storage = { path = "../storage" }
+cipherbft-storage = { path = "../storage", features = ["mdbx"] }
 cipherbft-execution = { path = "../execution" }
 cipherbft-consensus = { path = "../consensus", features = ["malachite"] }
 cipherbft-rpc = { path = "../rpc" }

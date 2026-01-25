@@ -31,7 +31,14 @@ use cipherbft_data_chain::{
     worker::{Worker, WorkerConfig},
     Cut, DclMessage, WorkerMessage,
 };
-use cipherbft_execution::ChainConfig;
+use cipherbft_execution::{
+    ChainConfig, ExecutionResult, InMemoryProvider, Log as ExecutionLog,
+    TransactionReceipt as ExecutionReceipt,
+};
+use cipherbft_storage::{
+    Block, BlockStore, Database, DatabaseConfig, Log as StorageLog, MdbxBlockStore,
+    MdbxReceiptStore, Receipt as StorageReceipt, ReceiptStore,
+};
 use cipherbft_types::genesis::Genesis;
 use cipherbft_types::ValidatorId;
 use informalsystems_malachitebft_metrics::SharedRegistry;
@@ -684,9 +691,39 @@ impl Node {
 
         // RPC storage reference - used to update block number when consensus decides
         // Moved outside the `if` block so it can be passed to run_event_loop
-        use cipherbft_rpc::StubRpcStorage;
-        let rpc_storage: Option<Arc<StubRpcStorage>> = if self.config.rpc_enabled {
-            Some(Arc::new(StubRpcStorage::default()))
+        use cipherbft_rpc::MdbxRpcStorage;
+        let rpc_storage: Option<Arc<MdbxRpcStorage<InMemoryProvider>>> = if self.config.rpc_enabled
+        {
+            // Create MDBX database for block/receipt storage
+            let db_path = self.config.data_dir.join("rpc_storage");
+            let db_config = DatabaseConfig::new(&db_path);
+            let database =
+                Database::open(db_config).context("Failed to open RPC storage database")?;
+            let db_env = database.env().clone();
+
+            // Create block and receipt stores
+            let block_store = Arc::new(MdbxBlockStore::new(db_env.clone()));
+            let receipt_store = Arc::new(MdbxReceiptStore::new(db_env));
+
+            // Create a provider for state queries (shared with execution layer)
+            let provider = Arc::new(InMemoryProvider::new());
+
+            // Create MdbxRpcStorage with chain ID
+            let chain_id = 85300u64; // CipherBFT testnet chain ID
+            let storage = Arc::new(MdbxRpcStorage::new(
+                provider,
+                block_store,
+                receipt_store,
+                chain_id,
+            ));
+
+            // Initialize latest_block from storage (important for restart scenarios)
+            if let Ok(Some(latest)) = storage.block_store().get_latest_block_number().await {
+                storage.set_latest_block(latest);
+                info!("Initialized RPC latest_block from storage: {}", latest);
+            }
+
+            Some(storage)
         } else {
             None
         };
@@ -701,8 +738,8 @@ impl Node {
             rpc_config.http_port = self.config.rpc_http_port;
             rpc_config.ws_port = self.config.rpc_ws_port;
 
-            // For now, use stub implementations
-            // TODO: Wire real storage, mempool, and execution backends
+            // For now, use stub implementations for mempool, execution, and network
+            // Block storage is now backed by MDBX
             let mempool = Arc::new(StubMempoolApi::new());
             let executor = Arc::new(StubExecutionApi::new());
             let network = Arc::new(StubNetworkApi::new());
@@ -782,7 +819,7 @@ impl Node {
         cut_tx: &mpsc::Sender<Cut>,
         decided_rx: &mut mpsc::Receiver<(ConsensusHeight, Cut)>,
         execution_bridge: Option<Arc<ExecutionBridge>>,
-        rpc_storage: Option<Arc<cipherbft_rpc::StubRpcStorage>>,
+        rpc_storage: Option<Arc<cipherbft_rpc::MdbxRpcStorage<InMemoryProvider>>>,
     ) -> Result<()> {
         loop {
             tokio::select! {
@@ -851,14 +888,8 @@ impl Node {
                         warn!("Failed to notify Primary of consensus decision: {:?}", e);
                     }
 
-                    // Update RPC layer with the new block height
-                    // This enables eth_blockNumber to return the actual consensus height
-                    if let Some(ref storage) = rpc_storage {
-                        storage.set_latest_block(height.0);
-                        debug!("Updated RPC block number to {}", height.0);
-                    }
-
                     // Execute Cut if execution layer is enabled
+                    // Then store the block to MDBX for RPC queries
                     if let Some(ref bridge) = execution_bridge {
                         match bridge.execute_cut(cut).await {
                             Ok(result) => {
@@ -867,10 +898,45 @@ impl Node {
                                     result.state_root,
                                     result.gas_used
                                 );
+
+                                // Store the block to MDBX for eth_getBlockByNumber queries
+                                if let Some(ref storage) = rpc_storage {
+                                    // Update latest block number
+                                    storage.set_latest_block(height.0);
+                                    debug!("Updated RPC block number to {}", height.0);
+
+                                    // Create and store the block
+                                    let block = Self::execution_result_to_block(height.0, &result);
+                                    if let Err(e) = storage.block_store().put_block(&block).await {
+                                        error!("Failed to store block {} to MDBX: {}", height.0, e);
+                                    } else {
+                                        debug!("Stored block {} to MDBX", height.0);
+                                    }
+
+                                    // Store receipts for eth_getBlockReceipts queries
+                                    if !result.receipts.is_empty() {
+                                        let storage_receipts: Vec<StorageReceipt> = result
+                                            .receipts
+                                            .iter()
+                                            .map(Self::execution_receipt_to_storage)
+                                            .collect();
+                                        if let Err(e) = storage.receipt_store().put_receipts(&storage_receipts).await {
+                                            error!("Failed to store {} receipts for block {}: {}", storage_receipts.len(), height.0, e);
+                                        } else {
+                                            debug!("Stored {} receipts for block {}", storage_receipts.len(), height.0);
+                                        }
+                                    }
+                                }
                             }
                             Err(e) => {
                                 error!("Cut execution failed: {}", e);
                             }
+                        }
+                    } else {
+                        // No execution bridge, just update the block number
+                        if let Some(ref storage) = rpc_storage {
+                            storage.set_latest_block(height.0);
+                            debug!("Updated RPC block number to {}", height.0);
                         }
                     }
                 }
@@ -881,6 +947,97 @@ impl Node {
     /// Get the validator ID
     pub fn validator_id(&self) -> ValidatorId {
         self.validator_id
+    }
+
+    /// Convert an ExecutionResult to a storage Block for MDBX persistence.
+    ///
+    /// This creates a Block struct suitable for storage from the execution result.
+    /// The block hash is derived from the execution result's block_hash field.
+    fn execution_result_to_block(block_number: u64, result: &ExecutionResult) -> Block {
+        // Get current timestamp
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Extract transaction hashes from receipts
+        let transaction_hashes: Vec<[u8; 32]> = result
+            .receipts
+            .iter()
+            .map(|r| r.transaction_hash.0)
+            .collect();
+        let transaction_count = transaction_hashes.len() as u32;
+
+        // Create the block with execution results
+        Block {
+            hash: result.block_hash.0,
+            number: block_number,
+            parent_hash: [0u8; 32], // TODO: Track parent hash from previous block
+            ommers_hash: [0u8; 32], // Always empty in PoS
+            beneficiary: [0u8; 20], // TODO: Set to validator address
+            state_root: result.state_root.0,
+            transactions_root: result.transactions_root.0,
+            receipts_root: result.receipts_root.0,
+            logs_bloom: result.logs_bloom.0.to_vec(),
+            difficulty: [0u8; 32], // Always zero in PoS
+            gas_limit: 30_000_000, // TODO: Get from config
+            gas_used: result.gas_used,
+            timestamp,
+            extra_data: Vec::new(),
+            mix_hash: [0u8; 32],                   // prevrandao in PoS
+            nonce: [0u8; 8],                       // Always zero in PoS
+            base_fee_per_gas: Some(1_000_000_000), // 1 gwei default
+            transaction_hashes,
+            transaction_count,
+            total_difficulty: [0u8; 32], // Not used in PoS
+        }
+    }
+
+    /// Convert an execution TransactionReceipt to a storage Receipt for MDBX persistence.
+    ///
+    /// This bridges the execution layer receipt format to the storage layer format.
+    fn execution_receipt_to_storage(receipt: &ExecutionReceipt) -> StorageReceipt {
+        // Convert logs
+        let logs: Vec<StorageLog> = receipt
+            .logs
+            .iter()
+            .enumerate()
+            .map(|(i, log)| {
+                Self::execution_log_to_storage(log, i as u32, receipt.transaction_index as u32)
+            })
+            .collect();
+
+        StorageReceipt {
+            transaction_hash: receipt.transaction_hash.0,
+            block_number: receipt.block_number,
+            block_hash: receipt.block_hash.0,
+            transaction_index: receipt.transaction_index as u32,
+            from: receipt.from.0 .0,
+            to: receipt.to.map(|a| a.0 .0),
+            contract_address: receipt.contract_address.map(|a| a.0 .0),
+            gas_used: receipt.gas_used,
+            cumulative_gas_used: receipt.cumulative_gas_used,
+            status: receipt.status == 1,
+            logs,
+            logs_bloom: receipt.logs_bloom.0.to_vec(),
+            effective_gas_price: receipt.effective_gas_price,
+            transaction_type: receipt.transaction_type,
+        }
+    }
+
+    /// Convert an execution Log to a storage Log.
+    fn execution_log_to_storage(
+        log: &ExecutionLog,
+        log_index: u32,
+        transaction_index: u32,
+    ) -> StorageLog {
+        StorageLog {
+            address: log.address.0 .0,
+            topics: log.topics.iter().map(|t| t.0).collect(),
+            data: log.data.to_vec(),
+            log_index,
+            transaction_index,
+        }
     }
 }
 
