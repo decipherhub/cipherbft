@@ -1126,9 +1126,9 @@ impl Node {
             exec.receipts.iter().map(|r| r.transaction_hash.0).collect();
         let transaction_count = transaction_hashes.len() as u32;
 
-        // Create the block with execution results
+        // Create the block with execution results (size will be calculated below)
         // Use the properly computed block_hash and parent_hash from BlockExecutionResult
-        Block {
+        let mut block = Block {
             hash: result.block_hash.0,
             number: block_number,
             parent_hash: result.parent_hash.0,
@@ -1149,7 +1149,12 @@ impl Node {
             transaction_hashes,
             transaction_count,
             total_difficulty: [0u8; 32], // Not used in PoS
-        }
+            size: 0,                     // Placeholder, calculated below
+        };
+
+        // Calculate exact RLP-encoded block header size
+        block.size = block.calculate_size();
+        block
     }
 
     /// Convert an execution TransactionReceipt to a storage Receipt for MDBX persistence.
@@ -1233,7 +1238,8 @@ impl Node {
         hash_input.extend_from_slice(&timestamp.to_be_bytes());
         let genesis_hash: [u8; 32] = keccak256(&hash_input).0;
 
-        Block {
+        // Create genesis block (size will be calculated below)
+        let mut block = Block {
             hash: genesis_hash,
             number: 0,
             parent_hash: [0u8; 32], // Genesis has no parent
@@ -1254,7 +1260,12 @@ impl Node {
             transaction_hashes: Vec::new(),        // No transactions
             transaction_count: 0,
             total_difficulty: [0u8; 32], // Zero in PoS
-        }
+            size: 0,                     // Placeholder, calculated below
+        };
+
+        // Calculate exact RLP-encoded block header size
+        block.size = block.calculate_size();
+        block
     }
 }
 

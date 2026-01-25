@@ -181,7 +181,7 @@ impl RpcBlock {
             nonce: B64::from(storage_block.nonce),
             total_difficulty: Some(U256::from_be_bytes(storage_block.total_difficulty)),
             base_fee_per_gas: storage_block.base_fee_per_gas,
-            size: None,
+            size: Some(storage_block.size),
             withdrawals_root: None,
             blob_gas_used: None,
             excess_blob_gas: None,

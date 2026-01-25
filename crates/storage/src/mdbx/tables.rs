@@ -852,6 +852,8 @@ pub struct StoredBlock {
     pub transaction_count: u32,
     /// Total difficulty
     pub total_difficulty: [u8; 32],
+    /// Block size in bytes (RLP-encoded size estimate)
+    pub size: u64,
 }
 
 /// EvmAccounts table: Address -> Account

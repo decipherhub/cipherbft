@@ -67,6 +67,64 @@ pub struct Block {
     pub transaction_count: u32,
     /// Total difficulty (not used in PoS, kept for compatibility)
     pub total_difficulty: [u8; 32],
+    /// Block size in bytes (RLP-encoded size estimate)
+    pub size: u64,
+}
+
+impl Block {
+    /// Calculate the RLP-encoded block size in bytes.
+    ///
+    /// This computes the exact size of the block header when RLP-encoded,
+    /// matching Ethereum's `size` field in block responses. We construct
+    /// an `alloy_consensus::Header` from our block fields and use its
+    /// `Encodable::length()` method to get the precise byte count.
+    ///
+    /// The Ethereum block `size` field represents the header size, not
+    /// including the full transaction bodies (just transaction hashes
+    /// contribute to transactions_root).
+    pub fn calculate_size(&self) -> u64 {
+        use alloy_consensus::Header;
+        use alloy_primitives::{Address, Bloom, Bytes, B256, B64, U256};
+        use alloy_rlp::Encodable;
+
+        // Convert logs_bloom bytes to Bloom type
+        let bloom = if self.logs_bloom.len() == 256 {
+            let mut bloom_bytes = [0u8; 256];
+            bloom_bytes.copy_from_slice(&self.logs_bloom);
+            Bloom::from(bloom_bytes)
+        } else {
+            Bloom::ZERO
+        };
+
+        // Construct an alloy Header from our block fields
+        let header = Header {
+            parent_hash: B256::from(self.parent_hash),
+            ommers_hash: B256::from(self.ommers_hash),
+            beneficiary: Address::from(self.beneficiary),
+            state_root: B256::from(self.state_root),
+            transactions_root: B256::from(self.transactions_root),
+            receipts_root: B256::from(self.receipts_root),
+            logs_bloom: bloom,
+            difficulty: U256::from_be_bytes(self.difficulty),
+            number: self.number,
+            gas_limit: self.gas_limit,
+            gas_used: self.gas_used,
+            timestamp: self.timestamp,
+            extra_data: Bytes::copy_from_slice(&self.extra_data),
+            mix_hash: B256::from(self.mix_hash),
+            nonce: B64::from(self.nonce),
+            base_fee_per_gas: self.base_fee_per_gas,
+            // Post-merge fields (not used in our context, set to None)
+            withdrawals_root: None,
+            blob_gas_used: None,
+            excess_blob_gas: None,
+            parent_beacon_block_root: None,
+            requests_hash: None,
+        };
+
+        // Get the exact RLP-encoded length
+        header.length() as u64
+    }
 }
 
 /// Trait for storing and retrieving blocks.
