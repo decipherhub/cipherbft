@@ -1,26 +1,42 @@
 //! Key export command implementation
 //!
-//! Exports public key information (never exports private keys).
+//! Exports key information. By default only exports public keys.
+//! With --unsafe-export-private-key, can export the private key.
 
-use super::common::resolve_keys_dir;
-use anyhow::{anyhow, Context, Result};
-use cipherbft_crypto::{Keyring, KeyringBackend};
+use super::common::{read_passphrase_from_file, resolve_keys_dir};
+use anyhow::{anyhow, bail, Context, Result};
+use cipherbft_crypto::{ExposeSecret, Keyring, KeyringBackend};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Execute the export command
+///
+/// # Arguments
+///
+/// * `home` - Home directory path
+/// * `keyring_backend` - The keyring backend to use
+/// * `name` - Optional key name to export (exports all if None)
+/// * `format` - Output format ("json" or "text")
+/// * `keys_dir` - Optional custom keys directory
+/// * `output` - Optional output file path (stdout if None)
+/// * `unsafe_export_private_key` - If true, export the private key (DANGEROUS!)
+/// * `passphrase_file` - Optional path to file containing passphrase
+#[allow(clippy::too_many_arguments)]
 pub fn execute(
     home: &Path,
     keyring_backend: KeyringBackend,
+    name: Option<String>,
     format: &str,
     keys_dir: Option<PathBuf>,
     output: Option<PathBuf>,
+    unsafe_export_private_key: bool,
+    passphrase_file: Option<PathBuf>,
 ) -> Result<()> {
     let keys_dir = resolve_keys_dir(home, keys_dir);
 
     if !keys_dir.exists() {
         return Err(anyhow!(
-            "Keys directory not found: {}\nRun 'cipherd keys generate' or 'cipherd keys import' first.",
+            "Keys directory not found: {}\nRun 'cipherd keys add' to create keys first.",
             keys_dir.display()
         ));
     }
@@ -33,7 +49,30 @@ pub fn execute(
         );
     }
 
-    // Collect validator info - strategy depends on backend
+    // Private key export requires a specific key name
+    if unsafe_export_private_key && name.is_none() {
+        bail!(
+            "Private key export requires a specific key name.\n\
+             Usage: cipherd keys export <KEY_NAME> --unsafe-export-private-key\n\
+             Run 'cipherd keys list' to see available keys."
+        );
+    }
+
+    // If a specific key name is provided, export only that key
+    if let Some(ref key_name) = name {
+        return export_single_key(
+            home,
+            &keys_dir,
+            keyring_backend,
+            key_name,
+            format,
+            output,
+            unsafe_export_private_key,
+            passphrase_file,
+        );
+    }
+
+    // Otherwise, collect all validator info - strategy depends on backend
     let validators = match keyring_backend {
         KeyringBackend::File => collect_validators_from_files(&keys_dir)?,
         _ => collect_validators_from_keyring(&keys_dir, keyring_backend)?,
@@ -41,7 +80,7 @@ pub fn execute(
 
     if validators.is_empty() {
         return Err(anyhow!(
-            "No validator keys found in {}\nRun 'cipherd keys generate' or 'cipherd keys import' first.",
+            "No keys found in {}\nRun 'cipherd keys add' to create keys first.",
             keys_dir.display()
         ));
     }
@@ -57,7 +96,7 @@ pub fn execute(
         fs::write(&output_path, &output_content)
             .with_context(|| format!("Failed to write to {}", output_path.display()))?;
         println!(
-            "Exported {} validator(s) to {}",
+            "Exported {} key(s) to {}",
             validators.len(),
             output_path.display()
         );
@@ -66,6 +105,195 @@ pub fn execute(
     }
 
     Ok(())
+}
+
+/// Export a single key by name
+#[allow(clippy::too_many_arguments)]
+fn export_single_key(
+    _home: &Path,
+    keys_dir: &Path,
+    keyring_backend: KeyringBackend,
+    key_name: &str,
+    format: &str,
+    output: Option<PathBuf>,
+    unsafe_export_private_key: bool,
+    passphrase_file: Option<PathBuf>,
+) -> Result<()> {
+    // Use keyring to get key metadata
+    let keyring =
+        Keyring::new(keyring_backend, keys_dir).context("Failed to initialize keyring backend")?;
+
+    // List all keys and find matching ones
+    let all_keys = keyring.list_keys().context("Failed to list keys")?;
+
+    // Find keys that match the given name pattern
+    // Key names follow patterns like:
+    // - {name}_{account}_{type} (e.g., "validator-0_0_ed25519", "default_0_bls")
+    // - validator_{account}_{type} (legacy format)
+    let matching_keys: Vec<&String> = all_keys
+        .iter()
+        .filter(|k| key_matches(k, key_name))
+        .collect();
+
+    if matching_keys.is_empty() {
+        return Err(anyhow!(
+            "Key '{}' not found in {}\n\
+             Available keys: {}\n\
+             Run 'cipherd keys list' to see all available keys.",
+            key_name,
+            keys_dir.display(),
+            if all_keys.is_empty() {
+                "(none)".to_string()
+            } else {
+                all_keys.join(", ")
+            }
+        ));
+    }
+
+    // For private key export, we need exactly one key match
+    if unsafe_export_private_key && matching_keys.len() > 1 {
+        bail!(
+            "Multiple keys match '{}'. Please specify the exact key name for private key export.\n\
+             Matching keys: {}",
+            key_name,
+            matching_keys
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    // Get passphrase if needed for private key export
+    let passphrase: Option<String> =
+        if unsafe_export_private_key && keyring_backend.requires_passphrase() {
+            let pass = if let Some(ref pass_file) = passphrase_file {
+                read_passphrase_from_file(pass_file)?
+            } else {
+                // Prompt for passphrase
+                rpassword::prompt_password("Enter passphrase to decrypt key: ")
+                    .context("Failed to read passphrase")?
+            };
+            Some(pass)
+        } else {
+            None
+        };
+
+    // Collect key information
+    let mut key_info = serde_json::json!({
+        "name": key_name,
+        "keyring_backend": keyring_backend.to_string(),
+        "keys_dir": keys_dir.display().to_string(),
+    });
+
+    let mut keys_array = Vec::new();
+    for key_full_name in &matching_keys {
+        let metadata = keyring
+            .get_metadata(key_full_name)
+            .with_context(|| format!("Failed to get metadata for '{}'", key_full_name))?;
+
+        let mut key_data = serde_json::json!({
+            "full_name": key_full_name,
+            "key_type": metadata.key_type,
+            "pubkey": metadata.pubkey,
+            "description": metadata.description,
+            "derivation_path": metadata.path,
+        });
+
+        // Export private key if requested
+        if unsafe_export_private_key {
+            let secret = keyring
+                .get_key(key_full_name, passphrase.as_deref())
+                .with_context(|| format!("Failed to decrypt key '{}'", key_full_name))?;
+            key_data["private_key"] =
+                serde_json::Value::String(hex::encode(secret.expose_secret()));
+        }
+
+        keys_array.push(key_data);
+    }
+    key_info["keys"] = serde_json::Value::Array(keys_array);
+
+    // Format output
+    let output_content = match format {
+        "json" => serde_json::to_string_pretty(&key_info)?,
+        _ => format_single_key_text(&key_info)?,
+    };
+
+    // Write to file or stdout
+    if let Some(output_path) = output {
+        fs::write(&output_path, &output_content)
+            .with_context(|| format!("Failed to write to {}", output_path.display()))?;
+        println!("Exported key '{}' to {}", key_name, output_path.display());
+    } else {
+        print!("{}", output_content);
+    }
+
+    Ok(())
+}
+
+/// Check if a full key name matches the given search name
+///
+/// Supports matching:
+/// - Exact match: "validator-0_0_ed25519" matches "validator-0_0_ed25519"
+/// - Prefix match: "validator-0" matches "validator-0_0_ed25519" and "validator-0_0_bls"
+/// - Base name match: "validator-0" matches keys starting with "validator-0_"
+fn key_matches(full_name: &str, search_name: &str) -> bool {
+    // Exact match
+    if full_name == search_name {
+        return true;
+    }
+
+    // Prefix match with underscore separator
+    // e.g., "validator-0" should match "validator-0_0_ed25519"
+    if full_name.starts_with(&format!("{}_", search_name)) {
+        return true;
+    }
+
+    // For legacy format: "validator_0" should match "validator_0_consensus"
+    if full_name.starts_with(&format!("{}_", search_name)) {
+        return true;
+    }
+
+    false
+}
+
+/// Format single key info as text
+fn format_single_key_text(info: &serde_json::Value) -> Result<String> {
+    let mut output = String::new();
+
+    let name = info["name"].as_str().unwrap_or("unknown");
+    let backend = info["keyring_backend"].as_str().unwrap_or("unknown");
+
+    output.push_str(&format!("Key: {}\n", name));
+    output.push_str(&format!("Backend: {}\n", backend));
+    output.push_str("─".repeat(50).as_str());
+    output.push('\n');
+
+    if let Some(keys) = info["keys"].as_array() {
+        for key in keys {
+            let full_name = key["full_name"].as_str().unwrap_or("unknown");
+            let key_type = key["key_type"].as_str().unwrap_or("unknown");
+            let pubkey = key["pubkey"].as_str().unwrap_or("unknown");
+            let description = key["description"].as_str();
+            let path = key["derivation_path"].as_str();
+            let private_key = key["private_key"].as_str();
+
+            output.push_str(&format!("\n  {} ({})\n", full_name, key_type));
+            output.push_str(&format!("    Public Key: {}\n", pubkey));
+            if let Some(priv_key) = private_key {
+                output.push_str(&format!("    Private Key: {}\n", priv_key));
+            }
+            if let Some(desc) = description {
+                output.push_str(&format!("    Description: {}\n", desc));
+            }
+            if let Some(p) = path {
+                output.push_str(&format!("    Derivation: {}\n", p));
+            }
+        }
+    }
+
+    output.push('\n');
+    Ok(output)
 }
 
 /// Collect validator info from validator_info.json files (file backend)

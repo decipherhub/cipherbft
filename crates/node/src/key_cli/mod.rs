@@ -36,7 +36,7 @@ pub mod import;
 
 use anyhow::Result;
 use cipherbft_crypto::KeyringBackend;
-use clap::{Subcommand, ValueEnum};
+use clap::{Args, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 /// Keyring backend selection for CLI
@@ -59,6 +59,25 @@ impl From<KeyringBackendArg> for KeyringBackend {
             KeyringBackendArg::Test => KeyringBackend::Test,
         }
     }
+}
+
+/// Common arguments shared across key commands
+///
+/// These arguments can be provided at either the parent `keys` command level
+/// or at the individual subcommand level.
+#[derive(Args, Debug, Clone)]
+pub struct KeysCommonArgs {
+    /// Keyring backend for storing keys
+    ///
+    /// - file: EIP-2335 encrypted keystores (default, recommended)
+    /// - os: OS native keyring (macOS Keychain, Windows Credential Manager)
+    /// - test: Unencrypted storage (development only!)
+    #[arg(long, default_value = "file", value_enum, global = true)]
+    pub keyring_backend: KeyringBackendArg,
+
+    /// Directory containing keystore files (overrides default: {home}/keys)
+    #[arg(long, global = true)]
+    pub keys_dir: Option<PathBuf>,
 }
 
 /// Key management subcommands (Cosmos SDK style)
@@ -161,11 +180,24 @@ pub enum KeysCommand {
         force: bool,
     },
 
-    /// Export public key information
+    /// Export key information (public key by default, or private key with --unsafe-export-private-key)
     ///
-    /// Outputs key public keys and IDs. Never exports private keys.
-    /// Useful for sharing validator info with others or for configuration.
+    /// By default, exports only public key information. Use --unsafe-export-private-key
+    /// to export the private key (requires confirmation for file backend).
+    ///
+    /// Examples:
+    ///   cipherd keys export                                          # Export all public keys
+    ///   cipherd keys export validator-0                              # Export specific key public info
+    ///   cipherd keys export validator-0 --unsafe-export-private-key  # Export private key (DANGEROUS!)
+    ///   cipherd keys export validator-0 --format json                # Export in JSON format
     Export {
+        /// Name of the key to export (required for private key export)
+        ///
+        /// The key name should match the name used when the key was created
+        /// (e.g., "validator-0_0_ed25519", "default_0_bls"). For private key export,
+        /// this must be the exact key name (not a prefix).
+        name: Option<String>,
+
         /// Keyring backend to read keys from
         #[arg(long, default_value = "file", value_enum)]
         keyring_backend: KeyringBackendArg,
@@ -181,6 +213,20 @@ pub enum KeysCommand {
         /// Output file (stdout if not specified)
         #[arg(long)]
         output: Option<PathBuf>,
+
+        /// Export the private key (DANGEROUS - use with extreme caution!)
+        ///
+        /// This will export the raw private key in hex format. The private key
+        /// gives full control over the associated account. Never share it!
+        #[arg(long)]
+        unsafe_export_private_key: bool,
+
+        /// Read passphrase from file instead of prompting (for file backend)
+        ///
+        /// Required when exporting private keys from the file backend,
+        /// as the keystore must be decrypted.
+        #[arg(long)]
+        passphrase_file: Option<PathBuf>,
     },
 
     /// List all keystores in a directory
@@ -202,8 +248,54 @@ pub enum KeysCommand {
     },
 }
 
+/// Helper function to resolve keyring backend with parent-level fallback
+///
+/// Subcommand-level args take precedence over parent-level args.
+/// If neither is specified, uses the default (File).
+fn resolve_keyring_backend(
+    parent_backend: Option<KeyringBackendArg>,
+    subcommand_backend: KeyringBackendArg,
+) -> KeyringBackend {
+    // If subcommand explicitly set (not default), use it
+    // Otherwise, use parent-level if set, else use subcommand's default
+    if let Some(parent) = parent_backend {
+        // Parent was explicitly set - use it as override for subcommand default
+        // But if subcommand was also explicitly set, subcommand wins
+        // Since we can't detect "explicitly set vs default" in clap easily,
+        // we'll use parent only if subcommand is at default (File)
+        if subcommand_backend == KeyringBackendArg::File {
+            parent.into()
+        } else {
+            subcommand_backend.into()
+        }
+    } else {
+        subcommand_backend.into()
+    }
+}
+
+/// Helper function to resolve keys_dir with parent-level fallback
+fn resolve_keys_dir_option(
+    parent_dir: Option<PathBuf>,
+    subcommand_dir: Option<PathBuf>,
+) -> Option<PathBuf> {
+    // Subcommand takes precedence
+    subcommand_dir.or(parent_dir)
+}
+
 /// Execute a keys command
-pub fn execute_keys_command(home: &std::path::Path, command: KeysCommand) -> Result<()> {
+///
+/// # Arguments
+///
+/// * `home` - Home directory path
+/// * `parent_keyring_backend` - Parent-level keyring backend (from `cipherd keys --keyring-backend`)
+/// * `parent_keys_dir` - Parent-level keys directory (from `cipherd keys --keys-dir`)
+/// * `command` - The subcommand to execute
+pub fn execute_keys_command(
+    home: &std::path::Path,
+    parent_keyring_backend: Option<KeyringBackendArg>,
+    parent_keys_dir: Option<PathBuf>,
+    command: KeysCommand,
+) -> Result<()> {
     match command {
         KeysCommand::Add {
             name,
@@ -216,19 +308,24 @@ pub fn execute_keys_command(home: &std::path::Path, command: KeysCommand) -> Res
             passphrase_file,
             force,
             dry_run,
-        } => add::execute(
-            home,
-            keyring_backend.into(),
-            &name,
-            account,
-            output_dir,
-            recover,
-            validator,
-            mnemonic_file,
-            passphrase_file,
-            force,
-            dry_run,
-        ),
+        } => {
+            let effective_backend =
+                resolve_keyring_backend(parent_keyring_backend, keyring_backend);
+            let effective_dir = resolve_keys_dir_option(parent_keys_dir, output_dir);
+            add::execute(
+                home,
+                effective_backend,
+                &name,
+                account,
+                effective_dir,
+                recover,
+                validator,
+                mnemonic_file,
+                passphrase_file,
+                force,
+                dry_run,
+            )
+        }
 
         // Deprecated: redirect to add with --validator
         KeysCommand::Generate {
@@ -242,12 +339,15 @@ pub fn execute_keys_command(home: &std::path::Path, command: KeysCommand) -> Res
             eprintln!(
                 "WARNING: 'keys generate' is deprecated. Use 'keys add --validator' instead."
             );
+            let effective_backend =
+                resolve_keyring_backend(parent_keyring_backend, keyring_backend);
+            let effective_dir = resolve_keys_dir_option(parent_keys_dir, output_dir);
             add::execute(
                 home,
-                keyring_backend.into(),
+                effective_backend,
                 "validator", // default name for backward compatibility
                 account,
-                output_dir,
+                effective_dir,
                 mnemonic, // recover flag
                 true,     // validator flag (generate always created both keys)
                 None,     // mnemonic_file
@@ -269,12 +369,15 @@ pub fn execute_keys_command(home: &std::path::Path, command: KeysCommand) -> Res
             eprintln!(
                 "WARNING: 'keys import' is deprecated. Use 'keys add --recover --validator' instead."
             );
+            let effective_backend =
+                resolve_keyring_backend(parent_keyring_backend, keyring_backend);
+            let effective_dir = resolve_keys_dir_option(parent_keys_dir, output_dir);
             add::execute(
                 home,
-                keyring_backend.into(),
+                effective_backend,
                 "validator", // default name for backward compatibility
                 account,
-                output_dir,
+                effective_dir,
                 true, // recover flag
                 true, // validator flag (import was for validators)
                 mnemonic_file,
@@ -285,16 +388,38 @@ pub fn execute_keys_command(home: &std::path::Path, command: KeysCommand) -> Res
         }
 
         KeysCommand::Export {
+            name,
             keyring_backend,
             format,
             keys_dir,
             output,
-        } => export::execute(home, keyring_backend.into(), &format, keys_dir, output),
+            unsafe_export_private_key,
+            passphrase_file,
+        } => {
+            let effective_backend =
+                resolve_keyring_backend(parent_keyring_backend, keyring_backend);
+            let effective_dir = resolve_keys_dir_option(parent_keys_dir, keys_dir);
+            export::execute(
+                home,
+                effective_backend,
+                name,
+                &format,
+                effective_dir,
+                output,
+                unsafe_export_private_key,
+                passphrase_file,
+            )
+        }
 
         KeysCommand::List {
             keyring_backend,
             keys_dir,
             format,
-        } => list::execute(home, keyring_backend.into(), keys_dir, &format),
+        } => {
+            let effective_backend =
+                resolve_keyring_backend(parent_keyring_backend, keyring_backend);
+            let effective_dir = resolve_keys_dir_option(parent_keys_dir, keys_dir);
+            list::execute(home, effective_backend, effective_dir, &format)
+        }
     }
 }
