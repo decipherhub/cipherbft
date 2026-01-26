@@ -19,7 +19,8 @@ use jsonrpsee::http_client::HttpClientBuilder;
 use jsonrpsee::rpc_params;
 
 use cipherbft_rpc::{
-    RpcConfig, RpcServer, StubExecutionApi, StubMempoolApi, StubNetworkApi, StubRpcStorage,
+    RpcConfig, RpcServer, StubDebugExecutionApi, StubExecutionApi, StubMempoolApi, StubNetworkApi,
+    StubRpcStorage,
 };
 
 /// Test private key (well-known test key, do not use in production)
@@ -68,7 +69,15 @@ fn create_signed_transaction(signer: &PrivateKeySigner, to: Address, nonce: u64)
 /// Start a test RPC server and return the HTTP URL
 async fn start_test_server() -> (
     String,
-    Arc<RpcServer<StubRpcStorage, StubMempoolApi, StubExecutionApi, StubNetworkApi>>,
+    Arc<
+        RpcServer<
+            StubRpcStorage,
+            StubMempoolApi,
+            StubExecutionApi,
+            StubNetworkApi,
+            StubDebugExecutionApi,
+        >,
+    >,
 ) {
     let (http_port, ws_port) = get_test_ports();
 
@@ -80,8 +89,16 @@ async fn start_test_server() -> (
     let mempool = Arc::new(StubMempoolApi::new());
     let executor = Arc::new(StubExecutionApi::new());
     let network = Arc::new(StubNetworkApi::new());
+    let debug_executor = Arc::new(StubDebugExecutionApi::new());
 
-    let server = Arc::new(RpcServer::new(config, storage, mempool, executor, network));
+    let server = Arc::new(RpcServer::new(
+        config,
+        storage,
+        mempool,
+        executor,
+        network,
+        debug_executor,
+    ));
     server.start().await.expect("Failed to start RPC server");
 
     // Give the server a moment to fully start

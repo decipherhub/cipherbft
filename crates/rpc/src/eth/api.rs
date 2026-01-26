@@ -248,9 +248,6 @@ pub trait EthRpc {
     ///
     /// This method is defined in EIP-1186 and is used for light client verification.
     /// Returns proof data for the account at the given address and storage keys.
-    ///
-    /// Note: This method returns an error as CipherBFT does not currently expose
-    /// state trie access for proof generation.
     #[method(name = "getProof")]
     async fn get_proof(
         &self,
@@ -264,9 +261,6 @@ pub trait EthRpc {
     /// This method simulates a transaction and returns the access list that
     /// would be created during execution. The access list contains all addresses
     /// and storage keys that would be accessed.
-    ///
-    /// Note: This method returns an error as CipherBFT does not currently expose
-    /// state access tracking for access list generation.
     #[method(name = "createAccessList")]
     async fn create_access_list(
         &self,

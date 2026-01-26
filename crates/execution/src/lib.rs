@@ -53,8 +53,10 @@ pub mod engine;
 pub mod error;
 pub mod evm;
 pub mod genesis;
+pub mod inspector;
 pub mod mpt;
 pub mod precompiles;
+pub mod proof;
 pub mod receipts;
 pub mod rlp;
 pub mod state;
@@ -84,6 +86,15 @@ pub use receipts::{
 };
 pub use rlp::{rlp_encode_account, rlp_encode_storage_value, RlpAccount, KECCAK_EMPTY};
 pub use state::StateManager;
+
+// Re-export inspector types for RPC tracing
+pub use inspector::{
+    CallFrame, CallLog, CallTracer, CallTracerConfig, CallType, OpcodeStep, OpcodeTracer,
+    OpcodeTracerConfig, TraceOptions, TraceResult,
+};
+
+// Re-export proof types for eth_getProof
+pub use proof::{generate_account_proof, AccountProof, StorageProof};
 pub use types::{
     BlockHeader, BlockInput, Car, ChainConfig, ConsensusBlock, Cut, ExecutionBlock,
     ExecutionResult, Log, Receipt, SealedBlock, TransactionReceipt, DELAYED_COMMITMENT_DEPTH,

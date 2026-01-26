@@ -772,7 +772,7 @@ impl Node {
 
         // RPC storage reference - used to update block number when consensus decides
         // Moved outside the `if` block so it can be passed to run_event_loop
-        use cipherbft_rpc::MdbxRpcStorage;
+        use cipherbft_rpc::{MdbxRpcStorage, StubDebugExecutionApi};
         let rpc_storage: Option<Arc<MdbxRpcStorage<InMemoryProvider>>> = if self.config.rpc_enabled
         {
             // Create MDBX database for block/receipt storage
@@ -837,6 +837,13 @@ impl Node {
             None
         };
 
+        // Create debug executor for debug_* RPC methods
+        let rpc_debug_executor: Option<Arc<StubDebugExecutionApi>> = if self.config.rpc_enabled {
+            Some(Arc::new(StubDebugExecutionApi::new()))
+        } else {
+            None
+        };
+
         // Create subscription manager for WebSocket subscriptions (eth_subscribe)
         // This needs to be shared between the RPC server and the event loop
         // so that new blocks can be broadcast to subscribers
@@ -848,7 +855,7 @@ impl Node {
         };
 
         // Start RPC server if enabled
-        if let Some(ref storage) = rpc_storage {
+        if let (Some(ref storage), Some(ref debug_executor)) = (&rpc_storage, &rpc_debug_executor) {
             use cipherbft_rpc::{
                 RpcConfig, RpcServer, StubExecutionApi, StubMempoolApi, StubNetworkApi,
             };
@@ -871,6 +878,7 @@ impl Node {
                 mempool,
                 executor,
                 network,
+                debug_executor.clone(),
                 subscription_manager.clone().unwrap(),
             );
 
@@ -920,6 +928,7 @@ impl Node {
             execution_bridge,
             rpc_storage,
             subscription_manager,
+            rpc_debug_executor,
         )
         .await;
 
@@ -962,6 +971,7 @@ impl Node {
         execution_bridge: Option<Arc<ExecutionBridge>>,
         rpc_storage: Option<Arc<cipherbft_rpc::MdbxRpcStorage<InMemoryProvider>>>,
         subscription_manager: Option<Arc<cipherbft_rpc::SubscriptionManager>>,
+        rpc_debug_executor: Option<Arc<cipherbft_rpc::StubDebugExecutionApi>>,
     ) -> Result<()> {
         loop {
             tokio::select! {
@@ -1068,6 +1078,13 @@ impl Node {
                                 }
                             }
                         }
+                    }
+
+                    // Also update the debug executor's block number
+                    // This ensures debug trace methods use the correct block context
+                    if let Some(ref debug_executor) = rpc_debug_executor {
+                        debug_executor.set_latest_block(height.0);
+                        debug!("Updated RPC debug executor block number to {}", height.0);
                     }
 
                     // Execute Cut if execution layer is enabled

@@ -36,9 +36,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing::{debug, trace, warn};
 
+use cipherbft_execution::AccountProof;
+
 use crate::error::{RpcError, RpcResult};
 use crate::traits::{
-    BlockNumberOrTag, ExecutionApi, MempoolApi, NetworkApi, RpcStorage, SyncStatus,
+    BlockNumberOrTag, ExecutionApi, MempoolApi, NetworkApi, RpcProofStorage, RpcStorage, SyncStatus,
 };
 use crate::types::RpcBlock;
 
@@ -328,6 +330,50 @@ impl<P: Provider + 'static> RpcStorage for ProviderBasedRpcStorage<P> {
                 Err(RpcError::Storage(e.to_string()))
             }
         }
+    }
+}
+
+#[async_trait]
+impl<P: Provider + 'static> RpcProofStorage for ProviderBasedRpcStorage<P> {
+    async fn get_proof(
+        &self,
+        address: Address,
+        storage_keys: Vec<U256>,
+        _block: BlockNumberOrTag,
+    ) -> RpcResult<AccountProof> {
+        debug!(
+            "ProviderBasedRpcStorage::get_proof({}, {} keys)",
+            address,
+            storage_keys.len()
+        );
+
+        // Get all accounts from provider
+        let accounts = self
+            .provider
+            .get_all_accounts()
+            .map_err(|e| RpcError::Storage(format!("Failed to get accounts: {}", e)))?;
+
+        // Storage getter function
+        let provider = Arc::clone(&self.provider);
+        let storage_getter = move |addr: Address| -> cipherbft_execution::Result<
+            std::collections::BTreeMap<U256, U256>,
+        > {
+            provider.get_all_storage(addr).map_err(|e| {
+                cipherbft_execution::ExecutionError::Internal(format!(
+                    "Failed to get storage: {}",
+                    e
+                ))
+            })
+        };
+
+        // Generate the proof
+        cipherbft_execution::generate_account_proof(
+            &accounts,
+            storage_getter,
+            address,
+            storage_keys,
+        )
+        .map_err(|e| RpcError::Storage(format!("Failed to generate proof: {}", e)))
     }
 }
 
@@ -1074,6 +1120,49 @@ impl RpcStorage for StubRpcStorage {
     }
 }
 
+#[async_trait]
+impl RpcProofStorage for StubRpcStorage {
+    async fn get_proof(
+        &self,
+        address: Address,
+        storage_keys: Vec<U256>,
+        _block: BlockNumberOrTag,
+    ) -> RpcResult<AccountProof> {
+        debug!(
+            "StubRpcStorage::get_proof({}, {} keys)",
+            address,
+            storage_keys.len()
+        );
+
+        // Return a minimal stub proof
+        use cipherbft_execution::StorageProof;
+        const EMPTY_ROOT_HASH: B256 = B256::new([
+            0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6, 0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0,
+            0xf8, 0x6e, 0x5b, 0x48, 0xe0, 0x1b, 0x99, 0x6c, 0xad, 0xc0, 0x01, 0x62, 0x2f, 0xb5,
+            0xe3, 0x63, 0xb4, 0x21,
+        ]);
+
+        let storage_proofs: Vec<StorageProof> = storage_keys
+            .into_iter()
+            .map(|key| StorageProof {
+                key,
+                value: U256::ZERO,
+                proof: vec![],
+            })
+            .collect();
+
+        Ok(AccountProof {
+            address,
+            balance: U256::ZERO,
+            code_hash: cipherbft_execution::KECCAK_EMPTY,
+            nonce: 0,
+            storage_hash: EMPTY_ROOT_HASH,
+            account_proof: vec![],
+            storage_proof: storage_proofs,
+        })
+    }
+}
+
 /// Stub mempool adapter.
 ///
 /// This adapter provides placeholder implementations for mempool operations.
@@ -1749,6 +1838,682 @@ pub fn storage_block_to_rpc_block(
 ) -> crate::types::RpcBlock {
     // Use the RpcBlock's from_storage constructor for proper hex serialization
     crate::types::RpcBlock::from_storage(storage_block)
+}
+
+// ============================================================================
+// Stub Debug Execution Implementation
+// ============================================================================
+
+/// Stub debug execution adapter.
+///
+/// This adapter provides placeholder implementations for debug tracing operations.
+/// Replace with actual revm tracing integration when ready.
+pub struct StubDebugExecutionApi {
+    /// Latest block number (for consistency with EvmDebugExecutionApi).
+    latest_block: AtomicU64,
+}
+
+impl StubDebugExecutionApi {
+    /// Create a new stub debug execution adapter.
+    pub fn new() -> Self {
+        Self {
+            latest_block: AtomicU64::new(0),
+        }
+    }
+
+    /// Update the latest block number (called by consensus layer).
+    pub fn set_latest_block(&self, block: u64) {
+        self.latest_block.store(block, Ordering::SeqCst);
+    }
+
+    /// Get the latest block number.
+    pub fn get_latest_block(&self) -> u64 {
+        self.latest_block.load(Ordering::SeqCst)
+    }
+}
+
+impl Default for StubDebugExecutionApi {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl crate::traits::DebugExecutionApi for StubDebugExecutionApi {
+    async fn trace_transaction(
+        &self,
+        tx_hash: B256,
+        _block: BlockNumberOrTag,
+        _options: Option<cipherbft_execution::TraceOptions>,
+    ) -> RpcResult<cipherbft_execution::TraceResult> {
+        debug!("StubDebugExecutionApi::trace_transaction(hash={})", tx_hash);
+        // Return an empty trace result for now
+        Ok(cipherbft_execution::TraceResult {
+            call_trace: None,
+            struct_logs: Some(vec![]),
+            state_diff: None,
+            failed: false,
+            gas: 21000,
+            return_value: Some(Bytes::new()),
+        })
+    }
+
+    async fn trace_call(
+        &self,
+        from: Option<Address>,
+        to: Option<Address>,
+        gas: Option<u64>,
+        _gas_price: Option<U256>,
+        _value: Option<U256>,
+        data: Option<Bytes>,
+        _block: BlockNumberOrTag,
+        _options: Option<cipherbft_execution::TraceOptions>,
+    ) -> RpcResult<cipherbft_execution::TraceResult> {
+        debug!(
+            "StubDebugExecutionApi::trace_call(from={:?}, to={:?}, gas={:?}, data_len={:?})",
+            from,
+            to,
+            gas,
+            data.as_ref().map(|d| d.len())
+        );
+        // Return an empty trace result for now
+        Ok(cipherbft_execution::TraceResult {
+            call_trace: None,
+            struct_logs: Some(vec![]),
+            state_diff: None,
+            failed: false,
+            gas: gas.unwrap_or(21000),
+            return_value: Some(Bytes::new()),
+        })
+    }
+
+    async fn trace_block(
+        &self,
+        block: BlockNumberOrTag,
+        _options: Option<cipherbft_execution::TraceOptions>,
+    ) -> RpcResult<Vec<cipherbft_execution::TraceResult>> {
+        debug!("StubDebugExecutionApi::trace_block(block={:?})", block);
+        // Return empty traces for now
+        Ok(vec![])
+    }
+}
+
+// ============================================================================
+// Real EVM Debug Execution Implementation
+// ============================================================================
+
+/// Real EVM debug execution adapter using revm with inspector support.
+///
+/// This adapter executes debug/trace operations using the revm EVM
+/// implementation with actual Inspector integration for tracing.
+pub struct EvmDebugExecutionApi<P, B = (), R = ()>
+where
+    P: Provider,
+{
+    /// Provider for reading state.
+    provider: Arc<P>,
+    /// Optional block store for trace_transaction/trace_block.
+    block_store: Option<Arc<B>>,
+    /// Optional receipt store for trace_transaction/trace_block.
+    receipt_store: Option<Arc<R>>,
+    /// Chain ID for this network.
+    chain_id: u64,
+    /// Block gas limit.
+    block_gas_limit: u64,
+    /// Base fee per gas.
+    base_fee_per_gas: u64,
+    /// Latest block number (for execution context).
+    latest_block: AtomicU64,
+}
+
+impl<P: Provider> EvmDebugExecutionApi<P, (), ()> {
+    /// Default block gas limit (30 million).
+    const DEFAULT_BLOCK_GAS_LIMIT: u64 = 30_000_000;
+    /// Default base fee (1 gwei).
+    const DEFAULT_BASE_FEE: u64 = 1_000_000_000;
+
+    /// Create a new EVM debug execution adapter without storage (trace_call only).
+    pub fn new(provider: Arc<P>, chain_id: u64) -> Self {
+        Self {
+            provider,
+            block_store: None,
+            receipt_store: None,
+            chain_id,
+            block_gas_limit: Self::DEFAULT_BLOCK_GAS_LIMIT,
+            base_fee_per_gas: Self::DEFAULT_BASE_FEE,
+            latest_block: AtomicU64::new(0),
+        }
+    }
+}
+
+impl<P, B, R> EvmDebugExecutionApi<P, B, R>
+where
+    P: Provider,
+    B: cipherbft_storage::BlockStore + Send + Sync + 'static,
+    R: cipherbft_storage::ReceiptStore + Send + Sync + 'static,
+{
+    /// Default block gas limit (30 million).
+    const DEFAULT_BLOCK_GAS_LIMIT_WITH_STORAGE: u64 = 30_000_000;
+    /// Default base fee (1 gwei).
+    const DEFAULT_BASE_FEE_WITH_STORAGE: u64 = 1_000_000_000;
+    /// Default gas limit for calls.
+    const DEFAULT_CALL_GAS: u64 = 30_000_000;
+
+    /// Create a new EVM debug execution adapter with full storage support.
+    pub fn with_storage(
+        provider: Arc<P>,
+        block_store: Arc<B>,
+        receipt_store: Arc<R>,
+        chain_id: u64,
+    ) -> Self {
+        Self {
+            provider,
+            block_store: Some(block_store),
+            receipt_store: Some(receipt_store),
+            chain_id,
+            block_gas_limit: Self::DEFAULT_BLOCK_GAS_LIMIT_WITH_STORAGE,
+            base_fee_per_gas: Self::DEFAULT_BASE_FEE_WITH_STORAGE,
+            latest_block: AtomicU64::new(0),
+        }
+    }
+
+    /// Create with custom configuration.
+    pub fn with_config(
+        provider: Arc<P>,
+        block_store: Option<Arc<B>>,
+        receipt_store: Option<Arc<R>>,
+        chain_id: u64,
+        block_gas_limit: u64,
+        base_fee_per_gas: u64,
+    ) -> Self {
+        Self {
+            provider,
+            block_store,
+            receipt_store,
+            chain_id,
+            block_gas_limit,
+            base_fee_per_gas,
+            latest_block: AtomicU64::new(0),
+        }
+    }
+
+    /// Update the latest block number.
+    pub fn set_latest_block(&self, block: u64) {
+        self.latest_block.store(block, Ordering::SeqCst);
+    }
+
+    /// Execute a call with CallTracer and return the trace result.
+    #[allow(clippy::too_many_arguments)]
+    fn trace_call_with_call_tracer(
+        &self,
+        from: Option<Address>,
+        to: Option<Address>,
+        gas: Option<u64>,
+        gas_price: Option<U256>,
+        value: Option<U256>,
+        data: Option<Bytes>,
+        config: cipherbft_execution::CallTracerConfig,
+    ) -> RpcResult<cipherbft_execution::TraceResult> {
+        use cipherbft_execution::database::CipherBftDatabase;
+        use cipherbft_execution::CallTracer;
+        use revm::context::{BlockEnv, CfgEnv, Context, Evm, FrameStack, Journal, TxEnv};
+        use revm::context_interface::result::{ExecutionResult, Output};
+        use revm::handler::instructions::EthInstructions;
+        use revm::handler::EthPrecompiles;
+        use revm::primitives::hardfork::SpecId;
+        use revm::primitives::TxKind;
+
+        // Type alias for EVM context with CallTracer
+        type EvmContextWithTracer<DB> = Context<BlockEnv, TxEnv, CfgEnv, DB, Journal<DB>, ()>;
+
+        // Create database and tracer
+        let db = CipherBftDatabase::new(Arc::clone(&self.provider));
+        let tracer = CallTracer::with_config(config);
+
+        // Build the EVM context
+        let block_number = self.latest_block.load(Ordering::SeqCst);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Create context with database
+        let mut ctx: EvmContextWithTracer<CipherBftDatabase<Arc<P>>> =
+            Context::new(db, SpecId::CANCUN);
+
+        // Configure block environment
+        ctx.block.number = alloy_primitives::U256::from(block_number);
+        ctx.block.timestamp = alloy_primitives::U256::from(timestamp);
+        ctx.block.gas_limit = self.block_gas_limit;
+        ctx.block.basefee = self.base_fee_per_gas;
+
+        // Configure chain settings
+        ctx.cfg.chain_id = self.chain_id;
+
+        // Set up transaction environment
+        ctx.tx.caller = from.unwrap_or(Address::ZERO);
+        ctx.tx.gas_limit = gas.unwrap_or(Self::DEFAULT_CALL_GAS);
+        ctx.tx.gas_price = gas_price
+            .map(|p| p.try_into().unwrap_or(self.base_fee_per_gas as u128))
+            .unwrap_or(self.base_fee_per_gas as u128);
+        ctx.tx.kind = match to {
+            Some(addr) => TxKind::Call(addr),
+            None => TxKind::Create,
+        };
+        ctx.tx.value = value.unwrap_or(U256::ZERO);
+        ctx.tx.data = data.unwrap_or_default();
+        ctx.tx.nonce = 0;
+
+        // Build the EVM with tracer as inspector
+        let mut evm = Evm {
+            ctx,
+            inspector: tracer,
+            instruction: EthInstructions::default(),
+            precompiles: EthPrecompiles::default(),
+            frame_stack: FrameStack::new_prealloc(8),
+        };
+
+        // Clone tx_env before passing to transact
+        let tx_env = evm.ctx.tx.clone();
+
+        // Execute the transaction with tracing
+        use revm::handler::ExecuteEvm;
+        let result = evm.transact(tx_env).map_err(|e| {
+            debug!("EVM trace execution error: {:?}", e);
+            RpcError::Execution(format!("EVM trace execution failed: {e:?}"))
+        })?;
+
+        // Extract trace from inspector
+        let call_trace = evm.inspector.into_trace();
+
+        // Build trace result
+        let gas_used = result.result.gas_used();
+        let (failed, return_value) = match result.result {
+            ExecutionResult::Success { output, .. } => {
+                let output_bytes = match output {
+                    Output::Call(data) => data,
+                    Output::Create(_, addr) => addr
+                        .map(|a| Bytes::copy_from_slice(a.as_slice()))
+                        .unwrap_or_default(),
+                };
+                (false, Some(output_bytes))
+            }
+            ExecutionResult::Revert { output, .. } => (true, Some(output)),
+            ExecutionResult::Halt { .. } => (true, None),
+        };
+
+        Ok(cipherbft_execution::TraceResult {
+            call_trace,
+            struct_logs: None,
+            state_diff: None,
+            failed,
+            gas: gas_used,
+            return_value,
+        })
+    }
+
+    /// Execute a call with OpcodeTracer and return the trace result.
+    #[allow(clippy::too_many_arguments)]
+    fn trace_call_with_opcode_tracer(
+        &self,
+        from: Option<Address>,
+        to: Option<Address>,
+        gas: Option<u64>,
+        gas_price: Option<U256>,
+        value: Option<U256>,
+        data: Option<Bytes>,
+        config: cipherbft_execution::OpcodeTracerConfig,
+    ) -> RpcResult<cipherbft_execution::TraceResult> {
+        use cipherbft_execution::database::CipherBftDatabase;
+        use cipherbft_execution::OpcodeTracer;
+        use revm::context::{BlockEnv, CfgEnv, Context, Evm, FrameStack, Journal, TxEnv};
+        use revm::context_interface::result::{ExecutionResult, Output};
+        use revm::handler::instructions::EthInstructions;
+        use revm::handler::EthPrecompiles;
+        use revm::primitives::hardfork::SpecId;
+        use revm::primitives::TxKind;
+
+        // Type alias for EVM context
+        type EvmContextWithTracer<DB> = Context<BlockEnv, TxEnv, CfgEnv, DB, Journal<DB>, ()>;
+
+        // Create database and tracer
+        let db = CipherBftDatabase::new(Arc::clone(&self.provider));
+        let tracer = OpcodeTracer::with_config(config);
+
+        // Build the EVM context
+        let block_number = self.latest_block.load(Ordering::SeqCst);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Create context with database
+        let mut ctx: EvmContextWithTracer<CipherBftDatabase<Arc<P>>> =
+            Context::new(db, SpecId::CANCUN);
+
+        // Configure block environment
+        ctx.block.number = alloy_primitives::U256::from(block_number);
+        ctx.block.timestamp = alloy_primitives::U256::from(timestamp);
+        ctx.block.gas_limit = self.block_gas_limit;
+        ctx.block.basefee = self.base_fee_per_gas;
+
+        // Configure chain settings
+        ctx.cfg.chain_id = self.chain_id;
+
+        // Set up transaction environment
+        ctx.tx.caller = from.unwrap_or(Address::ZERO);
+        ctx.tx.gas_limit = gas.unwrap_or(Self::DEFAULT_CALL_GAS);
+        ctx.tx.gas_price = gas_price
+            .map(|p| p.try_into().unwrap_or(self.base_fee_per_gas as u128))
+            .unwrap_or(self.base_fee_per_gas as u128);
+        ctx.tx.kind = match to {
+            Some(addr) => TxKind::Call(addr),
+            None => TxKind::Create,
+        };
+        ctx.tx.value = value.unwrap_or(U256::ZERO);
+        ctx.tx.data = data.unwrap_or_default();
+        ctx.tx.nonce = 0;
+
+        // Build the EVM with tracer as inspector
+        let mut evm = Evm {
+            ctx,
+            inspector: tracer,
+            instruction: EthInstructions::default(),
+            precompiles: EthPrecompiles::default(),
+            frame_stack: FrameStack::new_prealloc(8),
+        };
+
+        // Clone tx_env before passing to transact
+        let tx_env = evm.ctx.tx.clone();
+
+        // Execute the transaction with tracing
+        use revm::handler::ExecuteEvm;
+        let result = evm.transact(tx_env).map_err(|e| {
+            debug!("EVM trace execution error: {:?}", e);
+            RpcError::Execution(format!("EVM trace execution failed: {e:?}"))
+        })?;
+
+        // Extract trace from inspector
+        let struct_logs = evm.inspector.into_steps();
+
+        // Build trace result
+        let gas_used = result.result.gas_used();
+        let (failed, return_value) = match result.result {
+            ExecutionResult::Success { output, .. } => {
+                let output_bytes = match output {
+                    Output::Call(data) => data,
+                    Output::Create(_, addr) => addr
+                        .map(|a| Bytes::copy_from_slice(a.as_slice()))
+                        .unwrap_or_default(),
+                };
+                (false, Some(output_bytes))
+            }
+            ExecutionResult::Revert { output, .. } => (true, Some(output)),
+            ExecutionResult::Halt { .. } => (true, None),
+        };
+
+        Ok(cipherbft_execution::TraceResult {
+            call_trace: None,
+            struct_logs: Some(struct_logs),
+            state_diff: None,
+            failed,
+            gas: gas_used,
+            return_value,
+        })
+    }
+}
+
+#[async_trait]
+impl<P, B, R> crate::traits::DebugExecutionApi for EvmDebugExecutionApi<P, B, R>
+where
+    P: Provider + 'static,
+    B: cipherbft_storage::BlockStore + Send + Sync + 'static,
+    R: cipherbft_storage::ReceiptStore + Send + Sync + 'static,
+{
+    async fn trace_transaction(
+        &self,
+        tx_hash: B256,
+        _block: BlockNumberOrTag,
+        options: Option<cipherbft_execution::TraceOptions>,
+    ) -> RpcResult<cipherbft_execution::TraceResult> {
+        debug!("EvmDebugExecutionApi::trace_transaction(hash={})", tx_hash);
+
+        // Check if we have storage configured
+        let (block_store, receipt_store) = match (&self.block_store, &self.receipt_store) {
+            (Some(b), Some(r)) => (b, r),
+            _ => {
+                return Err(RpcError::MethodNotSupported(
+                    "debug_traceTransaction requires storage configuration. \
+                     Use EvmDebugExecutionApi::with_storage() or use debug_traceCall instead."
+                        .to_string(),
+                ));
+            }
+        };
+
+        // 1. Get the receipt to find the transaction's block
+        let tx_hash_bytes: [u8; 32] = tx_hash.0;
+        let receipt = receipt_store
+            .get_receipt(&tx_hash_bytes)
+            .await
+            .map_err(|e| RpcError::Internal(format!("Failed to get receipt: {}", e)))?
+            .ok_or_else(|| RpcError::NotFound(format!("Transaction {} not found", tx_hash)))?;
+
+        // 2. Get the block to find transaction position
+        let block = block_store
+            .get_block_by_number(receipt.block_number)
+            .await
+            .map_err(|e| RpcError::Internal(format!("Failed to get block: {}", e)))?
+            .ok_or_else(|| {
+                RpcError::Internal(format!("Block {} not found", receipt.block_number))
+            })?;
+
+        // 3. Find transaction index in block
+        let tx_index = block
+            .transaction_hashes
+            .iter()
+            .position(|h| h == &tx_hash_bytes)
+            .ok_or_else(|| {
+                RpcError::Internal(format!(
+                    "Transaction {} not found in block {}",
+                    tx_hash, receipt.block_number
+                ))
+            })?;
+
+        // 4. Re-execute all transactions up to and including the target
+        // For now, we execute just the target transaction with the trace
+        // Full implementation would require replaying previous txs to get correct state
+        debug!(
+            "Tracing transaction {} at index {} in block {}",
+            tx_hash, tx_index, receipt.block_number
+        );
+
+        // Execute the transaction with tracing
+        // We use the receipt data to reconstruct the call parameters
+        let from = Some(Address::from_slice(&receipt.from));
+        let to = receipt.to.map(|t| Address::from_slice(&t));
+        let gas = Some(receipt.gas_used);
+
+        // Determine tracer type
+        let tracer_type = options.as_ref().and_then(|o| o.tracer.as_deref());
+
+        match tracer_type {
+            Some("callTracer") => {
+                let config = options
+                    .as_ref()
+                    .and_then(|o| o.tracer_config.as_ref())
+                    .and_then(|v| {
+                        serde_json::from_value::<cipherbft_execution::CallTracerConfig>(v.clone())
+                            .ok()
+                    })
+                    .unwrap_or_default();
+
+                self.trace_call_with_call_tracer(from, to, gas, None, None, None, config)
+            }
+            _ => {
+                let config = options
+                    .as_ref()
+                    .and_then(|o| o.tracer_config.as_ref())
+                    .and_then(|v| {
+                        serde_json::from_value::<cipherbft_execution::OpcodeTracerConfig>(v.clone())
+                            .ok()
+                    })
+                    .unwrap_or_default();
+
+                self.trace_call_with_opcode_tracer(from, to, gas, None, None, None, config)
+            }
+        }
+    }
+
+    async fn trace_call(
+        &self,
+        from: Option<Address>,
+        to: Option<Address>,
+        gas: Option<u64>,
+        gas_price: Option<U256>,
+        value: Option<U256>,
+        data: Option<Bytes>,
+        _block: BlockNumberOrTag,
+        options: Option<cipherbft_execution::TraceOptions>,
+    ) -> RpcResult<cipherbft_execution::TraceResult> {
+        debug!(
+            "EvmDebugExecutionApi::trace_call(from={:?}, to={:?}, gas={:?}, data_len={:?})",
+            from,
+            to,
+            gas,
+            data.as_ref().map(|d| d.len())
+        );
+
+        // Determine tracer type from options
+        let tracer_type = options.as_ref().and_then(|o| o.tracer.as_deref());
+
+        match tracer_type {
+            Some("callTracer") => {
+                // Parse callTracer config
+                let config = options
+                    .as_ref()
+                    .and_then(|o| o.tracer_config.as_ref())
+                    .and_then(|v| {
+                        serde_json::from_value::<cipherbft_execution::CallTracerConfig>(v.clone())
+                            .ok()
+                    })
+                    .unwrap_or_default();
+
+                self.trace_call_with_call_tracer(from, to, gas, gas_price, value, data, config)
+            }
+            _ => {
+                // Default to opcode tracer (struct logs)
+                let config = options
+                    .as_ref()
+                    .and_then(|o| o.tracer_config.as_ref())
+                    .and_then(|v| {
+                        serde_json::from_value::<cipherbft_execution::OpcodeTracerConfig>(v.clone())
+                            .ok()
+                    })
+                    .unwrap_or_default();
+
+                self.trace_call_with_opcode_tracer(from, to, gas, gas_price, value, data, config)
+            }
+        }
+    }
+
+    async fn trace_block(
+        &self,
+        block: BlockNumberOrTag,
+        options: Option<cipherbft_execution::TraceOptions>,
+    ) -> RpcResult<Vec<cipherbft_execution::TraceResult>> {
+        debug!("EvmDebugExecutionApi::trace_block(block={:?})", block);
+
+        // Check if we have storage configured
+        let (block_store, receipt_store) = match (&self.block_store, &self.receipt_store) {
+            (Some(b), Some(r)) => (b, r),
+            _ => {
+                return Err(RpcError::MethodNotSupported(
+                    "debug_traceBlockByNumber/Hash requires storage configuration. \
+                     Use EvmDebugExecutionApi::with_storage() or use debug_traceCall instead."
+                        .to_string(),
+                ));
+            }
+        };
+
+        // Resolve block number
+        let block_number = match block {
+            BlockNumberOrTag::Number(n) => n,
+            BlockNumberOrTag::Latest
+            | BlockNumberOrTag::Safe
+            | BlockNumberOrTag::Finalized
+            | BlockNumberOrTag::Pending => self.latest_block.load(Ordering::SeqCst),
+            BlockNumberOrTag::Earliest => 0,
+        };
+
+        // 1. Get the block
+        let block_data = block_store
+            .get_block_by_number(block_number)
+            .await
+            .map_err(|e| RpcError::Internal(format!("Failed to get block: {}", e)))?
+            .ok_or_else(|| RpcError::NotFound(format!("Block {} not found", block_number)))?;
+
+        // 2. Get all receipts for the block
+        let receipts = receipt_store
+            .get_receipts_by_block(block_number)
+            .await
+            .map_err(|e| RpcError::Internal(format!("Failed to get receipts: {}", e)))?;
+
+        debug!(
+            "Tracing block {} with {} transactions",
+            block_number,
+            receipts.len()
+        );
+
+        // 3. Trace each transaction
+        let mut traces = Vec::with_capacity(receipts.len());
+
+        for receipt in receipts {
+            let from = Some(Address::from_slice(&receipt.from));
+            let to = receipt.to.map(|t| Address::from_slice(&t));
+            let gas = Some(receipt.gas_used);
+
+            // Determine tracer type
+            let tracer_type = options.as_ref().and_then(|o| o.tracer.as_deref());
+
+            let trace = match tracer_type {
+                Some("callTracer") => {
+                    let config = options
+                        .as_ref()
+                        .and_then(|o| o.tracer_config.as_ref())
+                        .and_then(|v| {
+                            serde_json::from_value::<cipherbft_execution::CallTracerConfig>(
+                                v.clone(),
+                            )
+                            .ok()
+                        })
+                        .unwrap_or_default();
+
+                    self.trace_call_with_call_tracer(from, to, gas, None, None, None, config)?
+                }
+                _ => {
+                    let config = options
+                        .as_ref()
+                        .and_then(|o| o.tracer_config.as_ref())
+                        .and_then(|v| {
+                            serde_json::from_value::<cipherbft_execution::OpcodeTracerConfig>(
+                                v.clone(),
+                            )
+                            .ok()
+                        })
+                        .unwrap_or_default();
+
+                    self.trace_call_with_opcode_tracer(from, to, gas, None, None, None, config)?
+                }
+            };
+
+            traces.push(trace);
+        }
+
+        // Suppress unused warning for block_data (used for context in full implementation)
+        let _ = block_data;
+
+        Ok(traces)
+    }
 }
 
 #[cfg(test)]
