@@ -556,6 +556,11 @@ impl Node {
                 "DCL layer spawned with Primary and {} workers",
                 self.config.num_workers
             );
+
+            // Drop the cut_advance_rx receiver since it's only used when DCL is disabled.
+            // This ensures cut_advance_tx.send() fails immediately instead of blocking,
+            // preventing deadlock in the event loop.
+            drop(cut_advance_rx);
         } else {
             // DCL disabled: spawn a task that sends empty cuts directly to consensus
             // This allows consensus to proceed without data availability attestations
