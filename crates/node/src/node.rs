@@ -855,7 +855,9 @@ impl Node {
         };
 
         // Start RPC server if enabled
-        if let (Some(ref storage), Some(ref debug_executor)) = (&rpc_storage, &rpc_debug_executor) {
+        if let (Some(ref storage), Some(ref debug_executor), Some(ref sub_mgr)) =
+            (&rpc_storage, &rpc_debug_executor, &subscription_manager)
+        {
             use cipherbft_rpc::{
                 RpcConfig, RpcServer, StubExecutionApi, StubMempoolApi, StubNetworkApi,
             };
@@ -879,7 +881,7 @@ impl Node {
                 executor,
                 network,
                 debug_executor.clone(),
-                subscription_manager.clone().unwrap(),
+                sub_mgr.clone(),
             );
 
             let http_port = self.config.rpc_http_port;
