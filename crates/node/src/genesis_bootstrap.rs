@@ -20,7 +20,10 @@
 //! ```
 
 use alloy_primitives::{Address, U256};
-use cipherbft_crypto::{ValidatorKeys, mnemonic::{Mnemonic, derive_validator_keys}};
+use cipherbft_crypto::{
+    mnemonic::{derive_validator_keys, Mnemonic},
+    ValidatorKeys,
+};
 use cipherbft_types::genesis::{
     CipherBftConfig, ConsensusParams, DclParams, Genesis, GenesisError, GenesisValidator,
     NativeTokenConfig, StakingParams,
@@ -40,8 +43,7 @@ use tracing::{debug, info};
 ///
 /// The same mnemonic derives different keys for each validator using
 /// different account indices (0, 1, 2, 3...).
-const DEVNET_TEST_MNEMONIC: &str =
-    "test test test test test test test test test test test junk";
+const DEVNET_TEST_MNEMONIC: &str = "test test test test test test test test test test test junk";
 
 /// Genesis loader for CipherBFT node.
 ///

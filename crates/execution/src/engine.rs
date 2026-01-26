@@ -30,6 +30,15 @@ const BLOCK_HASH_CACHE_SIZE: NonZeroUsize = match NonZeroUsize::new(256) {
     None => panic!("block hash cache size must be non-zero"),
 };
 
+/// Result type for transaction processing.
+///
+/// Contains:
+/// - Transaction receipts with execution results
+/// - Cumulative gas used by all transactions
+/// - Logs emitted by each transaction
+/// - Total transaction fees collected (gas_used × effective_gas_price)
+type ProcessTransactionsResult = (Vec<TransactionReceipt>, u64, Vec<Vec<Log>>, U256);
+
 /// ExecutionLayer trait defines the interface for block execution.
 ///
 /// This trait provides the core methods needed by the consensus layer to:
@@ -256,28 +265,31 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
     /// This returns the total transaction fees accumulated since the last
     /// epoch reward distribution.
     pub fn get_accumulated_fees(&self) -> U256 {
-        self.staking_precompile.state().read().get_accumulated_fees()
+        self.staking_precompile
+            .state()
+            .read()
+            .get_accumulated_fees()
     }
 
     /// Get total rewards distributed to date.
     pub fn get_total_distributed(&self) -> U256 {
-        self.staking_precompile.state().read().get_total_distributed()
+        self.staking_precompile
+            .state()
+            .read()
+            .get_total_distributed()
     }
 
     /// Process all transactions in a block.
     ///
-    /// Returns:
-    /// - `receipts`: Transaction receipts with execution results
-    /// - `cumulative_gas_used`: Total gas used by all transactions
-    /// - `all_logs`: Logs emitted by each transaction
-    /// - `total_fees`: Total transaction fees collected (gas_used × effective_gas_price)
+    /// Returns a tuple containing receipts, cumulative gas used, logs, and total fees.
+    /// See [`ProcessTransactionsResult`] for details.
     fn process_transactions(
         &mut self,
         transactions: &[Bytes],
         block_number: u64,
         timestamp: u64,
         parent_hash: B256,
-    ) -> Result<(Vec<TransactionReceipt>, u64, Vec<Vec<Log>>, U256)> {
+    ) -> Result<ProcessTransactionsResult> {
         let mut receipts = Vec::new();
         let mut cumulative_gas_used = 0u64;
         let mut all_logs = Vec::new();
@@ -308,8 +320,8 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
                 let effective_gas_price = self.chain_config.base_fee_per_gas;
 
                 // Accumulate transaction fee: gas_used × effective_gas_price
-                let tx_fee = U256::from(tx_result.gas_used)
-                    .saturating_mul(U256::from(effective_gas_price));
+                let tx_fee =
+                    U256::from(tx_result.gas_used).saturating_mul(U256::from(effective_gas_price));
                 total_fees = total_fees.saturating_add(tx_fee);
 
                 // Create receipt
@@ -349,7 +361,10 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
 
         // Accumulate collected fees to staking precompile for later distribution
         if !total_fees.is_zero() {
-            self.staking_precompile.state().write().accumulate_fees(total_fees);
+            self.staking_precompile
+                .state()
+                .write()
+                .accumulate_fees(total_fees);
             tracing::debug!(
                 block_number,
                 total_fees = %total_fees,

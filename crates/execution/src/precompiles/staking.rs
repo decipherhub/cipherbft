@@ -351,7 +351,11 @@ impl StakingState {
     ///
     /// # Distribution Formula
     /// For each validator: `reward = total_rewards * (validator_stake / total_stake)`
-    pub fn distribute_epoch_rewards(&mut self, epoch_block_reward: U256, current_epoch: u64) -> U256 {
+    pub fn distribute_epoch_rewards(
+        &mut self,
+        epoch_block_reward: U256,
+        current_epoch: u64,
+    ) -> U256 {
         // Skip if no validators or no stake
         if self.validators.is_empty() || self.total_stake.is_zero() {
             // Reset accumulators even if nothing to distribute
@@ -393,7 +397,10 @@ impl StakingState {
         self.total_stake = self.total_stake.saturating_add(total_distributed);
 
         // Update reward tracking state
-        self.rewards.total_distributed = self.rewards.total_distributed.saturating_add(total_distributed);
+        self.rewards.total_distributed = self
+            .rewards
+            .total_distributed
+            .saturating_add(total_distributed);
         self.rewards.last_distribution_epoch = current_epoch;
 
         // Reset accumulators for next epoch
