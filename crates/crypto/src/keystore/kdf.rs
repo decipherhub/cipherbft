@@ -163,11 +163,11 @@ pub fn scrypt_derive_key(
     Ok(secrecy::SecretBox::new(Box::new(output)))
 }
 
-/// Generate a random salt
+/// Generate a random salt using OS random number generator
 pub fn generate_salt() -> Vec<u8> {
-    use rand::RngCore;
+    use rand::{rngs::OsRng, RngCore};
     let mut salt = vec![0u8; SALT_LENGTH];
-    rand::thread_rng().fill_bytes(&mut salt);
+    OsRng.fill_bytes(&mut salt);
     salt
 }
 

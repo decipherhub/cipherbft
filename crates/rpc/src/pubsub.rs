@@ -295,7 +295,11 @@ impl EthPubSubRpcServer for EthPubSubApi {
                                 match result {
                                     Ok(block) => {
                                         let msg = serde_json::to_value(&*block).unwrap_or_default();
-                                        if sink.send(jsonrpsee::SubscriptionMessage::from_json(&msg).unwrap()).await.is_err() {
+                                        let Ok(sub_msg) = jsonrpsee::SubscriptionMessage::from_json(&msg) else {
+                                            warn!("Failed to serialize block message for subscription {}", sub_id);
+                                            continue;
+                                        };
+                                        if sink.send(sub_msg).await.is_err() {
                                             trace!("Failed to send to subscription {}, closing", sub_id);
                                             manager.unsubscribe(sub_id);
                                             break;
@@ -332,7 +336,11 @@ impl EthPubSubRpcServer for EthPubSubApi {
                                         // Check if log matches the filter
                                         if matches_filter(&log, &log_filter) {
                                             let msg = serde_json::to_value(&*log).unwrap_or_default();
-                                            if sink.send(jsonrpsee::SubscriptionMessage::from_json(&msg).unwrap()).await.is_err() {
+                                            let Ok(sub_msg) = jsonrpsee::SubscriptionMessage::from_json(&msg) else {
+                                                warn!("Failed to serialize log message for subscription {}", sub_id);
+                                                continue;
+                                            };
+                                            if sink.send(sub_msg).await.is_err() {
                                                 trace!("Failed to send to subscription {}, closing", sub_id);
                                                 manager.unsubscribe(sub_id);
                                                 break;
@@ -370,7 +378,11 @@ impl EthPubSubRpcServer for EthPubSubApi {
                                     match result {
                                         Ok(tx) => {
                                             let msg = serde_json::to_value(&*tx).unwrap_or_default();
-                                            if sink.send(jsonrpsee::SubscriptionMessage::from_json(&msg).unwrap()).await.is_err() {
+                                            let Ok(sub_msg) = jsonrpsee::SubscriptionMessage::from_json(&msg) else {
+                                                warn!("Failed to serialize tx message for subscription {}", sub_id);
+                                                continue;
+                                            };
+                                            if sink.send(sub_msg).await.is_err() {
                                                 trace!("Failed to send to subscription {}, closing", sub_id);
                                                 manager.unsubscribe(sub_id);
                                                 break;
@@ -405,7 +417,11 @@ impl EthPubSubRpcServer for EthPubSubApi {
                                     match result {
                                         Ok(tx_hash) => {
                                             let msg = serde_json::to_value(tx_hash).unwrap_or_default();
-                                            if sink.send(jsonrpsee::SubscriptionMessage::from_json(&msg).unwrap()).await.is_err() {
+                                            let Ok(sub_msg) = jsonrpsee::SubscriptionMessage::from_json(&msg) else {
+                                                warn!("Failed to serialize tx_hash message for subscription {}", sub_id);
+                                                continue;
+                                            };
+                                            if sink.send(sub_msg).await.is_err() {
                                                 trace!("Failed to send to subscription {}, closing", sub_id);
                                                 manager.unsubscribe(sub_id);
                                                 break;
@@ -443,7 +459,11 @@ impl EthPubSubRpcServer for EthPubSubApi {
                                         // Convert SyncStatus to JSON value
                                         // SyncStatus is an enum: None (not syncing) or Status(SyncInfo)
                                         let msg = serde_json::to_value(&status).unwrap_or_default();
-                                        if sink.send(jsonrpsee::SubscriptionMessage::from_json(&msg).unwrap()).await.is_err() {
+                                        let Ok(sub_msg) = jsonrpsee::SubscriptionMessage::from_json(&msg) else {
+                                            warn!("Failed to serialize sync status message for subscription {}", sub_id);
+                                            continue;
+                                        };
+                                        if sink.send(sub_msg).await.is_err() {
                                             trace!("Failed to send to subscription {}, closing", sub_id);
                                             manager.unsubscribe(sub_id);
                                             break;
