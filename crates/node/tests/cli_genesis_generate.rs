@@ -194,14 +194,14 @@ fn test_cli_genesis_generate_custom_stake() {
         .arg("generate")
         .arg("--validators")
         .arg("2")
-        .arg("--initial-stake-cph")
+        .arg("--initial-stake-eth")
         .arg("100")
         .arg("--output")
         .arg(&genesis_path)
         .arg("--no-keys")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Total Stake: 200 CPH")); // 2 validators * 100 CPH
+        .stdout(predicate::str::contains("Total Stake: 200 ETH")); // 2 validators * 100 ETH
 }
 
 // ============================================================================

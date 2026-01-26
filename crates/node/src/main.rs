@@ -68,9 +68,9 @@ enum Commands {
         #[arg(long, default_value = "cipherbft-testnet-1")]
         network_id: String,
 
-        /// Initial stake per validator in CPH (default: 32)
+        /// Initial stake per validator in ETH (default: 32)
         #[arg(long, default_value = "32")]
-        initial_stake_cph: u64,
+        initial_stake_eth: u64,
 
         /// Overwrite existing configuration
         #[arg(long, default_value = "false")]
@@ -203,9 +203,9 @@ enum GenesisCommands {
         #[arg(long, default_value = "cipherbft-testnet-1")]
         network_id: String,
 
-        /// Initial stake per validator in CPH (default: 32 CPH)
+        /// Initial stake per validator in ETH (default: 32 ETH)
         #[arg(long, default_value = "32")]
-        initial_stake_cph: u64,
+        initial_stake_eth: u64,
 
         /// Output path for the genesis file
         #[arg(short, long, default_value = "./genesis.json")]
@@ -226,9 +226,9 @@ enum GenesisCommands {
         /// Account address (0x... format)
         address: String,
 
-        /// Initial balance in CPH
+        /// Initial balance in ETH
         #[arg(long, default_value = "100")]
-        balance_cph: u64,
+        balance_eth: u64,
 
         /// Path to genesis file
         #[arg(long)]
@@ -241,9 +241,9 @@ enum GenesisCommands {
         #[arg(long)]
         key_file: PathBuf,
 
-        /// Stake amount in CPH
+        /// Stake amount in ETH
         #[arg(long, default_value = "32")]
-        stake_cph: u64,
+        stake_eth: u64,
 
         /// Validator moniker/name
         #[arg(long)]
@@ -307,9 +307,9 @@ enum TestnetCommands {
         #[arg(long, default_value = "cipherbft-testnet-1")]
         network_id: String,
 
-        /// Initial stake per validator in CPH
+        /// Initial stake per validator in ETH
         #[arg(long, default_value = "32")]
-        initial_stake_cph: u64,
+        initial_stake_eth: u64,
 
         /// Starting P2P port (increments by 10 for each validator)
         #[arg(long, default_value = "9000")]
@@ -357,14 +357,14 @@ async fn main() -> Result<()> {
             moniker,
             chain_id,
             network_id,
-            initial_stake_cph,
+            initial_stake_eth,
             overwrite,
         } => cmd_init(
             &cli.home,
             moniker,
             chain_id,
             &network_id,
-            initial_stake_cph,
+            initial_stake_eth,
             overwrite,
         ),
 
@@ -444,7 +444,7 @@ fn cmd_init(
     moniker: Option<String>,
     chain_id: u64,
     network_id: &str,
-    initial_stake_cph: u64,
+    initial_stake_eth: u64,
     overwrite: bool,
 ) -> Result<()> {
     let config_dir = home.join("config");
@@ -473,8 +473,8 @@ fn cmd_init(
     // ========================================
     println!("Generating genesis file with single validator...");
 
-    // Convert CPH to wei (1 CPH = 10^18 wei)
-    let initial_stake = U256::from(initial_stake_cph) * U256::from(1_000_000_000_000_000_000u128);
+    // Convert ETH to wei (1 ETH = 10^18 wei)
+    let initial_stake = U256::from(initial_stake_eth) * U256::from(1_000_000_000_000_000_000u128);
 
     let genesis_config = GenesisGeneratorConfig {
         num_validators: 1,
@@ -579,7 +579,7 @@ fn cmd_init(
         "  Validators:    {}",
         genesis_result.genesis.validator_count()
     );
-    println!("  Total Stake:   {} CPH", initial_stake_cph);
+    println!("  Total Stake:   {} ETH", initial_stake_eth);
     println!(
         "  Validator:     {} (ed25519: {}...)",
         validator.address,
@@ -782,14 +782,14 @@ async fn cmd_testnet(command: TestnetCommands) -> Result<()> {
             output,
             chain_id,
             network_id,
-            initial_stake_cph,
+            initial_stake_eth,
             starting_port,
         } => cmd_testnet_init_files(
             validators,
             &output,
             chain_id,
             &network_id,
-            initial_stake_cph,
+            initial_stake_eth,
             starting_port,
         ),
         TestnetCommands::Start {
@@ -804,7 +804,7 @@ fn cmd_testnet_init_files(
     output: &std::path::Path,
     chain_id: u64,
     network_id: &str,
-    initial_stake_cph: u64,
+    initial_stake_eth: u64,
     starting_port: u16,
 ) -> Result<()> {
     use cipherd::PeerConfig;
@@ -818,7 +818,7 @@ fn cmd_testnet_init_files(
     std::fs::create_dir_all(output)?;
 
     // Generate genesis with validators - this is our single source of truth for keys
-    let initial_stake = U256::from(initial_stake_cph) * U256::from(1_000_000_000_000_000_000u128);
+    let initial_stake = U256::from(initial_stake_eth) * U256::from(1_000_000_000_000_000_000u128);
     let genesis_config = GenesisGeneratorConfig {
         num_validators,
         chain_id,
@@ -956,7 +956,7 @@ fn cmd_testnet_init_files(
     println!("  Chain ID:    {}", chain_id);
     println!("  Network ID:  {}", network_id);
     println!("  Validators:  {}", num_validators);
-    println!("  Stake/Node:  {} CPH", initial_stake_cph);
+    println!("  Stake/Node:  {} ETH", initial_stake_eth);
     println!();
     println!("To start individual nodes:");
     for i in 0..num_validators {
@@ -1273,7 +1273,7 @@ fn cmd_genesis(home: &std::path::Path, command: GenesisCommands) -> Result<()> {
             validators,
             chain_id,
             network_id,
-            initial_stake_cph,
+            initial_stake_eth,
             output,
             keys_dir,
             no_keys,
@@ -1281,26 +1281,26 @@ fn cmd_genesis(home: &std::path::Path, command: GenesisCommands) -> Result<()> {
             validators,
             chain_id,
             &network_id,
-            initial_stake_cph,
+            initial_stake_eth,
             &output,
             &keys_dir,
             no_keys,
         ),
         GenesisCommands::AddGenesisAccount {
             address,
-            balance_cph,
+            balance_eth,
             genesis,
         } => {
             let genesis_path = genesis.unwrap_or_else(|| home.join("config/genesis.json"));
-            cmd_genesis_add_account(&address, balance_cph, &genesis_path)
+            cmd_genesis_add_account(&address, balance_eth, &genesis_path)
         }
         GenesisCommands::Gentx {
             key_file,
-            stake_cph,
+            stake_eth,
             moniker,
             commission_rate,
             output_dir,
-        } => cmd_genesis_gentx(&key_file, stake_cph, moniker, commission_rate, &output_dir),
+        } => cmd_genesis_gentx(&key_file, stake_eth, moniker, commission_rate, &output_dir),
         GenesisCommands::CollectGentxs { gentx_dir, genesis } => {
             let genesis_path = genesis.unwrap_or_else(|| home.join("config/genesis.json"));
             cmd_genesis_collect_gentxs(&gentx_dir, &genesis_path)
@@ -1312,7 +1312,7 @@ fn cmd_genesis_generate(
     num_validators: usize,
     chain_id: u64,
     network_id: &str,
-    initial_stake_cph: u64,
+    initial_stake_eth: u64,
     output: &std::path::Path,
     keys_dir: &std::path::Path,
     no_keys: bool,
@@ -1320,8 +1320,8 @@ fn cmd_genesis_generate(
     println!("Generating genesis file...");
     println!();
 
-    // Convert CPH to wei (1 CPH = 10^18 wei)
-    let initial_stake = U256::from(initial_stake_cph) * U256::from(1_000_000_000_000_000_000u128);
+    // Convert ETH to wei (1 ETH = 10^18 wei)
+    let initial_stake = U256::from(initial_stake_eth) * U256::from(1_000_000_000_000_000_000u128);
 
     let config = GenesisGeneratorConfig {
         num_validators,
@@ -1364,8 +1364,8 @@ fn cmd_genesis_generate(
     println!("  Network ID:  {}", result.genesis.cipherbft.network_id);
     println!("  Validators:  {}", result.genesis.validator_count());
     println!(
-        "  Total Stake: {} CPH",
-        initial_stake_cph * num_validators as u64
+        "  Total Stake: {} ETH",
+        initial_stake_eth * num_validators as u64
     );
     println!();
 
@@ -1392,7 +1392,7 @@ fn cmd_genesis_generate(
 /// Add a genesis account to an existing genesis file (similar to Cosmos SDK add-genesis-account)
 fn cmd_genesis_add_account(
     address: &str,
-    balance_cph: u64,
+    balance_eth: u64,
     genesis_path: &std::path::Path,
 ) -> Result<()> {
     use alloy_primitives::Address;
@@ -1413,8 +1413,8 @@ fn cmd_genesis_add_account(
     let genesis_json = std::fs::read_to_string(genesis_path)?;
     let mut genesis: serde_json::Value = serde_json::from_str(&genesis_json)?;
 
-    // Convert CPH to wei
-    let balance_wei = U256::from(balance_cph) * U256::from(1_000_000_000_000_000_000u128);
+    // Convert ETH to wei
+    let balance_wei = U256::from(balance_eth) * U256::from(1_000_000_000_000_000_000u128);
 
     // Add to alloc section
     let alloc = genesis
@@ -1444,7 +1444,7 @@ fn cmd_genesis_add_account(
 
     println!("Added genesis account:");
     println!("  Address: {}", address_str);
-    println!("  Balance: {} CPH ({} wei)", balance_cph, balance_wei);
+    println!("  Balance: {} ETH ({} wei)", balance_eth, balance_wei);
     println!();
     println!("Genesis updated: {}", genesis_path.display());
 
@@ -1454,7 +1454,7 @@ fn cmd_genesis_add_account(
 /// Generate a genesis transaction (gentx) for a validator (similar to Cosmos SDK gentx)
 fn cmd_genesis_gentx(
     key_file: &std::path::Path,
-    stake_cph: u64,
+    stake_eth: u64,
     moniker: Option<String>,
     commission_rate: u8,
     output_dir: &std::path::Path,
@@ -1500,7 +1500,7 @@ fn cmd_genesis_gentx(
     });
 
     // Convert stake to wei
-    let stake_wei = U256::from(stake_cph) * U256::from(1_000_000_000_000_000_000u128);
+    let stake_wei = U256::from(stake_eth) * U256::from(1_000_000_000_000_000_000u128);
 
     // Create gentx structure
     let gentx = serde_json::json!({
@@ -1512,7 +1512,7 @@ fn cmd_genesis_gentx(
             "bls_public_key": bls_pubkey,
             "ed25519_public_key": ed25519_pubkey,
             "stake": format!("{:#x}", stake_wei),
-            "stake_cph": stake_cph,
+            "stake_eth": stake_eth,
         }
     });
 
@@ -1526,7 +1526,7 @@ fn cmd_genesis_gentx(
     println!("Generated genesis transaction:");
     println!("  Moniker:    {}", validator_moniker);
     println!("  Address:    {}", address);
-    println!("  Stake:      {} CPH", stake_cph);
+    println!("  Stake:      {} ETH", stake_eth);
     println!("  Commission: {}%", commission_rate);
     println!();
     println!("Gentx file: {}", gentx_path.display());
