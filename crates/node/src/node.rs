@@ -556,6 +556,11 @@ impl Node {
                 "DCL layer spawned with Primary and {} workers",
                 self.config.num_workers
             );
+
+            // Drop the cut_advance_rx receiver since it's only used when DCL is disabled.
+            // This ensures cut_advance_tx.send() fails immediately instead of blocking,
+            // preventing deadlock in the event loop.
+            drop(cut_advance_rx);
         } else {
             // DCL disabled: spawn a task that sends empty cuts directly to consensus
             // This allows consensus to proceed without data availability attestations
@@ -962,65 +967,20 @@ impl Node {
             tokio::select! {
                 biased;
 
-                // Check for shutdown signal first (high priority)
+                // Check for shutdown signal first (highest priority)
                 _ = cancel_token.cancelled() => {
                     info!("Received shutdown signal, exiting event loop");
                     return Ok(());
                 }
 
-                // Incoming network messages -> forward to Primary (only when DCL enabled)
-                Some((from, msg)) = primary_incoming_rx.recv(), if primary_handle.is_some() => {
-                    debug!("Received message from {:?}: {:?}", from, msg.type_name());
-                    if let Some(ref mut handle) = primary_handle {
-                        if let Err(e) = handle.send_from_peer(from, msg).await {
-                            warn!("Failed to forward message to Primary: {:?}", e);
-                        }
-                    }
-                }
-
-                // Primary events (only when DCL enabled)
-                Some(event) = async {
-                    if let Some(ref mut handle) = primary_handle {
-                        handle.recv_event().await
-                    } else {
-                        // When DCL disabled, this branch never yields
-                        std::future::pending::<Option<PrimaryEvent>>().await
-                    }
-                } => {
-                    match event {
-                        PrimaryEvent::CutReady(cut) => {
-                            debug!(
-                                "Cut ready at height {} with {} validators",
-                                cut.height,
-                                cut.validator_count()
-                            );
-                            // Send Cut to Consensus Host for ordering
-                            // Consensus will decide on the cut and send it back via decided_rx
-                            if let Err(e) = cut_tx.send(cut.clone()).await {
-                                warn!("Failed to send Cut to Consensus Host: {}", e);
-                            }
-                        }
-                        PrimaryEvent::CarCreated(car) => {
-                            debug!(
-                                "Car created at position {} with {} batches",
-                                car.position,
-                                car.batch_digests.len()
-                            );
-                        }
-                        PrimaryEvent::AttestationGenerated { car_proposer, .. } => {
-                            debug!("Generated attestation for Car from {:?}", car_proposer);
-                        }
-                        PrimaryEvent::SyncBatches { digests, target } => {
-                            debug!(
-                                "Need to sync {} batches from {:?}",
-                                digests.len(),
-                                target
-                            );
-                        }
-                    }
-                }
-
                 // Consensus Decided events - execute the decided Cut
+                // CRITICAL: This must have HIGH PRIORITY in the biased select!
+                // If Primary events (CutReady, CarCreated, etc.) starve this branch:
+                // 1. Consensus decisions are not processed by the node
+                // 2. notify_decision() is never called
+                // 3. Primary can't form the next cut
+                // 4. wait_for_cut() times out in consensus host
+                // 5. All validators vote NIL → liveness failure
                 Some((height, cut)) = decided_rx.recv() => {
                     debug!(
                         "Consensus decided at height {} with {} cars",
@@ -1034,6 +994,79 @@ impl Node {
                     if let Some(ref mut handle) = primary_handle {
                         if let Err(e) = handle.notify_decision(height.0, cut.clone()).await {
                             warn!("Failed to notify Primary of consensus decision: {:?}", e);
+                        }
+
+                        // CRITICAL FIX: Wait for and drain CutReady events after notify_decision.
+                        //
+                        // notify_decision() is non-blocking - it sends a command to Primary's command channel
+                        // and returns immediately. The Primary task processes this command asynchronously:
+                        // 1. Primary receives ConsensusDecided command
+                        // 2. Primary calls finalize_height() and try_form_cut()
+                        // 3. Primary sends CutReady event to the event channel
+                        //
+                        // We MUST forward this CutReady to consensus BEFORE doing execution work, otherwise:
+                        // 1. Consensus starts the next height and requests a value
+                        // 2. ChannelValueBuilder doesn't have the cut (it's stuck in this channel)
+                        // 3. Consensus times out on Propose step, all validators vote NIL
+                        // 4. System gets stuck in a liveness failure
+                        //
+                        // Solution: Yield to let Primary process the command, then poll for events
+                        // with a short timeout to ensure we catch the CutReady event.
+                        let drain_deadline = tokio::time::Instant::now() + Duration::from_millis(100);
+                        let mut got_cut_ready = false;
+
+                        loop {
+                            // First yield to allow the Primary task to run and process the command
+                            tokio::task::yield_now().await;
+
+                            // Try to receive any pending events
+                            match handle.try_recv_event() {
+                                Ok(event) => {
+                                    match event {
+                                        PrimaryEvent::CutReady(new_cut) => {
+                                            debug!(
+                                                "Cut ready at height {} with {} validators (drained after decision)",
+                                                new_cut.height,
+                                                new_cut.validator_count()
+                                            );
+                                            if let Err(e) = cut_tx.send(new_cut).await {
+                                                warn!("Failed to send Cut to Consensus Host: {}", e);
+                                            }
+                                            got_cut_ready = true;
+                                        }
+                                        PrimaryEvent::CarCreated(car) => {
+                                            debug!(
+                                                "Car created at position {} with {} batches (drained after decision)",
+                                                car.position,
+                                                car.batch_digests.len()
+                                            );
+                                        }
+                                        PrimaryEvent::AttestationGenerated { car_proposer, .. } => {
+                                            debug!("Generated attestation for Car from {:?} (drained after decision)", car_proposer);
+                                        }
+                                        PrimaryEvent::SyncBatches { digests, target } => {
+                                            debug!(
+                                                "Need to sync {} batches from {:?} (drained after decision)",
+                                                digests.len(),
+                                                target
+                                            );
+                                        }
+                                    }
+                                    // Continue draining other events even after getting CutReady
+                                }
+                                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                                    // No events pending - check if we should continue waiting
+                                    if got_cut_ready || tokio::time::Instant::now() >= drain_deadline {
+                                        // Either got the CutReady or timed out, proceed with execution
+                                        break;
+                                    }
+                                    // Keep yielding and polling until we get the CutReady or timeout
+                                }
+                                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                                    warn!("Primary event channel disconnected");
+                                    break;
+                                }
+                            }
                         }
                     }
 
@@ -1105,6 +1138,58 @@ impl Node {
                     // the empty cut sender has processed the previous signal before continuing.
                     // Note: When DCL is enabled, the receiver is dropped, so this send will fail silently.
                     let _ = cut_advance_tx.send(()).await;
+                }
+
+                // Incoming network messages -> forward to Primary (only when DCL enabled)
+                Some((from, msg)) = primary_incoming_rx.recv(), if primary_handle.is_some() => {
+                    debug!("Received message from {:?}: {:?}", from, msg.type_name());
+                    if let Some(ref mut handle) = primary_handle {
+                        if let Err(e) = handle.send_from_peer(from, msg).await {
+                            warn!("Failed to forward message to Primary: {:?}", e);
+                        }
+                    }
+                }
+
+                // Primary events (only when DCL enabled)
+                Some(event) = async {
+                    if let Some(ref mut handle) = primary_handle {
+                        handle.recv_event().await
+                    } else {
+                        // When DCL disabled, this branch never yields
+                        std::future::pending::<Option<PrimaryEvent>>().await
+                    }
+                } => {
+                    match event {
+                        PrimaryEvent::CutReady(cut) => {
+                            debug!(
+                                "Cut ready at height {} with {} validators",
+                                cut.height,
+                                cut.validator_count()
+                            );
+                            // Send Cut to Consensus Host for ordering
+                            // Consensus will decide on the cut and send it back via decided_rx
+                            if let Err(e) = cut_tx.send(cut.clone()).await {
+                                warn!("Failed to send Cut to Consensus Host: {}", e);
+                            }
+                        }
+                        PrimaryEvent::CarCreated(car) => {
+                            debug!(
+                                "Car created at position {} with {} batches",
+                                car.position,
+                                car.batch_digests.len()
+                            );
+                        }
+                        PrimaryEvent::AttestationGenerated { car_proposer, .. } => {
+                            debug!("Generated attestation for Car from {:?}", car_proposer);
+                        }
+                        PrimaryEvent::SyncBatches { digests, target } => {
+                            debug!(
+                                "Need to sync {} batches from {:?}",
+                                digests.len(),
+                                target
+                            );
+                        }
+                    }
                 }
             }
         }
