@@ -20,7 +20,7 @@
 //! ```
 
 use alloy_primitives::{Address, U256};
-use cipherbft_crypto::ValidatorKeys;
+use cipherbft_crypto::{ValidatorKeys, mnemonic::{Mnemonic, derive_validator_keys}};
 use cipherbft_types::genesis::{
     CipherBftConfig, ConsensusParams, DclParams, Genesis, GenesisError, GenesisValidator,
     StakingParams,
@@ -32,6 +32,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use tracing::{debug, info};
+
+/// Standard test mnemonic for devnet deterministic key generation.
+///
+/// DO NOT USE IN PRODUCTION - This is a publicly known test mnemonic
+/// used by Hardhat, Foundry, and other Ethereum testing tools.
+///
+/// The same mnemonic derives different keys for each validator using
+/// different account indices (0, 1, 2, 3...).
+const DEVNET_TEST_MNEMONIC: &str =
+    "test test test test test test test test test test test junk";
 
 /// Genesis loader for CipherBFT node.
 ///
