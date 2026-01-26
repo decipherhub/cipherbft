@@ -62,11 +62,12 @@ impl CallTracer {
 
     /// Push a new call frame onto the stack.
     fn push_frame(&mut self, frame: CallFrame) {
-        if self.config.only_top_call && self.depth > 0 {
+        self.depth += 1;
+        // When only_top_call is enabled, skip nested calls but still track depth
+        if self.config.only_top_call && self.depth > 1 {
             return;
         }
         self.call_stack.push(frame);
-        self.depth += 1;
     }
 
     /// Pop a call frame from the stack and attach it to the parent.
