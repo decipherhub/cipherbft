@@ -91,7 +91,8 @@ impl<P: Provider> GenesisInitializer<P> {
     /// 2. Initializes all accounts from the `alloc` section
     /// 3. Deploys any contract bytecode
     /// 4. Sets initial storage values
-    /// 5. Bootstraps the staking precompile with validator data
+    /// 5. Initializes treasury account if configured
+    /// 6. Bootstraps the staking precompile with validator data
     ///
     /// # Arguments
     ///
@@ -113,7 +114,14 @@ impl<P: Provider> GenesisInitializer<P> {
             .map_err(|e| ExecutionError::config(format!("Genesis validation failed: {}", e)))?;
 
         // Initialize accounts from alloc
-        let account_count = self.initialize_alloc(genesis)?;
+        let mut account_count = self.initialize_alloc(genesis)?;
+
+        // Initialize treasury account if configured
+        if let Some(treasury_account_created) = self.initialize_treasury(genesis)? {
+            if treasury_account_created {
+                account_count += 1;
+            }
+        }
 
         // Bootstrap staking precompile with validator data
         let (validator_count, total_staked) = self.initialize_staking_precompile(genesis)?;
@@ -195,6 +203,67 @@ impl<P: Provider> GenesisInitializer<P> {
         }
 
         Ok(count)
+    }
+
+    /// Initialize the treasury account if configured in genesis.
+    ///
+    /// The treasury provides the initial token supply for the network.
+    /// Rewards distributed to validators are minted from the system,
+    /// and the treasury serves as a reserve for ecosystem funding.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Some(true))` - Treasury account was created (not in alloc)
+    /// - `Ok(Some(false))` - Treasury was in alloc, balance updated
+    /// - `Ok(None)` - No treasury configured
+    fn initialize_treasury(&self, genesis: &Genesis) -> Result<Option<bool>> {
+        let staking = &genesis.cipherbft.staking;
+
+        // Check if treasury is configured
+        let (treasury_addr, supply) = match (&staking.treasury_address, &staking.initial_treasury_supply_wei) {
+            (Some(addr), Some(supply)) if !supply.is_zero() => (*addr, *supply),
+            _ => return Ok(None), // No treasury configured or zero supply
+        };
+
+        // Check if treasury address is already in alloc
+        let already_in_alloc = genesis.alloc.contains_key(&treasury_addr);
+
+        if already_in_alloc {
+            // Treasury address exists in alloc - the alloc balance takes precedence
+            // but we log this situation for transparency
+            tracing::info!(
+                treasury = %treasury_addr,
+                alloc_balance = %genesis.alloc[&treasury_addr].balance,
+                configured_supply = %supply,
+                "Treasury address found in alloc, using alloc balance"
+            );
+            Ok(Some(false))
+        } else {
+            // Create new treasury account with the configured supply
+            let treasury_account = Account {
+                nonce: 0,
+                balance: supply,
+                code_hash: KECCAK_EMPTY,
+                storage_root: B256::ZERO,
+            };
+
+            self.provider
+                .set_account(treasury_addr, treasury_account)
+                .map_err(|e| {
+                    ExecutionError::Database(DatabaseError::mdbx(format!(
+                        "Failed to create treasury account {}: {}",
+                        treasury_addr, e
+                    )))
+                })?;
+
+            tracing::info!(
+                treasury = %treasury_addr,
+                supply = %supply,
+                "Treasury account initialized at genesis"
+            );
+
+            Ok(Some(true))
+        }
     }
 
     /// Initialize the staking precompile with validator data.
@@ -405,13 +474,13 @@ mod tests {
     use std::collections::HashMap;
     use std::str::FromStr;
 
-    fn sample_validator(addr: &str, stake_eth: u128) -> GenesisValidator {
+    fn sample_validator(addr: &str, stake_cph: u128) -> GenesisValidator {
         GenesisValidator {
             address: Address::from_str(addr).unwrap(),
             name: Some("test-validator".to_string()),
             ed25519_pubkey: "0x".to_owned() + &"a".repeat(64),
             bls_pubkey: "0x".to_owned() + &"b".repeat(96),
-            staked_amount: U256::from(stake_eth * 1_000_000_000_000_000_000u128),
+            staked_amount: U256::from(stake_cph * 1_000_000_000_000_000_000u128),
             commission_rate_percent: 10,
         }
     }
@@ -431,7 +500,7 @@ mod tests {
         let test_account = Address::from_str("0x1111111111111111111111111111111111111111").unwrap();
         alloc.insert(
             test_account,
-            AllocEntry::new(U256::from(100_000_000_000_000_000_000u128)), // 100 ETH
+            AllocEntry::new(U256::from(100_000_000_000_000_000_000u128)), // 100 CPH
         );
 
         Genesis {
@@ -501,9 +570,9 @@ mod tests {
         let initializer = GenesisInitializer::new(provider.clone());
 
         let validators = vec![
-            sample_validator("0x742d35Cc6634C0532925a3b844Bc9e7595f0bC01", 32), // 32 ETH
-            sample_validator("0x853d35Cc6634C0532925a3b844Bc9e7595f0bC02", 48), // 48 ETH
-            sample_validator("0x964d35Cc6634C0532925a3b844Bc9e7595f0bC03", 20), // 20 ETH
+            sample_validator("0x742d35Cc6634C0532925a3b844Bc9e7595f0bC01", 32), // 32 CPH
+            sample_validator("0x853d35Cc6634C0532925a3b844Bc9e7595f0bC02", 48), // 48 CPH
+            sample_validator("0x964d35Cc6634C0532925a3b844Bc9e7595f0bC03", 20), // 20 CPH
         ];
 
         let genesis = sample_genesis(validators.clone());
@@ -512,7 +581,7 @@ mod tests {
         assert_eq!(result.validator_count, 3);
         assert_eq!(result.account_count, 4); // 3 validators + test account
 
-        // Total staked = 32 + 48 + 20 = 100 ETH
+        // Total staked = 32 + 48 + 20 = 100 CPH
         let expected_total = U256::from(100_000_000_000_000_000_000u128);
         assert_eq!(result.total_staked, expected_total);
         assert_eq!(read_total_staked(&*provider).unwrap(), expected_total);
@@ -672,5 +741,84 @@ mod tests {
 
         // Genesis hash should be deterministic
         assert_eq!(result1.genesis_hash, result2.genesis_hash);
+    }
+
+    #[test]
+    fn test_treasury_initialization() {
+        let provider = Arc::new(InMemoryProvider::new());
+        let initializer = GenesisInitializer::new(provider.clone());
+
+        let validator = sample_validator("0x742d35Cc6634C0532925a3b844Bc9e7595f0bC01", 32);
+        let mut genesis = sample_genesis(vec![validator]);
+
+        // Configure treasury
+        let treasury_addr =
+            Address::from_str("0x000000000000000000000000000000000000CAFE").unwrap();
+        let treasury_supply = U256::from(100_000_000_000_000_000_000_000u128); // 100,000 tokens
+
+        genesis.cipherbft.staking.treasury_address = Some(treasury_addr);
+        genesis.cipherbft.staking.initial_treasury_supply_wei = Some(treasury_supply);
+
+        let result = initializer.initialize(&genesis).unwrap();
+
+        // Treasury should be counted in account_count
+        // 1 validator + 1 test account + 1 treasury = 3
+        assert_eq!(result.account_count, 3);
+
+        // Verify treasury account was created with correct balance
+        let account = provider.get_account(treasury_addr).unwrap().unwrap();
+        assert_eq!(account.balance, treasury_supply);
+        assert_eq!(account.nonce, 0);
+        assert_eq!(account.code_hash, KECCAK_EMPTY);
+    }
+
+    #[test]
+    fn test_treasury_already_in_alloc() {
+        let provider = Arc::new(InMemoryProvider::new());
+        let initializer = GenesisInitializer::new(provider.clone());
+
+        let validator = sample_validator("0x742d35Cc6634C0532925a3b844Bc9e7595f0bC01", 32);
+        let mut genesis = sample_genesis(vec![validator]);
+
+        // Configure treasury at an address that's already in alloc
+        let treasury_addr =
+            Address::from_str("0x000000000000000000000000000000000000CAFE").unwrap();
+        let treasury_supply = U256::from(100_000_000_000_000_000_000_000u128);
+        let alloc_balance = U256::from(50_000_000_000_000_000_000_000u128); // Different balance
+
+        // Add treasury to alloc with different balance
+        genesis
+            .alloc
+            .insert(treasury_addr, AllocEntry::new(alloc_balance));
+
+        genesis.cipherbft.staking.treasury_address = Some(treasury_addr);
+        genesis.cipherbft.staking.initial_treasury_supply_wei = Some(treasury_supply);
+
+        let result = initializer.initialize(&genesis).unwrap();
+
+        // Treasury already in alloc, so account_count should be:
+        // 1 validator + 1 test account + 1 treasury (in alloc) = 3
+        assert_eq!(result.account_count, 3);
+
+        // Alloc balance should take precedence
+        let account = provider.get_account(treasury_addr).unwrap().unwrap();
+        assert_eq!(account.balance, alloc_balance);
+    }
+
+    #[test]
+    fn test_no_treasury_configured() {
+        let provider = Arc::new(InMemoryProvider::new());
+        let initializer = GenesisInitializer::new(provider.clone());
+
+        let validator = sample_validator("0x742d35Cc6634C0532925a3b844Bc9e7595f0bC01", 32);
+        let genesis = sample_genesis(vec![validator]);
+
+        // No treasury configured (default)
+        assert!(genesis.cipherbft.staking.treasury_address.is_none());
+
+        let result = initializer.initialize(&genesis).unwrap();
+
+        // Only validator + test account = 2
+        assert_eq!(result.account_count, 2);
     }
 }

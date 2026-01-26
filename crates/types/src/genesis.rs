@@ -458,7 +458,7 @@ fn default_attestation_threshold_percent() -> u8 {
 /// Staking system parameters (T012).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StakingParams {
-    /// Minimum stake in wei (default: 1 ETH).
+    /// Minimum stake in wei (default: 1 CPH).
     #[serde(default = "default_min_stake_wei", with = "u256_quantity")]
     pub min_stake_wei: U256,
 
@@ -469,6 +469,32 @@ pub struct StakingParams {
     /// Slashing penalty percentage (0-100).
     #[serde(default = "default_slashing_fraction_percent")]
     pub slashing_fraction_percent: u8,
+
+    /// Block reward per epoch in wei (default: 2 CPH per epoch).
+    /// This is the total reward minted and distributed to validators at each epoch boundary.
+    /// CPH is the native token of the CipherBFT network (symbol: $CPH).
+    #[serde(default = "default_epoch_block_reward_wei", with = "u256_quantity")]
+    pub epoch_block_reward_wei: U256,
+
+    /// Fee distribution mode: "burn" (EIP-1559 style) or "distribute" (to validators).
+    /// - "burn": Transaction fees are burned, reducing total supply
+    /// - "distribute": Transaction fees are distributed to validators proportionally
+    #[serde(default = "default_fee_distribution_mode")]
+    pub fee_distribution_mode: String,
+
+    /// Treasury address for ecosystem funding (optional).
+    /// If set, initial supply will be minted to this address at genesis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub treasury_address: Option<Address>,
+
+    /// Initial treasury supply in wei (optional).
+    /// Only used if treasury_address is also set.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "opt_u256_quantity"
+    )]
+    pub initial_treasury_supply_wei: Option<U256>,
 }
 
 impl Default for StakingParams {
@@ -477,18 +503,28 @@ impl Default for StakingParams {
             min_stake_wei: default_min_stake_wei(),
             unbonding_period_seconds: default_unbonding_period_seconds(),
             slashing_fraction_percent: default_slashing_fraction_percent(),
+            epoch_block_reward_wei: default_epoch_block_reward_wei(),
+            fee_distribution_mode: default_fee_distribution_mode(),
+            treasury_address: None,
+            initial_treasury_supply_wei: None,
         }
     }
 }
 
 fn default_min_stake_wei() -> U256 {
-    U256::from(1_000_000_000_000_000_000u128) // 1 ETH
+    U256::from(1_000_000_000_000_000_000u128) // 1 CPH
 }
 fn default_unbonding_period_seconds() -> u64 {
     604_800 // 7 days
 }
 fn default_slashing_fraction_percent() -> u8 {
     1
+}
+fn default_epoch_block_reward_wei() -> U256 {
+    U256::from(2_000_000_000_000_000_000u128) // 2 CPH per epoch
+}
+fn default_fee_distribution_mode() -> String {
+    "distribute".to_string()
 }
 
 /// Genesis validator definition with dual cryptographic keys (T013).
@@ -646,7 +682,7 @@ mod tests {
             name: Some("validator-1".to_string()),
             ed25519_pubkey: "0x".to_owned() + &"a".repeat(64), // 32 bytes
             bls_pubkey: "0x".to_owned() + &"b".repeat(96),     // 48 bytes
-            staked_amount: U256::from(32_000_000_000_000_000_000u128), // 32 ETH
+            staked_amount: U256::from(32_000_000_000_000_000_000u128), // 32 CPH
             commission_rate_percent: 10,
         }
     }
@@ -759,7 +795,7 @@ mod tests {
     #[test]
     fn test_genesis_validation_stake_below_minimum() {
         let mut genesis = sample_genesis();
-        genesis.cipherbft.validators[0].staked_amount = U256::from(1u64); // Far below 1 ETH
+        genesis.cipherbft.validators[0].staked_amount = U256::from(1u64); // Far below 1 CPH
         assert!(matches!(
             genesis.validate(),
             Err(GenesisError::StakeBelowMinimum { .. })

@@ -30,7 +30,7 @@ pub const DEFAULT_BLOCK_GAS_LIMIT: u64 = 30_000_000;
 /// Default base fee per gas (1 gwei).
 pub const DEFAULT_BASE_FEE_PER_GAS: u64 = 1_000_000_000;
 
-/// Minimum stake amount (1 ETH in wei).
+/// Minimum stake amount (1 CPH in wei).
 pub const MIN_STAKE_AMOUNT: u128 = 1_000_000_000_000_000_000;
 
 /// Unbonding period in seconds (3 days).

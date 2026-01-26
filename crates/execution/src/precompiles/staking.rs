@@ -15,7 +15,8 @@ use parking_lot::RwLock;
 use revm::precompile::{PrecompileError, PrecompileOutput, PrecompileResult};
 use std::{collections::HashMap, sync::Arc};
 
-/// Minimum validator stake (1 ETH = 1e18 wei).
+/// Minimum validator stake (1 CPH = 1e18 wei).
+/// CPH is the native token of the CipherBFT network (symbol: $CPH).
 pub const MIN_VALIDATOR_STAKE: u128 = 1_000_000_000_000_000_000;
 
 /// System address allowed to call slash function.
@@ -47,6 +48,20 @@ pub mod gas {
 
     /// Gas cost for slash (system-only).
     pub const SLASH: u64 = 30_000;
+
+    // ========================================================================
+    // Reward Distribution Gas Costs
+    // ========================================================================
+
+    /// Gas cost for distributeEpochRewards (system-only).
+    /// Higher cost due to iteration over validator set and state updates.
+    pub const DISTRIBUTE_EPOCH_REWARDS: u64 = 100_000;
+
+    /// Gas cost for getAccumulatedFees.
+    pub const GET_ACCUMULATED_FEES: u64 = 2_100;
+
+    /// Gas cost for getTotalDistributed.
+    pub const GET_TOTAL_DISTRIBUTED: u64 = 2_100;
 }
 
 // Solidity interface using alloy-sol-types
@@ -55,7 +70,7 @@ sol! {
     interface IStaking {
         /// Register as a validator with BLS public key.
         ///
-        /// Requires: msg.value >= MIN_VALIDATOR_STAKE (1 ETH)
+        /// Requires: msg.value >= MIN_VALIDATOR_STAKE (1 CPH)
         /// Gas: 50,000
         function registerValidator(bytes32 blsPubkey) external payable;
 
@@ -82,6 +97,28 @@ sol! {
         /// Reduces validator stake by specified amount.
         /// Gas: 30,000
         function slash(address validator, uint256 amount) external;
+
+        // ====================================================================
+        // Reward Distribution Functions
+        // ====================================================================
+
+        /// Distribute epoch rewards to validators (system-only).
+        ///
+        /// Distributes block rewards + accumulated fees proportionally to stake.
+        /// Called at epoch boundaries by the consensus layer.
+        /// Gas: 100,000
+        /// Returns: Total amount distributed (in wei)
+        function distributeEpochRewards(uint256 epochBlockReward) external returns (uint256);
+
+        /// Get accumulated transaction fees for current epoch.
+        ///
+        /// Gas: 2,100
+        function getAccumulatedFees() external view returns (uint256);
+
+        /// Get total rewards distributed since genesis.
+        ///
+        /// Gas: 2,100
+        function getTotalDistributed() external view returns (uint256);
     }
 }
 
@@ -114,7 +151,7 @@ impl BlsPublicKey {
 /// Validator registration information.
 #[derive(Debug, Clone)]
 pub struct ValidatorInfo {
-    /// Ethereum address (derived from Ed25519 pubkey).
+    /// EVM address (derived from Ed25519 pubkey).
     pub address: Address,
 
     /// BLS12-381 public key for DCL attestations.
@@ -130,6 +167,27 @@ pub struct ValidatorInfo {
     pub pending_exit: Option<u64>,
 }
 
+/// Reward tracking state for epoch-based distribution.
+///
+/// Tracks accumulated transaction fees and pending block rewards
+/// for distribution to validators at epoch boundaries.
+#[derive(Debug, Clone, Default)]
+pub struct RewardState {
+    /// Accumulated transaction fees for current epoch (in wei).
+    /// This is collected from all transactions during the epoch.
+    pub accumulated_fees: U256,
+
+    /// Block rewards to be distributed at epoch end (in wei).
+    /// This is set when distribute_epoch_rewards() is called.
+    pub pending_block_rewards: U256,
+
+    /// Last epoch when rewards were distributed.
+    pub last_distribution_epoch: u64,
+
+    /// Total rewards distributed since genesis (for metrics/auditing).
+    pub total_distributed: U256,
+}
+
 /// Staking state managed by the precompile.
 #[derive(Debug, Clone)]
 pub struct StakingState {
@@ -141,6 +199,9 @@ pub struct StakingState {
 
     /// Current epoch number.
     pub epoch: u64,
+
+    /// Reward tracking state for epoch-based distribution.
+    pub rewards: RewardState,
 }
 
 impl Default for StakingState {
@@ -149,6 +210,7 @@ impl Default for StakingState {
             validators: HashMap::new(),
             total_stake: U256::ZERO,
             epoch: 0,
+            rewards: RewardState::default(),
         }
     }
 }
@@ -258,6 +320,120 @@ impl StakingState {
             Err("Validator not found".to_string())
         }
     }
+
+    // ========================================================================
+    // Reward Distribution Methods
+    // ========================================================================
+
+    /// Accumulate transaction fees from a block execution.
+    ///
+    /// Called after each block is executed to track fees for later distribution.
+    ///
+    /// # Arguments
+    /// * `fees` - Total transaction fees collected from the block (in wei)
+    pub fn accumulate_fees(&mut self, fees: U256) {
+        self.rewards.accumulated_fees = self.rewards.accumulated_fees.saturating_add(fees);
+    }
+
+    /// Distribute rewards at epoch boundary.
+    ///
+    /// This method calculates and distributes rewards to all active validators
+    /// proportionally to their stake. Rewards include:
+    /// - Block rewards (minted tokens)
+    /// - Accumulated transaction fees
+    ///
+    /// # Arguments
+    /// * `epoch_block_reward` - Block reward for this epoch (in wei)
+    /// * `current_epoch` - The current epoch number
+    ///
+    /// # Returns
+    /// * Total amount distributed to all validators (in wei)
+    ///
+    /// # Distribution Formula
+    /// For each validator: `reward = total_rewards * (validator_stake / total_stake)`
+    pub fn distribute_epoch_rewards(&mut self, epoch_block_reward: U256, current_epoch: u64) -> U256 {
+        // Skip if no validators or no stake
+        if self.validators.is_empty() || self.total_stake.is_zero() {
+            // Reset accumulators even if nothing to distribute
+            self.rewards.accumulated_fees = U256::ZERO;
+            self.rewards.pending_block_rewards = U256::ZERO;
+            return U256::ZERO;
+        }
+
+        // Total rewards = block rewards + accumulated fees
+        let total_rewards = epoch_block_reward.saturating_add(self.rewards.accumulated_fees);
+
+        if total_rewards.is_zero() {
+            return U256::ZERO;
+        }
+
+        let mut total_distributed = U256::ZERO;
+
+        // Distribute proportionally to stake
+        // We iterate over validators and calculate their share
+        let original_total_stake = self.total_stake;
+
+        for validator in self.validators.values_mut() {
+            // Skip validators marked for exit
+            if validator.pending_exit.is_some() {
+                continue;
+            }
+
+            // Calculate proportional share: (stake / total_stake) * total_rewards
+            // Use multiplication first to maintain precision, then divide
+            let validator_share = (validator.stake * total_rewards) / original_total_stake;
+
+            // Add to validator's stake (compound rewards)
+            validator.stake = validator.stake.saturating_add(validator_share);
+
+            total_distributed = total_distributed.saturating_add(validator_share);
+        }
+
+        // Update total stake with distributed rewards
+        self.total_stake = self.total_stake.saturating_add(total_distributed);
+
+        // Update reward tracking state
+        self.rewards.total_distributed = self.rewards.total_distributed.saturating_add(total_distributed);
+        self.rewards.last_distribution_epoch = current_epoch;
+
+        // Reset accumulators for next epoch
+        self.rewards.accumulated_fees = U256::ZERO;
+        self.rewards.pending_block_rewards = U256::ZERO;
+
+        tracing::info!(
+            epoch = current_epoch,
+            block_reward = %epoch_block_reward,
+            fees = %self.rewards.accumulated_fees,
+            total_distributed = %total_distributed,
+            new_total_stake = %self.total_stake,
+            "Epoch rewards distributed"
+        );
+
+        total_distributed
+    }
+
+    /// Get accumulated fees for current epoch.
+    pub fn get_accumulated_fees(&self) -> U256 {
+        self.rewards.accumulated_fees
+    }
+
+    /// Get total rewards distributed since genesis.
+    pub fn get_total_distributed(&self) -> U256 {
+        self.rewards.total_distributed
+    }
+
+    /// Get the last epoch when rewards were distributed.
+    pub fn get_last_distribution_epoch(&self) -> u64 {
+        self.rewards.last_distribution_epoch
+    }
+
+    /// Advance to the next epoch.
+    ///
+    /// Called at epoch boundaries to increment the epoch counter.
+    /// This should be called AFTER distribute_epoch_rewards().
+    pub fn advance_epoch(&mut self) {
+        self.epoch += 1;
+    }
 }
 
 /// Staking precompile implementation.
@@ -347,6 +523,21 @@ impl StakingPrecompile {
             [0x7a, 0x76, 0x64, 0x60] => self.get_stake(data, gas_limit),
             // slash(address, uint256) - selector: 0x02fb4d85
             [0x02, 0xfb, 0x4d, 0x85] => self.slash(data, gas_limit, caller),
+
+            // ================================================================
+            // Reward Distribution Functions
+            // ================================================================
+
+            // distributeEpochRewards(uint256) - selector: 0xd5670b95
+            // keccak256("distributeEpochRewards(uint256)")[0:4]
+            [0xd5, 0x67, 0x0b, 0x95] => self.distribute_epoch_rewards(data, gas_limit, caller),
+            // getAccumulatedFees() - selector: 0x5df45a37
+            // keccak256("getAccumulatedFees()")[0:4]
+            [0x5d, 0xf4, 0x5a, 0x37] => self.get_accumulated_fees_precompile(gas_limit),
+            // getTotalDistributed() - selector: 0x5695fa58
+            // keccak256("getTotalDistributed()")[0:4]
+            [0x56, 0x95, 0xfa, 0x58] => self.get_total_distributed_precompile(gas_limit),
+
             _ => Err(PrecompileError::Fatal(
                 "Unknown function selector".to_string(),
             )),
@@ -566,6 +757,118 @@ impl StakingPrecompile {
             gas_used: GAS_COST,
             gas_refunded: 0,
             bytes: Bytes::new(),
+            reverted: false,
+        })
+    }
+
+    // ========================================================================
+    // Reward Distribution Precompile Functions
+    // ========================================================================
+
+    /// Distribute epoch rewards to validators (system-only).
+    ///
+    /// Function: distributeEpochRewards(uint256 epochBlockReward)
+    /// Selector: 0xd5670b95
+    /// Gas: 100,000
+    ///
+    /// This function is called by the consensus layer at epoch boundaries
+    /// to distribute block rewards and accumulated transaction fees to validators.
+    fn distribute_epoch_rewards(
+        &self,
+        data: &[u8],
+        gas_limit: u64,
+        caller: Address,
+    ) -> PrecompileResult {
+        const GAS_COST: u64 = gas::DISTRIBUTE_EPOCH_REWARDS;
+
+        if gas_limit < GAS_COST {
+            return Err(PrecompileError::Fatal("Out of gas".to_string()));
+        }
+
+        // Only callable by system
+        if caller != SYSTEM_ADDRESS {
+            return Err(PrecompileError::Fatal(
+                "Unauthorized: system-only function".to_string(),
+            ));
+        }
+
+        if data.len() < 32 {
+            return Err(PrecompileError::Fatal(
+                "Invalid epoch block reward data".to_string(),
+            ));
+        }
+
+        // Decode epoch block reward (uint256)
+        let epoch_block_reward = U256::from_be_slice(&data[0..32]);
+
+        let mut state = self.state.write();
+
+        // Get current epoch
+        let current_epoch = state.epoch;
+
+        // Distribute rewards
+        let total_distributed = state.distribute_epoch_rewards(epoch_block_reward, current_epoch);
+
+        // Advance to next epoch
+        state.advance_epoch();
+
+        // Encode return value (uint256 total_distributed)
+        let output = encode_uint256(total_distributed);
+
+        Ok(PrecompileOutput {
+            gas_used: GAS_COST,
+            gas_refunded: 0,
+            bytes: output,
+            reverted: false,
+        })
+    }
+
+    /// Get accumulated transaction fees for current epoch.
+    ///
+    /// Function: getAccumulatedFees()
+    /// Selector: 0x5df45a37
+    /// Gas: 2,100
+    fn get_accumulated_fees_precompile(&self, gas_limit: u64) -> PrecompileResult {
+        const GAS_COST: u64 = gas::GET_ACCUMULATED_FEES;
+
+        if gas_limit < GAS_COST {
+            return Err(PrecompileError::Fatal("Out of gas".to_string()));
+        }
+
+        let state = self.state.read();
+        let fees = state.get_accumulated_fees();
+
+        let output = encode_uint256(fees);
+
+        Ok(PrecompileOutput {
+            gas_used: GAS_COST,
+            gas_refunded: 0,
+            bytes: output,
+            reverted: false,
+        })
+    }
+
+    /// Get total rewards distributed since genesis.
+    ///
+    /// Function: getTotalDistributed()
+    /// Selector: 0x5695fa58
+    /// Gas: 2,100
+    fn get_total_distributed_precompile(&self, gas_limit: u64) -> PrecompileResult {
+        const GAS_COST: u64 = gas::GET_TOTAL_DISTRIBUTED;
+
+        if gas_limit < GAS_COST {
+            return Err(PrecompileError::Fatal("Out of gas".to_string()));
+        }
+
+        let state = self.state.read();
+        let total = state.get_total_distributed();
+
+        let output = encode_uint256(total);
+
+        Ok(PrecompileOutput {
+            gas_used: GAS_COST,
+            gas_refunded: 0,
+            bytes: output,
             reverted: false,
         })
     }
@@ -868,7 +1171,7 @@ mod tests {
     fn test_staking_state_from_genesis_validators_single() {
         // Single validator from genesis
         let addr = Address::with_last_byte(100);
-        let stake = U256::from(32_000_000_000_000_000_000u128); // 32 ETH
+        let stake = U256::from(32_000_000_000_000_000_000u128); // 32 CPH
 
         let validators = vec![GenesisValidatorData {
             address: addr,
@@ -894,13 +1197,13 @@ mod tests {
     fn test_staking_state_from_genesis_validators_multiple() {
         // Multiple validators from genesis
         let addr1 = Address::with_last_byte(101);
-        let stake1 = U256::from(32_000_000_000_000_000_000u128); // 32 ETH
+        let stake1 = U256::from(32_000_000_000_000_000_000u128); // 32 CPH
 
         let addr2 = Address::with_last_byte(102);
-        let stake2 = U256::from(64_000_000_000_000_000_000u128); // 64 ETH
+        let stake2 = U256::from(64_000_000_000_000_000_000u128); // 64 CPH
 
         let addr3 = Address::with_last_byte(103);
-        let stake3 = U256::from(100_000_000_000_000_000_000u128); // 100 ETH
+        let stake3 = U256::from(100_000_000_000_000_000_000u128); // 100 CPH
 
         let validators = vec![
             GenesisValidatorData {
@@ -935,7 +1238,7 @@ mod tests {
     fn test_staking_precompile_from_genesis_validators() {
         // Test StakingPrecompile::from_genesis_validators
         let addr = Address::with_last_byte(110);
-        let stake = U256::from(50_000_000_000_000_000_000u128); // 50 ETH
+        let stake = U256::from(50_000_000_000_000_000_000u128); // 50 CPH
 
         let validators = vec![GenesisValidatorData {
             address: addr,

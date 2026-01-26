@@ -56,7 +56,7 @@ fn create_test_engine_with_accounts(
 
     // Create signers and fund accounts
     let mut signers = Vec::new();
-    let initial_balance = U256::from(1000u128) * U256::from(1_000_000_000_000_000_000u64); // 1000 ETH
+    let initial_balance = U256::from(1000u128) * U256::from(1_000_000_000_000_000_000u64); // 1000 CPH
 
     for i in 0..num_accounts {
         // Generate unique private keys
@@ -86,7 +86,7 @@ fn test_execution_result_completeness_50_transactions() {
 
     // Create 50 transactions (each account sends to the next one)
     let mut transactions = Vec::new();
-    let transfer_amount = U256::from(1_000_000_000_000_000_000u64); // 1 ETH
+    let transfer_amount = U256::from(1_000_000_000_000_000_000u64); // 1 CPH
 
     for (i, signer) in signers.iter().enumerate() {
         let recipient = signers[(i + 1) % signers.len()].address();
@@ -244,7 +244,7 @@ fn test_execution_result_with_mixed_transaction_types() {
     let (mut engine, signers) = create_test_engine_with_accounts(10);
 
     let mut transactions = Vec::new();
-    let transfer_amount = U256::from(500_000_000_000_000_000u64); // 0.5 ETH
+    let transfer_amount = U256::from(500_000_000_000_000_000u64); // 0.5 CPH
 
     // Mix of different transaction values and gas limits
     for (i, signer) in signers.iter().enumerate() {
