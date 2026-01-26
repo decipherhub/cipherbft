@@ -220,7 +220,10 @@ impl<P: Provider> GenesisInitializer<P> {
         let staking = &genesis.cipherbft.staking;
 
         // Check if treasury is configured
-        let (treasury_addr, supply) = match (&staking.treasury_address, &staking.initial_treasury_supply_wei) {
+        let (treasury_addr, supply) = match (
+            &staking.treasury_address,
+            &staking.initial_treasury_supply_wei,
+        ) {
             (Some(addr), Some(supply)) if !supply.is_zero() => (*addr, *supply),
             _ => return Ok(None), // No treasury configured or zero supply
         };
@@ -468,7 +471,8 @@ mod tests {
     use super::*;
     use crate::database::InMemoryProvider;
     use cipherbft_types::genesis::{
-        CipherBftConfig, ConsensusParams, DclParams, Genesis, GenesisValidator, StakingParams,
+        CipherBftConfig, ConsensusParams, DclParams, Genesis, GenesisValidator, NativeTokenConfig,
+        StakingParams,
     };
     use cipherbft_types::geth::{AllocEntry, GethConfig};
     use std::collections::HashMap;
@@ -516,6 +520,7 @@ mod tests {
             cipherbft: CipherBftConfig {
                 genesis_time: "2024-01-15T00:00:00Z".to_string(),
                 network_id: "cipherbft-testnet-1".to_string(),
+                native_token: NativeTokenConfig::default(),
                 consensus: ConsensusParams::default(),
                 dcl: DclParams::default(),
                 staking: StakingParams::default(),

@@ -777,9 +777,18 @@ fn test_distribute_rewards_multiple_validators_proportional() {
     let expected2 = validators[1].2 + U256::from(2_000_000_000_000_000_000u128); // 50 + 2 = 52 CPH
     let expected3 = validators[2].2 + U256::from(1_000_000_000_000_000_000u128); // 25 + 1 = 26 CPH
 
-    assert_eq!(stake1, expected1, "Validator 1 should receive 25% of rewards");
-    assert_eq!(stake2, expected2, "Validator 2 should receive 50% of rewards");
-    assert_eq!(stake3, expected3, "Validator 3 should receive 25% of rewards");
+    assert_eq!(
+        stake1, expected1,
+        "Validator 1 should receive 25% of rewards"
+    );
+    assert_eq!(
+        stake2, expected2,
+        "Validator 2 should receive 50% of rewards"
+    );
+    assert_eq!(
+        stake3, expected3,
+        "Validator 3 should receive 25% of rewards"
+    );
 
     // Verify total stake increased
     let expected_total_stake = expected1 + expected2 + expected3;

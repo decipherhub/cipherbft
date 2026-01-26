@@ -23,7 +23,7 @@ use alloy_primitives::{Address, U256};
 use cipherbft_crypto::{ValidatorKeys, mnemonic::{Mnemonic, derive_validator_keys}};
 use cipherbft_types::genesis::{
     CipherBftConfig, ConsensusParams, DclParams, Genesis, GenesisError, GenesisValidator,
-    StakingParams,
+    NativeTokenConfig, StakingParams,
 };
 use cipherbft_types::geth::{AllocEntry, GethConfig};
 use cipherbft_types::ValidatorId;
@@ -391,6 +391,7 @@ impl GenesisGenerator {
             cipherbft: CipherBftConfig {
                 genesis_time,
                 network_id: config.network_id,
+                native_token: NativeTokenConfig::default(),
                 consensus: ConsensusParams::default(),
                 dcl: DclParams::default(),
                 staking: StakingParams::default(),
@@ -437,6 +438,7 @@ impl GenesisGenerator {
             cipherbft: CipherBftConfig {
                 genesis_time: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
                 network_id: network_id.to_string(),
+                native_token: NativeTokenConfig::default(),
                 consensus: ConsensusParams::default(),
                 dcl: DclParams::default(),
                 staking: StakingParams::default(),
@@ -529,6 +531,7 @@ impl GenesisGenerator {
             cipherbft: CipherBftConfig {
                 genesis_time,
                 network_id: network_id.to_string(),
+                native_token: NativeTokenConfig::default(),
                 consensus: ConsensusParams::default(),
                 dcl: DclParams::default(),
                 staking: StakingParams::default(),
@@ -591,7 +594,8 @@ mod tests {
     use super::*;
     use alloy_primitives::{Address, U256};
     use cipherbft_types::genesis::{
-        CipherBftConfig, ConsensusParams, DclParams, GenesisValidator, StakingParams,
+        CipherBftConfig, ConsensusParams, DclParams, GenesisValidator, NativeTokenConfig,
+        StakingParams,
     };
     use cipherbft_types::geth::{AllocEntry, GethConfig};
     use std::collections::HashMap;
@@ -623,6 +627,7 @@ mod tests {
             cipherbft: CipherBftConfig {
                 genesis_time: "2024-01-15T00:00:00Z".to_string(),
                 network_id: "cipherbft-testnet-1".to_string(),
+                native_token: NativeTokenConfig::default(),
                 consensus: ConsensusParams::default(),
                 dcl: DclParams::default(),
                 staking: StakingParams::default(),
