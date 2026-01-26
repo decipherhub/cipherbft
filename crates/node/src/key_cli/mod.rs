@@ -180,20 +180,22 @@ pub enum KeysCommand {
         force: bool,
     },
 
-    /// Export public key information
+    /// Export key information (public key by default, or private key with --unsafe-export-private-key)
     ///
-    /// Outputs key public keys and IDs. Never exports private keys.
-    /// Useful for sharing validator info with others or for configuration.
+    /// By default, exports only public key information. Use --unsafe-export-private-key
+    /// to export the private key (requires confirmation for file backend).
     ///
     /// Examples:
-    ///   cipherd keys export                        # Export all keys
-    ///   cipherd keys export validator-0            # Export specific key by name
-    ///   cipherd keys export --format json          # Export in JSON format
+    ///   cipherd keys export                                          # Export all public keys
+    ///   cipherd keys export validator-0                              # Export specific key public info
+    ///   cipherd keys export validator-0 --unsafe-export-private-key  # Export private key (DANGEROUS!)
+    ///   cipherd keys export validator-0 --format json                # Export in JSON format
     Export {
-        /// Name of the key to export (optional, exports all if not specified)
+        /// Name of the key to export (required for private key export)
         ///
         /// The key name should match the name used when the key was created
-        /// (e.g., "validator-0", "default", "my-key"). If omitted, exports all keys.
+        /// (e.g., "validator-0_0_ed25519", "default_0_bls"). For private key export,
+        /// this must be the exact key name (not a prefix).
         name: Option<String>,
 
         /// Keyring backend to read keys from
@@ -211,6 +213,20 @@ pub enum KeysCommand {
         /// Output file (stdout if not specified)
         #[arg(long)]
         output: Option<PathBuf>,
+
+        /// Export the private key (DANGEROUS - use with extreme caution!)
+        ///
+        /// This will export the raw private key in hex format. The private key
+        /// gives full control over the associated account. Never share it!
+        #[arg(long)]
+        unsafe_export_private_key: bool,
+
+        /// Read passphrase from file instead of prompting (for file backend)
+        ///
+        /// Required when exporting private keys from the file backend,
+        /// as the keystore must be decrypted.
+        #[arg(long)]
+        passphrase_file: Option<PathBuf>,
     },
 
     /// List all keystores in a directory
@@ -377,11 +393,22 @@ pub fn execute_keys_command(
             format,
             keys_dir,
             output,
+            unsafe_export_private_key,
+            passphrase_file,
         } => {
             let effective_backend =
                 resolve_keyring_backend(parent_keyring_backend, keyring_backend);
             let effective_dir = resolve_keys_dir_option(parent_keys_dir, keys_dir);
-            export::execute(home, effective_backend, name, &format, effective_dir, output)
+            export::execute(
+                home,
+                effective_backend,
+                name,
+                &format,
+                effective_dir,
+                output,
+                unsafe_export_private_key,
+                passphrase_file,
+            )
         }
 
         KeysCommand::List {

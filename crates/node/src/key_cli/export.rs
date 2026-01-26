@@ -1,10 +1,11 @@
 //! Key export command implementation
 //!
-//! Exports public key information (never exports private keys).
+//! Exports key information. By default only exports public keys.
+//! With --unsafe-export-private-key, can export the private key.
 
-use super::common::resolve_keys_dir;
-use anyhow::{anyhow, Context, Result};
-use cipherbft_crypto::{Keyring, KeyringBackend};
+use super::common::{read_passphrase_from_file, resolve_keys_dir};
+use anyhow::{anyhow, bail, Context, Result};
+use cipherbft_crypto::{ExposeSecret, Keyring, KeyringBackend};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -18,6 +19,8 @@ use std::path::{Path, PathBuf};
 /// * `format` - Output format ("json" or "text")
 /// * `keys_dir` - Optional custom keys directory
 /// * `output` - Optional output file path (stdout if None)
+/// * `unsafe_export_private_key` - If true, export the private key (DANGEROUS!)
+/// * `passphrase_file` - Optional path to file containing passphrase
 pub fn execute(
     home: &Path,
     keyring_backend: KeyringBackend,
@@ -25,6 +28,8 @@ pub fn execute(
     format: &str,
     keys_dir: Option<PathBuf>,
     output: Option<PathBuf>,
+    unsafe_export_private_key: bool,
+    passphrase_file: Option<PathBuf>,
 ) -> Result<()> {
     let keys_dir = resolve_keys_dir(home, keys_dir);
 
@@ -43,9 +48,27 @@ pub fn execute(
         );
     }
 
+    // Private key export requires a specific key name
+    if unsafe_export_private_key && name.is_none() {
+        bail!(
+            "Private key export requires a specific key name.\n\
+             Usage: cipherd keys export <KEY_NAME> --unsafe-export-private-key\n\
+             Run 'cipherd keys list' to see available keys."
+        );
+    }
+
     // If a specific key name is provided, export only that key
     if let Some(ref key_name) = name {
-        return export_single_key(home, &keys_dir, keyring_backend, key_name, format, output);
+        return export_single_key(
+            home,
+            &keys_dir,
+            keyring_backend,
+            key_name,
+            format,
+            output,
+            unsafe_export_private_key,
+            passphrase_file,
+        );
     }
 
     // Otherwise, collect all validator info - strategy depends on backend
@@ -91,6 +114,8 @@ fn export_single_key(
     key_name: &str,
     format: &str,
     output: Option<PathBuf>,
+    unsafe_export_private_key: bool,
+    passphrase_file: Option<PathBuf>,
 ) -> Result<()> {
     // Use keyring to get key metadata
     let keyring = Keyring::new(keyring_backend, keys_dir)
@@ -123,6 +148,30 @@ fn export_single_key(
         ));
     }
 
+    // For private key export, we need exactly one key match
+    if unsafe_export_private_key && matching_keys.len() > 1 {
+        bail!(
+            "Multiple keys match '{}'. Please specify the exact key name for private key export.\n\
+             Matching keys: {}",
+            key_name,
+            matching_keys.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+        );
+    }
+
+    // Get passphrase if needed for private key export
+    let passphrase: Option<String> = if unsafe_export_private_key && keyring_backend.requires_passphrase() {
+        let pass = if let Some(ref pass_file) = passphrase_file {
+            read_passphrase_from_file(pass_file)?
+        } else {
+            // Prompt for passphrase
+            rpassword::prompt_password("Enter passphrase to decrypt key: ")
+                .context("Failed to read passphrase")?
+        };
+        Some(pass)
+    } else {
+        None
+    };
+
     // Collect key information
     let mut key_info = serde_json::json!({
         "name": key_name,
@@ -136,13 +185,23 @@ fn export_single_key(
             .get_metadata(key_full_name)
             .with_context(|| format!("Failed to get metadata for '{}'", key_full_name))?;
 
-        keys_array.push(serde_json::json!({
+        let mut key_data = serde_json::json!({
             "full_name": key_full_name,
             "key_type": metadata.key_type,
             "pubkey": metadata.pubkey,
             "description": metadata.description,
             "derivation_path": metadata.path,
-        }));
+        });
+
+        // Export private key if requested
+        if unsafe_export_private_key {
+            let secret = keyring
+                .get_key(key_full_name, passphrase.as_deref())
+                .with_context(|| format!("Failed to decrypt key '{}'", key_full_name))?;
+            key_data["private_key"] = serde_json::Value::String(hex::encode(secret.expose_secret()));
+        }
+
+        keys_array.push(key_data);
     }
     key_info["keys"] = serde_json::Value::Array(keys_array);
 
@@ -209,9 +268,13 @@ fn format_single_key_text(info: &serde_json::Value) -> Result<String> {
             let pubkey = key["pubkey"].as_str().unwrap_or("unknown");
             let description = key["description"].as_str();
             let path = key["derivation_path"].as_str();
+            let private_key = key["private_key"].as_str();
 
             output.push_str(&format!("\n  {} ({})\n", full_name, key_type));
             output.push_str(&format!("    Public Key: {}\n", pubkey));
+            if let Some(priv_key) = private_key {
+                output.push_str(&format!("    Private Key: {}\n", priv_key));
+            }
             if let Some(desc) = description {
                 output.push_str(&format!("    Description: {}\n", desc));
             }
