@@ -305,7 +305,7 @@ impl GenesisGenerator {
     /// let result = GenesisGenerator::generate(&mut rng, config)?;
     /// ```
     pub fn generate<R: CryptoRng + RngCore>(
-        rng: &mut R,
+        _rng: &mut R,
         config: GenesisGeneratorConfig,
     ) -> Result<GenesisGenerationResult, GenesisError> {
         debug!(
@@ -325,8 +325,16 @@ impl GenesisGenerator {
         let mut genesis_validators = Vec::with_capacity(config.num_validators);
         let mut alloc = HashMap::new();
 
+        // Parse test mnemonic for deterministic devnet keys
+        // This ensures reproducible addresses matching Ethereum testing tools (Hardhat, Foundry)
+        let mnemonic = Mnemonic::from_phrase(DEVNET_TEST_MNEMONIC)
+            .expect("hardcoded test mnemonic should be valid");
+
         for i in 0..config.num_validators {
-            let keys = ValidatorKeys::generate(rng);
+            // Derive keys from mnemonic at account index i
+            // Each validator gets unique keys: m/12381/8888/{i}/0 and m/12381/8888/{i}/1
+            let keys = derive_validator_keys(&mnemonic, i as u32, None)
+                .expect("key derivation from valid mnemonic should succeed");
 
             // Derive EVM address from validator ID (last 20 bytes of keccak256(ed25519_pubkey))
             let validator_id = keys.validator_id();
@@ -339,7 +347,7 @@ impl GenesisGenerator {
             let bls_secret_hex = hex::encode(keys.data_chain_secret().to_bytes());
 
             debug!(
-                "Generated validator {}: address={}, ed25519={:.16}...",
+                "Derived validator {} from test mnemonic: address={}, ed25519={:.16}...",
                 i, address, ed25519_pubkey_hex
             );
 
