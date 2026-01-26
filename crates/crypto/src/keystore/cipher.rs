@@ -182,11 +182,11 @@ pub fn decrypt_secret(
     Ok(secrecy::SecretBox::new(Box::new(plaintext)))
 }
 
-/// Generate a random IV
+/// Generate a random IV using OS random number generator
 pub fn generate_iv() -> Vec<u8> {
-    use rand::RngCore;
+    use rand::{rngs::OsRng, RngCore};
     let mut iv = vec![0u8; IV_LENGTH];
-    rand::thread_rng().fill_bytes(&mut iv);
+    OsRng.fill_bytes(&mut iv);
     iv
 }
 
