@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 /// * `output` - Optional output file path (stdout if None)
 /// * `unsafe_export_private_key` - If true, export the private key (DANGEROUS!)
 /// * `passphrase_file` - Optional path to file containing passphrase
+#[allow(clippy::too_many_arguments)]
 pub fn execute(
     home: &Path,
     keyring_backend: KeyringBackend,
@@ -107,6 +108,7 @@ pub fn execute(
 }
 
 /// Export a single key by name
+#[allow(clippy::too_many_arguments)]
 fn export_single_key(
     _home: &Path,
     keys_dir: &Path,
@@ -118,8 +120,8 @@ fn export_single_key(
     passphrase_file: Option<PathBuf>,
 ) -> Result<()> {
     // Use keyring to get key metadata
-    let keyring = Keyring::new(keyring_backend, keys_dir)
-        .context("Failed to initialize keyring backend")?;
+    let keyring =
+        Keyring::new(keyring_backend, keys_dir).context("Failed to initialize keyring backend")?;
 
     // List all keys and find matching ones
     let all_keys = keyring.list_keys().context("Failed to list keys")?;
@@ -154,23 +156,28 @@ fn export_single_key(
             "Multiple keys match '{}'. Please specify the exact key name for private key export.\n\
              Matching keys: {}",
             key_name,
-            matching_keys.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+            matching_keys
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
     }
 
     // Get passphrase if needed for private key export
-    let passphrase: Option<String> = if unsafe_export_private_key && keyring_backend.requires_passphrase() {
-        let pass = if let Some(ref pass_file) = passphrase_file {
-            read_passphrase_from_file(pass_file)?
+    let passphrase: Option<String> =
+        if unsafe_export_private_key && keyring_backend.requires_passphrase() {
+            let pass = if let Some(ref pass_file) = passphrase_file {
+                read_passphrase_from_file(pass_file)?
+            } else {
+                // Prompt for passphrase
+                rpassword::prompt_password("Enter passphrase to decrypt key: ")
+                    .context("Failed to read passphrase")?
+            };
+            Some(pass)
         } else {
-            // Prompt for passphrase
-            rpassword::prompt_password("Enter passphrase to decrypt key: ")
-                .context("Failed to read passphrase")?
+            None
         };
-        Some(pass)
-    } else {
-        None
-    };
 
     // Collect key information
     let mut key_info = serde_json::json!({
@@ -198,7 +205,8 @@ fn export_single_key(
             let secret = keyring
                 .get_key(key_full_name, passphrase.as_deref())
                 .with_context(|| format!("Failed to decrypt key '{}'", key_full_name))?;
-            key_data["private_key"] = serde_json::Value::String(hex::encode(secret.expose_secret()));
+            key_data["private_key"] =
+                serde_json::Value::String(hex::encode(secret.expose_secret()));
         }
 
         keys_array.push(key_data);
