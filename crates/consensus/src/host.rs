@@ -611,7 +611,11 @@ impl Actor for CipherBftHost {
                 // decision and form the Cut. If it times out, consensus will still
                 // start but may vote NIL on the first round.
                 let wait_timeout = std::time::Duration::from_millis(500);
-                if !self.value_builder.wait_for_cut(next_height, wait_timeout).await {
+                if !self
+                    .value_builder
+                    .wait_for_cut(next_height, wait_timeout)
+                    .await
+                {
                     warn!(
                         parent: &self.span,
                         next_height = next_height.0,
