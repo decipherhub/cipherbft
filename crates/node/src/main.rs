@@ -104,7 +104,22 @@ enum Commands {
     },
 
     /// Manage your application's keys (secure EIP-2335 keystores)
+    ///
+    /// Common options like --keyring-backend can be specified at this level
+    /// or at the subcommand level. Subcommand-level options take precedence.
     Keys {
+        /// Keyring backend for key storage (can also be specified per-subcommand)
+        ///
+        /// - file: EIP-2335 encrypted keystores (default, recommended)
+        /// - os: OS native keyring (macOS Keychain, Windows Credential Manager)
+        /// - test: Unencrypted storage (development only!)
+        #[arg(long, value_enum)]
+        keyring_backend: Option<KeyringBackendArg>,
+
+        /// Directory containing keystore files (can also be specified per-subcommand)
+        #[arg(long)]
+        keys_dir: Option<PathBuf>,
+
         #[command(subcommand)]
         command: KeysCommand,
     },
@@ -364,7 +379,11 @@ async fn main() -> Result<()> {
 
         Commands::Testnet { command } => cmd_testnet(command).await,
 
-        Commands::Keys { command } => execute_keys_command(&cli.home, command),
+        Commands::Keys {
+            keyring_backend,
+            keys_dir,
+            command,
+        } => execute_keys_command(&cli.home, keyring_backend, keys_dir, command),
 
         Commands::Config { command } => cmd_config(&cli.home, command),
 

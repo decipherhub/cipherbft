@@ -8,10 +8,11 @@
 use std::collections::HashMap;
 
 use alloy_primitives::{Address, Bytes, B256, U256};
-use alloy_rpc_types_eth::{Block, Filter, Log, Transaction, TransactionReceipt};
+use alloy_rpc_types_eth::{Filter, Log, Transaction, TransactionReceipt};
 use async_trait::async_trait;
 
 use crate::error::RpcResult;
+use crate::types::RpcBlock;
 
 /// Block number or tag for state queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -64,18 +65,24 @@ impl SyncStatus {
 #[async_trait]
 pub trait RpcStorage: Send + Sync {
     /// Get a block by its number or tag.
+    ///
+    /// Returns `RpcBlock` which serializes numeric fields as hex strings
+    /// per Ethereum JSON-RPC specification.
     async fn get_block_by_number(
         &self,
         number: BlockNumberOrTag,
         full_transactions: bool,
-    ) -> RpcResult<Option<Block>>;
+    ) -> RpcResult<Option<RpcBlock>>;
 
     /// Get a block by its hash.
+    ///
+    /// Returns `RpcBlock` which serializes numeric fields as hex strings
+    /// per Ethereum JSON-RPC specification.
     async fn get_block_by_hash(
         &self,
         hash: B256,
         full_transactions: bool,
-    ) -> RpcResult<Option<Block>>;
+    ) -> RpcResult<Option<RpcBlock>>;
 
     /// Get a transaction by its hash.
     async fn get_transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction>>;
@@ -194,6 +201,51 @@ pub trait NetworkApi: Send + Sync {
 
     /// Check if the node is listening for connections.
     async fn is_listening(&self) -> RpcResult<bool>;
+}
+
+/// Debug execution interface for tracing operations.
+#[async_trait]
+#[allow(clippy::too_many_arguments)]
+pub trait DebugExecutionApi: Send + Sync {
+    /// Trace a transaction that has already been executed.
+    async fn trace_transaction(
+        &self,
+        tx_hash: B256,
+        block: BlockNumberOrTag,
+        options: Option<cipherbft_execution::TraceOptions>,
+    ) -> RpcResult<cipherbft_execution::TraceResult>;
+
+    /// Execute and trace a call without committing.
+    async fn trace_call(
+        &self,
+        from: Option<Address>,
+        to: Option<Address>,
+        gas: Option<u64>,
+        gas_price: Option<U256>,
+        value: Option<U256>,
+        data: Option<Bytes>,
+        block: BlockNumberOrTag,
+        options: Option<cipherbft_execution::TraceOptions>,
+    ) -> RpcResult<cipherbft_execution::TraceResult>;
+
+    /// Trace all transactions in a block.
+    async fn trace_block(
+        &self,
+        block: BlockNumberOrTag,
+        options: Option<cipherbft_execution::TraceOptions>,
+    ) -> RpcResult<Vec<cipherbft_execution::TraceResult>>;
+}
+
+/// Extended storage interface for proof generation.
+#[async_trait]
+pub trait RpcProofStorage: RpcStorage {
+    /// Generate an account proof (for eth_getProof).
+    async fn get_proof(
+        &self,
+        address: Address,
+        storage_keys: Vec<U256>,
+        block: BlockNumberOrTag,
+    ) -> RpcResult<cipherbft_execution::AccountProof>;
 }
 
 #[cfg(test)]

@@ -197,6 +197,20 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
         }
     }
 
+    /// Get a reference to the underlying database.
+    ///
+    /// This is useful for querying account state, storage, and code.
+    pub fn database(&self) -> &CipherBftDatabase<P> {
+        &self.database
+    }
+
+    /// Get a reference to the state manager.
+    ///
+    /// This is useful for state root queries and rollback operations.
+    pub fn state_manager(&self) -> &StateManager<P> {
+        &self.state_manager
+    }
+
     /// Process all transactions in a block.
     fn process_transactions(
         &mut self,

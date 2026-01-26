@@ -46,7 +46,7 @@ async fn test_get_block_transaction_count_by_hash_exists() {
         .await
         .unwrap();
     if let Some(block) = block {
-        let hash = block.header.hash;
+        let hash = block.hash;
         let result = api.get_block_transaction_count_by_hash(hash).await.unwrap();
 
         assert!(result.is_some());
@@ -123,7 +123,7 @@ async fn test_get_transaction_by_block_hash_and_index_out_of_bounds() {
         .await
         .unwrap();
     if let Some(block) = block {
-        let hash = block.header.hash;
+        let hash = block.hash;
 
         // Request index beyond transaction count
         let result = api
@@ -292,7 +292,7 @@ async fn test_block_transaction_count_consistency() {
         .unwrap();
 
     if let Some(block) = block {
-        let hash = block.header.hash;
+        let hash = block.hash;
         let tx_count = block.transactions.len();
 
         let count_by_hash = api.get_block_transaction_count_by_hash(hash).await.unwrap();

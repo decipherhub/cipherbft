@@ -565,7 +565,7 @@ async fn test_mdbx_rpc_storage_get_block_receipts() {
     assert!(result.is_none(), "Non-existent block should return None");
 
     // Store a block first
-    let block = cipherbft_storage::Block {
+    let mut block = cipherbft_storage::Block {
         number: 100,
         hash: [0xaa; 32],
         parent_hash: [0x00; 32],
@@ -586,7 +586,9 @@ async fn test_mdbx_rpc_storage_get_block_receipts() {
         transaction_hashes: vec![[0x11; 32], [0x22; 32]],
         transaction_count: 2,
         total_difficulty: [0; 32],
+        size: 0, // Calculated below
     };
+    block.size = block.calculate_size();
     block_store.put_block(&block).await.unwrap();
 
     // Store receipts for the block
@@ -668,7 +670,7 @@ async fn test_mdbx_rpc_storage_get_block_receipts_empty_block() {
     let storage = MdbxRpcStorage::new(provider, block_store.clone(), receipt_store, TEST_CHAIN_ID);
 
     // Store a block with no transactions
-    let block = cipherbft_storage::Block {
+    let mut block = cipherbft_storage::Block {
         number: 50,
         hash: [0xbb; 32],
         parent_hash: [0x00; 32],
@@ -689,7 +691,9 @@ async fn test_mdbx_rpc_storage_get_block_receipts_empty_block() {
         transaction_hashes: vec![], // No transactions
         transaction_count: 0,
         total_difficulty: [0; 32],
+        size: 0, // Calculated below
     };
+    block.size = block.calculate_size();
     block_store.put_block(&block).await.unwrap();
 
     // Query block receipts for empty block

@@ -102,6 +102,9 @@ pub struct Node {
     validators: HashMap<ValidatorId, ValidatorInfo>,
     /// Execution layer bridge
     execution_bridge: Option<Arc<ExecutionBridge>>,
+    /// Whether DCL (Data Chain Layer) is enabled.
+    /// When disabled, consensus proceeds without data availability attestations.
+    dcl_enabled: bool,
 }
 
 impl Node {
@@ -138,6 +141,7 @@ impl Node {
             validator_id,
             validators: HashMap::new(),
             execution_bridge: None,
+            dcl_enabled: true, // Default to enabled, overridden by genesis
         })
     }
 
@@ -275,6 +279,12 @@ impl Node {
             self.validators.len()
         );
 
+        // Set DCL enabled flag from genesis configuration
+        self.dcl_enabled = genesis.cipherbft.dcl.enabled;
+        if !self.dcl_enabled {
+            info!("DCL (Data Chain Layer) is DISABLED - consensus will proceed without data availability attestations");
+        }
+
         Ok(())
     }
 
@@ -353,183 +363,254 @@ impl Node {
         // Get cancellation token for graceful shutdown
         let cancel_token = supervisor.cancellation_token();
 
-        // Create channels for Primary
+        // Create channel for CutReady events to Consensus Host
+        let (cut_tx, cut_rx) = mpsc::channel::<Cut>(100);
+
+        // Create channels for Primary (only used when DCL enabled)
         let (primary_incoming_tx, mut primary_incoming_rx) =
             mpsc::channel::<(ValidatorId, DclMessage)>(1000);
 
-        // Create primary network
-        let primary_network = Arc::new(TcpPrimaryNetwork::new(
-            self.validator_id,
-            &self.config.peers,
-            primary_incoming_tx.clone(),
-        ));
+        // Create channel to signal empty cut sender to advance (used when DCL disabled)
+        // This creates a lockstep between consensus decisions and cut generation
+        let (cut_advance_tx, mut cut_advance_rx) = mpsc::channel::<()>(1);
 
-        // Start primary listener
-        Arc::clone(&primary_network)
-            .start_listener(self.config.primary_listen)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to start primary network listener on {}",
-                    self.config.primary_listen
-                )
-            })?;
+        // Conditionally spawn DCL (Data Chain Layer) based on genesis config
+        // When disabled, we bypass DCL and send empty cuts directly to consensus
+        let mut primary_handle_opt: Option<cipherbft_data_chain::primary::PrimaryHandle> = None;
 
-        // Connect to peers (with retry) - supervised task
-        supervisor.spawn_cancellable("peer-connector", {
-            let network = Arc::clone(&primary_network);
-            move |token| async move {
-                // Initial delay to let other nodes start
-                tokio::time::sleep(Duration::from_secs(1)).await;
+        if self.dcl_enabled {
+            // Create primary network
+            let primary_network = Arc::new(TcpPrimaryNetwork::new(
+                self.validator_id,
+                &self.config.peers,
+                primary_incoming_tx.clone(),
+            ));
+
+            // Start primary listener
+            Arc::clone(&primary_network)
+                .start_listener(self.config.primary_listen)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to start primary network listener on {}",
+                        self.config.primary_listen
+                    )
+                })?;
+
+            // Connect to peers (with retry) - supervised task
+            supervisor.spawn_cancellable("peer-connector", {
+                let network = Arc::clone(&primary_network);
+                move |token| async move {
+                    // Initial delay to let other nodes start
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _ = token.cancelled() => {
+                                info!("Peer connector shutting down");
+                                break;
+                            }
+                            _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                                network.connect_to_all_peers().await;
+                            }
+                        }
+                    }
+                    Ok(())
+                }
+            });
+
+            // Create Primary configuration
+            // For devnet, allow unlimited empty cars so consensus can make progress without real transactions
+            let primary_config =
+                PrimaryConfig::new(self.validator_id, self.bls_keypair.secret_key.clone())
+                    .with_car_interval(Duration::from_millis(self.config.car_interval_ms))
+                    .with_max_empty_cars(u32::MAX);
+
+            // Extract BLS public keys for DCL layer (Primary uses BLS for threshold signatures)
+            let bls_pubkeys: HashMap<ValidatorId, BlsPublicKey> = self
+                .validators
+                .iter()
+                .map(|(id, info)| (*id, info.bls_public_key.clone()))
+                .collect();
+
+            // Spawn Primary task
+            let (primary_handle, worker_rxs) = Primary::spawn(
+                primary_config,
+                bls_pubkeys,
+                Box::new(TcpPrimaryNetworkAdapter {
+                    network: primary_network,
+                }),
+                self.config.num_workers as u8,
+            );
+
+            // Spawn Workers and wire up channels
+            // Workers receive batches from peers and notify Primary when batches are ready
+            for (worker_idx, mut from_primary_rx) in worker_rxs.into_iter().enumerate() {
+                let worker_id = worker_idx as u8;
+
+                // Create Worker network with incoming message channel
+                let (worker_incoming_tx, mut worker_incoming_rx) =
+                    mpsc::channel::<(ValidatorId, WorkerMessage)>(1024);
+
+                let worker_network = TcpWorkerNetwork::new(
+                    self.validator_id,
+                    worker_id,
+                    &self.config.peers,
+                    worker_incoming_tx,
+                );
+
+                // Start Worker network listener
+                if let Some(listen_addr) = self.config.worker_listens.get(worker_id as usize) {
+                    let network_for_listener = Arc::new(worker_network.clone());
+                    let listen_addr = *listen_addr;
+                    tokio::spawn(async move {
+                        if let Err(e) = network_for_listener.start_listener(listen_addr).await {
+                            error!("Failed to start worker {} listener: {}", worker_id, e);
+                        }
+                    });
+
+                    // Connect to peers after a brief delay to allow listeners to start
+                    let network_for_connect = worker_network.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        network_for_connect.connect_to_all_peers().await;
+                    });
+                }
+
+                // Create Worker config and spawn
+                let worker_config = WorkerConfig::new(self.validator_id, worker_id);
+                let mut worker_handle = Worker::spawn(worker_config, Box::new(worker_network));
+
+                // Combined bridge task: handles all communication with Worker
+                // - Primary -> Worker: forward batch requests
+                // - Worker -> Primary: forward batch digests
+                // - Network -> Worker: forward peer messages
+                let token = cancel_token.clone();
+                let primary_worker_sender = primary_handle.worker_sender();
+                tokio::spawn(async move {
+                    loop {
+                        tokio::select! {
+                            biased;
+
+                            _ = token.cancelled() => {
+                                debug!("Worker {} bridge shutting down", worker_id);
+                                break;
+                            }
+
+                            // Primary -> Worker: forward batch requests and digests
+                            msg = from_primary_rx.recv() => {
+                                match msg {
+                                    Some(m) => {
+                                        if worker_handle.send_from_primary(m).await.is_err() {
+                                            warn!("Worker {} send_from_primary failed", worker_id);
+                                            break;
+                                        }
+                                    }
+                                    None => {
+                                        debug!("Worker {} primary channel closed", worker_id);
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // Worker -> Primary: forward batch availability notifications
+                            msg = worker_handle.recv_from_worker() => {
+                                match msg {
+                                    Some(m) => {
+                                        if primary_worker_sender.send(m).await.is_err() {
+                                            warn!("Worker {} send to primary failed", worker_id);
+                                            break;
+                                        }
+                                    }
+                                    None => {
+                                        debug!("Worker {} receiver closed", worker_id);
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // Network -> Worker: forward peer messages (batches, sync requests)
+                            msg = worker_incoming_rx.recv() => {
+                                match msg {
+                                    Some((peer, worker_msg)) => {
+                                        if worker_handle.send_from_peer(peer, worker_msg).await.is_err() {
+                                            warn!("Worker {} send_from_peer failed", worker_id);
+                                            break;
+                                        }
+                                    }
+                                    None => {
+                                        debug!("Worker {} network channel closed", worker_id);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+
+                info!("Worker {} spawned and wired", worker_id);
+            }
+
+            primary_handle_opt = Some(primary_handle);
+            info!(
+                "DCL layer spawned with Primary and {} workers",
+                self.config.num_workers
+            );
+
+            // Drop the cut_advance_rx receiver since it's only used when DCL is disabled.
+            // This ensures cut_advance_tx.send() fails immediately instead of blocking,
+            // preventing deadlock in the event loop.
+            drop(cut_advance_rx);
+        } else {
+            // DCL disabled: spawn a task that sends empty cuts directly to consensus
+            // This allows consensus to proceed without data availability attestations
+            // IMPORTANT: Cuts are sent in lockstep with consensus decisions to avoid
+            // the cut buffer filling up before consensus can use them
+            info!("DCL DISABLED - spawning empty cut sender for consensus bypass");
+            let cut_tx_bypass = cut_tx.clone();
+            supervisor.spawn_cancellable("empty-cut-sender", move |token| async move {
+                let mut height = 1u64;
+
+                // Send the first cut immediately at height 1
+                let empty_cut = Cut::new(height);
+                info!("Sending initial empty cut for height {}", height);
+                if let Err(e) = cut_tx_bypass.send(empty_cut).await {
+                    warn!("Failed to send initial empty cut: {}", e);
+                    return Ok(());
+                }
+                height += 1;
+
+                // After the first cut, wait for consensus to decide before sending the next
+                // This creates a lockstep: cut -> propose -> decide -> next cut
                 loop {
                     tokio::select! {
                         biased;
                         _ = token.cancelled() => {
-                            info!("Peer connector shutting down");
+                            info!("Empty cut sender shutting down");
                             break;
                         }
-                        _ = tokio::time::sleep(Duration::from_secs(5)) => {
-                            network.connect_to_all_peers().await;
+                        // Wait for signal that consensus decided, then send next cut
+                        result = cut_advance_rx.recv() => {
+                            match result {
+                                Some(()) => {
+                                    let empty_cut = Cut::new(height);
+                                    info!("Sending empty cut for height {} (after consensus decision)", height);
+                                    if let Err(e) = cut_tx_bypass.send(empty_cut).await {
+                                        warn!("Failed to send empty cut: {}", e);
+                                        break;
+                                    }
+                                    height += 1;
+                                }
+                                None => {
+                                    info!("Cut advance channel closed, stopping empty cut sender");
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
                 Ok(())
-            }
-        });
-
-        // Create Primary configuration
-        // For devnet, allow unlimited empty cars so consensus can make progress without real transactions
-        let primary_config =
-            PrimaryConfig::new(self.validator_id, self.bls_keypair.secret_key.clone())
-                .with_car_interval(Duration::from_millis(self.config.car_interval_ms))
-                .with_max_empty_cars(u32::MAX);
-
-        // Create channel for CutReady events to Consensus Host
-        let (cut_tx, cut_rx) = mpsc::channel::<Cut>(100);
-
-        // Extract BLS public keys for DCL layer (Primary uses BLS for threshold signatures)
-        let bls_pubkeys: HashMap<ValidatorId, BlsPublicKey> = self
-            .validators
-            .iter()
-            .map(|(id, info)| (*id, info.bls_public_key.clone()))
-            .collect();
-
-        // Spawn Primary task
-        let (mut primary_handle, worker_rxs) = Primary::spawn(
-            primary_config,
-            bls_pubkeys,
-            Box::new(TcpPrimaryNetworkAdapter {
-                network: primary_network,
-            }),
-            self.config.num_workers as u8,
-        );
-
-        // Spawn Workers and wire up channels
-        // Workers receive batches from peers and notify Primary when batches are ready
-        for (worker_idx, mut from_primary_rx) in worker_rxs.into_iter().enumerate() {
-            let worker_id = worker_idx as u8;
-
-            // Create Worker network with incoming message channel
-            let (worker_incoming_tx, mut worker_incoming_rx) =
-                mpsc::channel::<(ValidatorId, WorkerMessage)>(1024);
-
-            let worker_network = TcpWorkerNetwork::new(
-                self.validator_id,
-                worker_id,
-                &self.config.peers,
-                worker_incoming_tx,
-            );
-
-            // Start Worker network listener
-            if let Some(listen_addr) = self.config.worker_listens.get(worker_id as usize) {
-                let network_for_listener = Arc::new(worker_network.clone());
-                let listen_addr = *listen_addr;
-                tokio::spawn(async move {
-                    if let Err(e) = network_for_listener.start_listener(listen_addr).await {
-                        error!("Failed to start worker {} listener: {}", worker_id, e);
-                    }
-                });
-
-                // Connect to peers after a brief delay to allow listeners to start
-                let network_for_connect = worker_network.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    network_for_connect.connect_to_all_peers().await;
-                });
-            }
-
-            // Create Worker config and spawn
-            let worker_config = WorkerConfig::new(self.validator_id, worker_id);
-            let mut worker_handle = Worker::spawn(worker_config, Box::new(worker_network));
-
-            // Combined bridge task: handles all communication with Worker
-            // - Primary -> Worker: forward batch requests
-            // - Worker -> Primary: forward batch digests
-            // - Network -> Worker: forward peer messages
-            let token = cancel_token.clone();
-            let primary_worker_sender = primary_handle.worker_sender();
-            tokio::spawn(async move {
-                loop {
-                    tokio::select! {
-                        biased;
-
-                        _ = token.cancelled() => {
-                            debug!("Worker {} bridge shutting down", worker_id);
-                            break;
-                        }
-
-                        // Primary -> Worker: forward batch requests and digests
-                        msg = from_primary_rx.recv() => {
-                            match msg {
-                                Some(m) => {
-                                    if worker_handle.send_from_primary(m).await.is_err() {
-                                        warn!("Worker {} send_from_primary failed", worker_id);
-                                        break;
-                                    }
-                                }
-                                None => {
-                                    debug!("Worker {} primary channel closed", worker_id);
-                                    break;
-                                }
-                            }
-                        }
-
-                        // Worker -> Primary: forward batch availability notifications
-                        msg = worker_handle.recv_from_worker() => {
-                            match msg {
-                                Some(m) => {
-                                    if primary_worker_sender.send(m).await.is_err() {
-                                        warn!("Worker {} send to primary failed", worker_id);
-                                        break;
-                                    }
-                                }
-                                None => {
-                                    debug!("Worker {} receiver closed", worker_id);
-                                    break;
-                                }
-                            }
-                        }
-
-                        // Network -> Worker: forward peer messages (batches, sync requests)
-                        msg = worker_incoming_rx.recv() => {
-                            match msg {
-                                Some((peer, worker_msg)) => {
-                                    if worker_handle.send_from_peer(peer, worker_msg).await.is_err() {
-                                        warn!("Worker {} send_from_peer failed", worker_id);
-                                        break;
-                                    }
-                                }
-                                None => {
-                                    debug!("Worker {} network channel closed", worker_id);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
             });
-
-            info!("Worker {} spawned and wired", worker_id);
         }
 
         let (decided_tx, mut decided_rx) = mpsc::channel::<(ConsensusHeight, Cut)>(100);
@@ -691,7 +772,7 @@ impl Node {
 
         // RPC storage reference - used to update block number when consensus decides
         // Moved outside the `if` block so it can be passed to run_event_loop
-        use cipherbft_rpc::MdbxRpcStorage;
+        use cipherbft_rpc::{MdbxRpcStorage, StubDebugExecutionApi};
         let rpc_storage: Option<Arc<MdbxRpcStorage<InMemoryProvider>>> = if self.config.rpc_enabled
         {
             // Create MDBX database for block/receipt storage
@@ -756,6 +837,13 @@ impl Node {
             None
         };
 
+        // Create debug executor for debug_* RPC methods
+        let rpc_debug_executor: Option<Arc<StubDebugExecutionApi>> = if self.config.rpc_enabled {
+            Some(Arc::new(StubDebugExecutionApi::new()))
+        } else {
+            None
+        };
+
         // Create subscription manager for WebSocket subscriptions (eth_subscribe)
         // This needs to be shared between the RPC server and the event loop
         // so that new blocks can be broadcast to subscribers
@@ -767,7 +855,7 @@ impl Node {
         };
 
         // Start RPC server if enabled
-        if let Some(ref storage) = rpc_storage {
+        if let (Some(ref storage), Some(ref debug_executor)) = (&rpc_storage, &rpc_debug_executor) {
             use cipherbft_rpc::{
                 RpcConfig, RpcServer, StubExecutionApi, StubMempoolApi, StubNetworkApi,
             };
@@ -790,6 +878,7 @@ impl Node {
                 mempool,
                 executor,
                 network,
+                debug_executor.clone(),
                 subscription_manager.clone().unwrap(),
             );
 
@@ -832,21 +921,27 @@ impl Node {
         let result = Self::run_event_loop(
             cancel_token,
             &mut primary_incoming_rx,
-            &mut primary_handle,
+            primary_handle_opt.as_mut(),
             &cut_tx,
             &mut decided_rx,
+            cut_advance_tx,
             execution_bridge,
             rpc_storage,
             subscription_manager,
+            rpc_debug_executor,
         )
         .await;
 
         // Graceful shutdown sequence
         info!("Shutting down node components...");
 
-        // Step 1: Signal Primary to stop (it will stop accepting new batches)
-        info!("Stopping Primary...");
-        primary_handle.shutdown().await;
+        // Step 1: Signal Primary to stop (if DCL is enabled)
+        if let Some(primary_handle) = primary_handle_opt {
+            info!("Stopping Primary...");
+            primary_handle.shutdown().await;
+        } else {
+            info!("DCL disabled, skipping Primary shutdown");
+        }
 
         // Step 2: Wait for supervisor to complete all tracked tasks
         info!("Waiting for supervised tasks to complete...");
@@ -859,71 +954,43 @@ impl Node {
     }
 
     /// Internal event loop that handles messages and can be cancelled.
+    ///
+    /// When `primary_handle` is `Some`, DCL is enabled and we handle Primary events.
+    /// When `primary_handle` is `None`, DCL is disabled and we only handle consensus decisions.
+    ///
+    /// The `cut_advance_tx` channel is used to signal the empty cut sender (when DCL disabled)
+    /// to advance to the next height after consensus decides on a block.
     #[allow(clippy::too_many_arguments)]
     async fn run_event_loop(
         cancel_token: CancellationToken,
         primary_incoming_rx: &mut mpsc::Receiver<(ValidatorId, DclMessage)>,
-        primary_handle: &mut cipherbft_data_chain::primary::PrimaryHandle,
+        mut primary_handle: Option<&mut cipherbft_data_chain::primary::PrimaryHandle>,
         cut_tx: &mpsc::Sender<Cut>,
         decided_rx: &mut mpsc::Receiver<(ConsensusHeight, Cut)>,
+        cut_advance_tx: mpsc::Sender<()>,
         execution_bridge: Option<Arc<ExecutionBridge>>,
         rpc_storage: Option<Arc<cipherbft_rpc::MdbxRpcStorage<InMemoryProvider>>>,
         subscription_manager: Option<Arc<cipherbft_rpc::SubscriptionManager>>,
+        rpc_debug_executor: Option<Arc<cipherbft_rpc::StubDebugExecutionApi>>,
     ) -> Result<()> {
         loop {
             tokio::select! {
                 biased;
 
-                // Check for shutdown signal first (high priority)
+                // Check for shutdown signal first (highest priority)
                 _ = cancel_token.cancelled() => {
                     info!("Received shutdown signal, exiting event loop");
                     return Ok(());
                 }
 
-                // Incoming network messages -> forward to Primary
-                Some((from, msg)) = primary_incoming_rx.recv() => {
-                    debug!("Received message from {:?}: {:?}", from, msg.type_name());
-                    if let Err(e) = primary_handle.send_from_peer(from, msg).await {
-                        warn!("Failed to forward message to Primary: {:?}", e);
-                    }
-                }
-
-                // Primary events
-                Some(event) = primary_handle.recv_event() => {
-                    match event {
-                        PrimaryEvent::CutReady(cut) => {
-                            debug!(
-                                "Cut ready at height {} with {} validators",
-                                cut.height,
-                                cut.validator_count()
-                            );
-                            // Send Cut to Consensus Host for ordering
-                            // Consensus will decide on the cut and send it back via decided_rx
-                            if let Err(e) = cut_tx.send(cut.clone()).await {
-                                warn!("Failed to send Cut to Consensus Host: {}", e);
-                            }
-                        }
-                        PrimaryEvent::CarCreated(car) => {
-                            debug!(
-                                "Car created at position {} with {} batches",
-                                car.position,
-                                car.batch_digests.len()
-                            );
-                        }
-                        PrimaryEvent::AttestationGenerated { car_proposer, .. } => {
-                            debug!("Generated attestation for Car from {:?}", car_proposer);
-                        }
-                        PrimaryEvent::SyncBatches { digests, target } => {
-                            debug!(
-                                "Need to sync {} batches from {:?}",
-                                digests.len(),
-                                target
-                            );
-                        }
-                    }
-                }
-
                 // Consensus Decided events - execute the decided Cut
+                // CRITICAL: This must have HIGH PRIORITY in the biased select!
+                // If Primary events (CutReady, CarCreated, etc.) starve this branch:
+                // 1. Consensus decisions are not processed by the node
+                // 2. notify_decision() is never called
+                // 3. Primary can't form the next cut
+                // 4. wait_for_cut() times out in consensus host
+                // 5. All validators vote NIL → liveness failure
                 Some((height, cut)) = decided_rx.recv() => {
                     debug!(
                         "Consensus decided at height {} with {} cars",
@@ -931,10 +998,93 @@ impl Node {
                         cut.cars.len()
                     );
 
-                    // Notify Primary that consensus has decided on this height
+                    // Notify Primary that consensus has decided on this height (only when DCL enabled)
                     // This allows Primary to advance its state and produce cuts for the next height
-                    if let Err(e) = primary_handle.notify_decision(height.0).await {
-                        warn!("Failed to notify Primary of consensus decision: {:?}", e);
+                    // CRITICAL: We pass the cut so Primary can sync position tracking from decided CARs
+                    if let Some(ref mut handle) = primary_handle {
+                        if let Err(e) = handle.notify_decision(height.0, cut.clone()).await {
+                            warn!("Failed to notify Primary of consensus decision: {:?}", e);
+                        }
+
+                        // CRITICAL FIX: Wait for and drain CutReady events after notify_decision.
+                        //
+                        // notify_decision() is non-blocking - it sends a command to Primary's command channel
+                        // and returns immediately. The Primary task processes this command asynchronously:
+                        // 1. Primary receives ConsensusDecided command
+                        // 2. Primary calls finalize_height() and try_form_cut()
+                        // 3. Primary sends CutReady event to the event channel
+                        //
+                        // We MUST forward this CutReady to consensus BEFORE doing execution work, otherwise:
+                        // 1. Consensus starts the next height and requests a value
+                        // 2. ChannelValueBuilder doesn't have the cut (it's stuck in this channel)
+                        // 3. Consensus times out on Propose step, all validators vote NIL
+                        // 4. System gets stuck in a liveness failure
+                        //
+                        // Solution: Yield to let Primary process the command, then poll for events
+                        // with a short timeout to ensure we catch the CutReady event.
+                        let drain_deadline = tokio::time::Instant::now() + Duration::from_millis(100);
+                        let mut got_cut_ready = false;
+
+                        loop {
+                            // First yield to allow the Primary task to run and process the command
+                            tokio::task::yield_now().await;
+
+                            // Try to receive any pending events
+                            match handle.try_recv_event() {
+                                Ok(event) => {
+                                    match event {
+                                        PrimaryEvent::CutReady(new_cut) => {
+                                            debug!(
+                                                "Cut ready at height {} with {} validators (drained after decision)",
+                                                new_cut.height,
+                                                new_cut.validator_count()
+                                            );
+                                            if let Err(e) = cut_tx.send(new_cut).await {
+                                                warn!("Failed to send Cut to Consensus Host: {}", e);
+                                            }
+                                            got_cut_ready = true;
+                                        }
+                                        PrimaryEvent::CarCreated(car) => {
+                                            debug!(
+                                                "Car created at position {} with {} batches (drained after decision)",
+                                                car.position,
+                                                car.batch_digests.len()
+                                            );
+                                        }
+                                        PrimaryEvent::AttestationGenerated { car_proposer, .. } => {
+                                            debug!("Generated attestation for Car from {:?} (drained after decision)", car_proposer);
+                                        }
+                                        PrimaryEvent::SyncBatches { digests, target } => {
+                                            debug!(
+                                                "Need to sync {} batches from {:?} (drained after decision)",
+                                                digests.len(),
+                                                target
+                                            );
+                                        }
+                                    }
+                                    // Continue draining other events even after getting CutReady
+                                }
+                                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                                    // No events pending - check if we should continue waiting
+                                    if got_cut_ready || tokio::time::Instant::now() >= drain_deadline {
+                                        // Either got the CutReady or timed out, proceed with execution
+                                        break;
+                                    }
+                                    // Keep yielding and polling until we get the CutReady or timeout
+                                }
+                                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                                    warn!("Primary event channel disconnected");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // Also update the debug executor's block number
+                    // This ensures debug trace methods use the correct block context
+                    if let Some(ref debug_executor) = rpc_debug_executor {
+                        debug_executor.set_latest_block(height.0);
+                        debug!("Updated RPC debug executor block number to {}", height.0);
                     }
 
                     // Execute Cut if execution layer is enabled
@@ -998,6 +1148,65 @@ impl Node {
                             debug!("Updated RPC block number to {}", height.0);
                         }
                     }
+
+                    // Signal empty cut sender to advance (when DCL disabled)
+                    // This creates lockstep: cut -> propose -> decide -> next cut
+                    // Using send().await ensures strict synchronization - consensus waits until
+                    // the empty cut sender has processed the previous signal before continuing.
+                    // Note: When DCL is enabled, the receiver is dropped, so this send will fail silently.
+                    let _ = cut_advance_tx.send(()).await;
+                }
+
+                // Incoming network messages -> forward to Primary (only when DCL enabled)
+                Some((from, msg)) = primary_incoming_rx.recv(), if primary_handle.is_some() => {
+                    debug!("Received message from {:?}: {:?}", from, msg.type_name());
+                    if let Some(ref mut handle) = primary_handle {
+                        if let Err(e) = handle.send_from_peer(from, msg).await {
+                            warn!("Failed to forward message to Primary: {:?}", e);
+                        }
+                    }
+                }
+
+                // Primary events (only when DCL enabled)
+                Some(event) = async {
+                    if let Some(ref mut handle) = primary_handle {
+                        handle.recv_event().await
+                    } else {
+                        // When DCL disabled, this branch never yields
+                        std::future::pending::<Option<PrimaryEvent>>().await
+                    }
+                } => {
+                    match event {
+                        PrimaryEvent::CutReady(cut) => {
+                            debug!(
+                                "Cut ready at height {} with {} validators",
+                                cut.height,
+                                cut.validator_count()
+                            );
+                            // Send Cut to Consensus Host for ordering
+                            // Consensus will decide on the cut and send it back via decided_rx
+                            if let Err(e) = cut_tx.send(cut.clone()).await {
+                                warn!("Failed to send Cut to Consensus Host: {}", e);
+                            }
+                        }
+                        PrimaryEvent::CarCreated(car) => {
+                            debug!(
+                                "Car created at position {} with {} batches",
+                                car.position,
+                                car.batch_digests.len()
+                            );
+                        }
+                        PrimaryEvent::AttestationGenerated { car_proposer, .. } => {
+                            debug!("Generated attestation for Car from {:?}", car_proposer);
+                        }
+                        PrimaryEvent::SyncBatches { digests, target } => {
+                            debug!(
+                                "Need to sync {} batches from {:?}",
+                                digests.len(),
+                                target
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -1020,9 +1229,9 @@ impl Node {
             exec.receipts.iter().map(|r| r.transaction_hash.0).collect();
         let transaction_count = transaction_hashes.len() as u32;
 
-        // Create the block with execution results
+        // Create the block with execution results (size will be calculated below)
         // Use the properly computed block_hash and parent_hash from BlockExecutionResult
-        Block {
+        let mut block = Block {
             hash: result.block_hash.0,
             number: block_number,
             parent_hash: result.parent_hash.0,
@@ -1043,7 +1252,12 @@ impl Node {
             transaction_hashes,
             transaction_count,
             total_difficulty: [0u8; 32], // Not used in PoS
-        }
+            size: 0,                     // Placeholder, calculated below
+        };
+
+        // Calculate exact RLP-encoded block header size
+        block.size = block.calculate_size();
+        block
     }
 
     /// Convert an execution TransactionReceipt to a storage Receipt for MDBX persistence.
@@ -1127,7 +1341,8 @@ impl Node {
         hash_input.extend_from_slice(&timestamp.to_be_bytes());
         let genesis_hash: [u8; 32] = keccak256(&hash_input).0;
 
-        Block {
+        // Create genesis block (size will be calculated below)
+        let mut block = Block {
             hash: genesis_hash,
             number: 0,
             parent_hash: [0u8; 32], // Genesis has no parent
@@ -1148,7 +1363,12 @@ impl Node {
             transaction_hashes: Vec::new(),        // No transactions
             transaction_count: 0,
             total_difficulty: [0u8; 32], // Zero in PoS
-        }
+            size: 0,                     // Placeholder, calculated below
+        };
+
+        // Calculate exact RLP-encoded block header size
+        block.size = block.calculate_size();
+        block
     }
 }
 

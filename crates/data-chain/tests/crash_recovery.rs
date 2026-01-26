@@ -23,7 +23,10 @@ fn make_test_car(validator_id: ValidatorId, position: u64) -> Car {
 }
 
 fn make_test_attestation(car: &Car, attester: ValidatorId) -> Attestation {
-    Attestation::from_car(car, attester)
+    let kp = BlsKeyPair::generate(&mut rand::thread_rng());
+    let mut att = Attestation::from_car(car, attester);
+    att.signature = kp.sign_attestation(&att.get_signing_bytes());
+    att
 }
 
 /// Test basic WAL recovery for pipeline state
@@ -175,7 +178,6 @@ async fn test_primary_state_restoration() {
 /// Test timeout preservation and recovery
 #[tokio::test]
 async fn test_timeout_preservation_recovery() {
-    use bitvec::prelude::*;
     use cipherbft_data_chain::AggregatedAttestation;
 
     let our_id = make_validator_id(0);
@@ -183,24 +185,23 @@ async fn test_timeout_preservation_recovery() {
 
     let wal = InMemoryWal::new();
 
-    // Create a dummy aggregate signature for testing
-    let kp = BlsKeyPair::generate(&mut rand::thread_rng());
-    let sig = kp.sign_attestation(b"dummy");
-    let agg_sig = cipherbft_crypto::BlsAggregateSignature::from_signature(&sig);
-
-    // Create preserved attested car
+    // Create preserved attested car with properly signed aggregated attestation
     let car = make_test_car(validator1, 5);
-    let mut bv = bitvec![u8, Lsb0; 0; 4];
-    bv.set(0, true);
-    bv.set(1, true);
 
-    let agg = AggregatedAttestation {
-        car_hash: car.hash(),
-        car_position: car.position,
-        car_proposer: car.proposer,
-        validators: bv,
-        aggregated_signature: agg_sig,
-    };
+    // Create properly signed attestations from two validators (indices 0 and 1)
+    let attestations_with_indices: Vec<(cipherbft_data_chain::Attestation, usize)> = [0, 1]
+        .iter()
+        .map(|&idx| {
+            let kp = BlsKeyPair::generate(&mut rand::thread_rng());
+            let attester_id = make_validator_id(idx as u8);
+            let mut att = cipherbft_data_chain::Attestation::from_car(&car, attester_id);
+            att.signature = kp.sign_attestation(&att.get_signing_bytes());
+            (att, idx)
+        })
+        .collect();
+
+    let agg = AggregatedAttestation::aggregate_with_indices(&attestations_with_indices, 4)
+        .expect("aggregation should succeed");
 
     // Write preserved cars to WAL
     wal.append(WalEntry::PreservedAttestedCars {

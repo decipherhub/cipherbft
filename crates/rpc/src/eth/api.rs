@@ -6,9 +6,11 @@ use alloy_consensus::transaction::SignerRecoverable;
 use alloy_consensus::{Transaction as TxTrait, TxEnvelope};
 use alloy_primitives::{Address, Bytes, B256, U256, U64};
 use alloy_rpc_types_eth::{
-    transaction::AccessListResult, Block, EIP1186AccountProofResponse, FeeHistory, Filter, Log,
-    SyncInfo, SyncStatus as EthSyncStatus, Transaction, TransactionReceipt,
+    transaction::AccessListResult, EIP1186AccountProofResponse, FeeHistory, Filter, Log, SyncInfo,
+    SyncStatus as EthSyncStatus, Transaction, TransactionReceipt,
 };
+
+use crate::types::RpcBlock;
 use jsonrpsee::core::RpcResult as JsonRpcResult;
 use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::ErrorObjectOwned;
@@ -63,20 +65,26 @@ pub trait EthRpc {
     ) -> JsonRpcResult<U64>;
 
     /// Returns information about a block by hash.
+    ///
+    /// Returns `RpcBlock` which serializes numeric fields as hex strings
+    /// per Ethereum JSON-RPC specification.
     #[method(name = "getBlockByHash")]
     async fn get_block_by_hash(
         &self,
         hash: B256,
         full_transactions: bool,
-    ) -> JsonRpcResult<Option<Block>>;
+    ) -> JsonRpcResult<Option<RpcBlock>>;
 
     /// Returns information about a block by number.
+    ///
+    /// Returns `RpcBlock` which serializes numeric fields as hex strings
+    /// per Ethereum JSON-RPC specification.
     #[method(name = "getBlockByNumber")]
     async fn get_block_by_number(
         &self,
         block: String,
         full_transactions: bool,
-    ) -> JsonRpcResult<Option<Block>>;
+    ) -> JsonRpcResult<Option<RpcBlock>>;
 
     /// Returns the information about a transaction by transaction hash.
     #[method(name = "getTransactionByHash")]
@@ -212,7 +220,7 @@ pub trait EthRpc {
         &self,
         block_hash: B256,
         index: U64,
-    ) -> JsonRpcResult<Option<Block>>;
+    ) -> JsonRpcResult<Option<RpcBlock>>;
 
     /// Returns information about an uncle by block number and uncle index.
     ///
@@ -222,7 +230,7 @@ pub trait EthRpc {
         &self,
         block: String,
         index: U64,
-    ) -> JsonRpcResult<Option<Block>>;
+    ) -> JsonRpcResult<Option<RpcBlock>>;
 
     /// Returns the number of uncles in a block from a block matching the given hash.
     ///
@@ -240,9 +248,6 @@ pub trait EthRpc {
     ///
     /// This method is defined in EIP-1186 and is used for light client verification.
     /// Returns proof data for the account at the given address and storage keys.
-    ///
-    /// Note: This method returns an error as CipherBFT does not currently expose
-    /// state trie access for proof generation.
     #[method(name = "getProof")]
     async fn get_proof(
         &self,
@@ -256,9 +261,6 @@ pub trait EthRpc {
     /// This method simulates a transaction and returns the access list that
     /// would be created during execution. The access list contains all addresses
     /// and storage keys that would be accessed.
-    ///
-    /// Note: This method returns an error as CipherBFT does not currently expose
-    /// state access tracking for access list generation.
     #[method(name = "createAccessList")]
     async fn create_access_list(
         &self,
@@ -587,7 +589,7 @@ where
         &self,
         hash: B256,
         full_transactions: bool,
-    ) -> JsonRpcResult<Option<Block>> {
+    ) -> JsonRpcResult<Option<RpcBlock>> {
         trace!(
             "eth_getBlockByHash: hash={}, full_txs={}",
             hash,
@@ -603,7 +605,7 @@ where
         &self,
         block: String,
         full_transactions: bool,
-    ) -> JsonRpcResult<Option<Block>> {
+    ) -> JsonRpcResult<Option<RpcBlock>> {
         trace!(
             "eth_getBlockByNumber: block={}, full_txs={}",
             block,
@@ -767,7 +769,8 @@ where
 
         if let Some(block) = latest_block {
             // For EIP-1559 chains, return base_fee + priority_fee
-            if let Some(base_fee) = block.header.base_fee_per_gas {
+            // RpcBlock has flat structure - fields are top-level
+            if let Some(base_fee) = block.base_fee_per_gas {
                 // Suggest base fee + 1 gwei priority fee
                 let suggested_price = base_fee.saturating_add(DEFAULT_PRIORITY_FEE);
                 debug!(
@@ -871,12 +874,13 @@ where
             match block {
                 Some(block) => {
                     // Get base fee (0 for pre-EIP-1559 blocks)
-                    let base_fee = block.header.base_fee_per_gas.unwrap_or(0) as u128;
+                    // RpcBlock has flat structure - fields are top-level
+                    let base_fee = block.base_fee_per_gas.unwrap_or(0) as u128;
                     base_fee_per_gas.push(base_fee);
 
                     // Calculate gas used ratio
-                    let gas_limit = block.header.gas_limit;
-                    let gas_used = block.header.gas_used;
+                    let gas_limit = block.gas_limit;
+                    let gas_used = block.gas_used;
                     let ratio = if gas_limit > 0 {
                         gas_used as f64 / gas_limit as f64
                     } else {
@@ -1011,21 +1015,15 @@ where
         };
 
         // Get transaction at index
+        // RpcBlock stores transactions as Vec<B256> (hashes only)
         let idx = index.to::<usize>();
-        match &block.transactions {
-            alloy_rpc_types_eth::BlockTransactions::Full(txs) => Ok(txs.get(idx).cloned()),
-            alloy_rpc_types_eth::BlockTransactions::Hashes(hashes) => {
-                // If we only have hashes, try to fetch the transaction by hash
-                if let Some(hash) = hashes.get(idx) {
-                    self.storage
-                        .get_transaction_by_hash(*hash)
-                        .await
-                        .map_err(Self::to_json_rpc_error)
-                } else {
-                    Ok(None)
-                }
-            }
-            alloy_rpc_types_eth::BlockTransactions::Uncle => Ok(None),
+        if let Some(hash) = block.transactions.get(idx) {
+            self.storage
+                .get_transaction_by_hash(*hash)
+                .await
+                .map_err(Self::to_json_rpc_error)
+        } else {
+            Ok(None)
         }
     }
 
@@ -1054,21 +1052,15 @@ where
         };
 
         // Get transaction at index
+        // RpcBlock stores transactions as Vec<B256> (hashes only)
         let idx = index.to::<usize>();
-        match &block.transactions {
-            alloy_rpc_types_eth::BlockTransactions::Full(txs) => Ok(txs.get(idx).cloned()),
-            alloy_rpc_types_eth::BlockTransactions::Hashes(hashes) => {
-                // If we only have hashes, try to fetch the transaction by hash
-                if let Some(hash) = hashes.get(idx) {
-                    self.storage
-                        .get_transaction_by_hash(*hash)
-                        .await
-                        .map_err(Self::to_json_rpc_error)
-                } else {
-                    Ok(None)
-                }
-            }
-            alloy_rpc_types_eth::BlockTransactions::Uncle => Ok(None),
+        if let Some(hash) = block.transactions.get(idx) {
+            self.storage
+                .get_transaction_by_hash(*hash)
+                .await
+                .map_err(Self::to_json_rpc_error)
+        } else {
+            Ok(None)
         }
     }
 
@@ -1088,7 +1080,8 @@ where
 
         if let Some(block) = latest_block {
             // If the block has base fee, we're on EIP-1559
-            if block.header.base_fee_per_gas.is_some() {
+            // RpcBlock has flat structure - fields are top-level
+            if block.base_fee_per_gas.is_some() {
                 // Return a reasonable default priority fee
                 // More sophisticated implementations would look at recent priority fees
                 return Ok(U256::from(DEFAULT_PRIORITY_FEE));
@@ -1129,7 +1122,7 @@ where
         &self,
         block_hash: B256,
         index: U64,
-    ) -> JsonRpcResult<Option<Block>> {
+    ) -> JsonRpcResult<Option<RpcBlock>> {
         trace!(
             "eth_getUncleByBlockHashAndIndex: hash={}, index={}",
             block_hash,
@@ -1143,7 +1136,7 @@ where
         &self,
         block: String,
         index: U64,
-    ) -> JsonRpcResult<Option<Block>> {
+    ) -> JsonRpcResult<Option<RpcBlock>> {
         trace!(
             "eth_getUncleByBlockNumberAndIndex: block={}, index={}",
             block,

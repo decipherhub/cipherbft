@@ -21,6 +21,11 @@ serde = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
 
+# Ethereum types and RLP encoding
+alloy-primitives = { workspace = true }
+alloy-consensus = { workspace = true }
+alloy-rlp = { workspace = true }
+
 # Error handling
 thiserror = { workspace = true }
 

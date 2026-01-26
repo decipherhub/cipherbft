@@ -9,11 +9,12 @@ use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::config::RpcConfig;
+use crate::debug::{DebugApi, DebugRpcServer};
 use crate::error::RpcResult;
 use crate::eth::{EthApi, EthRpcServer};
 use crate::net::{NetApi, NetRpcServer};
 use crate::pubsub::{EthPubSubApi, EthPubSubRpcServer, SubscriptionManager};
-use crate::traits::{ExecutionApi, MempoolApi, NetworkApi, RpcStorage};
+use crate::traits::{DebugExecutionApi, ExecutionApi, MempoolApi, NetworkApi, RpcStorage};
 use crate::txpool::{TxPoolApi, TxPoolRpcServer};
 use crate::web3::{Web3Api, Web3RpcServer};
 
@@ -31,12 +32,13 @@ pub enum ServerState {
 }
 
 /// RPC server managing HTTP and WebSocket endpoints.
-pub struct RpcServer<S, M, E, N>
+pub struct RpcServer<S, M, E, N, D>
 where
     S: RpcStorage + 'static,
     M: MempoolApi + 'static,
     E: ExecutionApi + 'static,
     N: NetworkApi + 'static,
+    D: DebugExecutionApi + 'static,
 {
     /// Server configuration.
     config: Arc<RpcConfig>,
@@ -48,6 +50,8 @@ where
     executor: Arc<E>,
     /// Network interface.
     network: Arc<N>,
+    /// Debug execution interface.
+    debug_executor: Arc<D>,
     /// Subscription manager.
     subscription_manager: Arc<SubscriptionManager>,
     /// Current server state.
@@ -58,12 +62,13 @@ where
     ws_handle: Arc<RwLock<Option<ServerHandle>>>,
 }
 
-impl<S, M, E, N> RpcServer<S, M, E, N>
+impl<S, M, E, N, D> RpcServer<S, M, E, N, D>
 where
     S: RpcStorage + 'static,
     M: MempoolApi + 'static,
     E: ExecutionApi + 'static,
     N: NetworkApi + 'static,
+    D: DebugExecutionApi + 'static,
 {
     /// Create a new RPC server.
     pub fn new(
@@ -72,6 +77,7 @@ where
         mempool: Arc<M>,
         executor: Arc<E>,
         network: Arc<N>,
+        debug_executor: Arc<D>,
     ) -> Self {
         Self::with_subscription_manager(
             config,
@@ -79,6 +85,7 @@ where
             mempool,
             executor,
             network,
+            debug_executor,
             Arc::new(SubscriptionManager::default()),
         )
     }
@@ -94,6 +101,7 @@ where
         mempool: Arc<M>,
         executor: Arc<E>,
         network: Arc<N>,
+        debug_executor: Arc<D>,
         subscription_manager: Arc<SubscriptionManager>,
     ) -> Self {
         Self {
@@ -102,6 +110,7 @@ where
             mempool,
             executor,
             network,
+            debug_executor,
             subscription_manager,
             state: Arc::new(RwLock::new(ServerState::Stopped)),
             http_handle: Arc::new(RwLock::new(None)),
@@ -175,6 +184,17 @@ where
             crate::error::RpcError::Internal(format!("Failed to merge pubsub module: {}", e))
         })?;
         info!("Registered eth pubsub (eth_subscribe, eth_unsubscribe)");
+
+        // Register debug_* namespace
+        let debug_api = DebugApi::new(
+            Arc::clone(&self.storage),
+            Arc::clone(&self.debug_executor),
+            Arc::clone(&self.config),
+        );
+        module.merge(debug_api.into_rpc()).map_err(|e| {
+            crate::error::RpcError::Internal(format!("Failed to merge debug module: {}", e))
+        })?;
+        info!("Registered debug_* namespace");
 
         Ok(module)
     }

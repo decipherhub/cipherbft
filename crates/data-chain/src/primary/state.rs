@@ -3,6 +3,7 @@
 use crate::attestation::{AggregatedAttestation, Attestation};
 use crate::batch::BatchDigest;
 use crate::car::Car;
+use crate::cut::Cut;
 use cipherbft_types::{Hash, ValidatorId};
 use std::collections::HashMap;
 use std::time::Instant;
@@ -215,6 +216,27 @@ impl PrimaryState {
         self.last_seen_car_hashes.insert(validator, car_hash);
     }
 
+    /// Sync position tracking from a decided Cut
+    ///
+    /// When consensus decides on a Cut, all validators must update their position
+    /// tracking to reflect the decided state. This is critical because:
+    /// 1. A validator may not have received all CARs during the collection phase
+    /// 2. Position validation requires sequential positions (no gaps)
+    /// 3. Without syncing, future CARs will be rejected with PositionGap errors
+    ///
+    /// This method updates `last_seen_positions` and `last_seen_car_hashes` for
+    /// each CAR in the decided Cut if the position is higher than what we've seen.
+    pub fn sync_positions_from_cut(&mut self, cut: &Cut) {
+        for (validator, car) in &cut.cars {
+            let current_pos = self.last_seen_positions.get(validator).copied();
+            // Only update if the decided position is higher than our current tracking
+            if current_pos.is_none_or(|p| car.position > p) {
+                self.last_seen_positions.insert(*validator, car.position);
+                self.last_seen_car_hashes.insert(*validator, car.hash());
+            }
+        }
+    }
+
     /// Get last seen Car hash for parent_ref validation
     pub fn last_seen_car_hash(&self, validator: &ValidatorId) -> Option<&Hash> {
         self.last_seen_car_hashes.get(validator)
@@ -420,6 +442,19 @@ impl PrimaryState {
         }
 
         ready
+    }
+
+    /// Get all unique validators that have queued CARs awaiting gap sync.
+    ///
+    /// This is useful when processing consensus decisions to ensure we check
+    /// ALL validators with queued CARs, not just those in the decided cut.
+    pub fn get_validators_with_queued_cars(&self) -> Vec<ValidatorId> {
+        let mut validators: std::collections::HashSet<ValidatorId> =
+            std::collections::HashSet::new();
+        for (validator, _) in self.cars_awaiting_gap_sync.keys() {
+            validators.insert(*validator);
+        }
+        validators.into_iter().collect()
     }
 
     /// Track a pending CarRequest to avoid duplicates
@@ -755,18 +790,35 @@ pub struct PipelineSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cipherbft_crypto::BlsKeyPair;
     use cipherbft_types::VALIDATOR_ID_SIZE;
 
-    /// Create a dummy signature for testing
-    fn dummy_signature() -> cipherbft_crypto::BlsSignature {
-        let kp = cipherbft_crypto::BlsKeyPair::generate(&mut rand::thread_rng());
-        kp.sign_attestation(b"dummy")
+    /// Create a properly signed attestation for testing
+    fn create_signed_attestation(
+        car: &crate::car::Car,
+        attester_index: usize,
+    ) -> crate::attestation::Attestation {
+        let kp = BlsKeyPair::generate(&mut rand::thread_rng());
+        let attester_id = ValidatorId::from_bytes([attester_index as u8; VALIDATOR_ID_SIZE]);
+        let mut att = crate::attestation::Attestation::from_car(car, attester_id);
+        att.signature = kp.sign_attestation(&att.get_signing_bytes());
+        att
     }
 
-    /// Create a dummy aggregate signature for testing
-    fn dummy_aggregate_signature() -> cipherbft_crypto::BlsAggregateSignature {
-        let sig = dummy_signature();
-        cipherbft_crypto::BlsAggregateSignature::from_signature(&sig)
+    /// Create a properly aggregated attestation for testing
+    fn create_aggregated_attestation(
+        car: &crate::car::Car,
+        attester_indices: &[usize],
+        validator_count: usize,
+    ) -> AggregatedAttestation {
+        let attestations_with_indices: Vec<(crate::attestation::Attestation, usize)> =
+            attester_indices
+                .iter()
+                .map(|&idx| (create_signed_attestation(car, idx), idx))
+                .collect();
+
+        AggregatedAttestation::aggregate_with_indices(&attestations_with_indices, validator_count)
+            .expect("aggregation should succeed with valid attestations")
     }
 
     #[test]
@@ -847,7 +899,6 @@ mod tests {
     #[test]
     fn test_preserve_attested_cars_on_timeout() {
         use crate::car::Car;
-        use bitvec::prelude::*;
 
         let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
         let mut state = PrimaryState::new(our_id, 1000);
@@ -859,24 +910,9 @@ mod tests {
         let car1 = Car::new(validator1, 5, vec![], None);
         let car2 = Car::new(validator2, 3, vec![], None);
 
-        let mut bv = bitvec![u8, Lsb0; 0; 4];
-        bv.set(0, true);
-        bv.set(1, true);
-
-        let agg1 = AggregatedAttestation {
-            car_hash: car1.hash(),
-            car_position: car1.position,
-            car_proposer: car1.proposer,
-            validators: bv.clone(),
-            aggregated_signature: dummy_aggregate_signature(),
-        };
-        let agg2 = AggregatedAttestation {
-            car_hash: car2.hash(),
-            car_position: car2.position,
-            car_proposer: car2.proposer,
-            validators: bv,
-            aggregated_signature: dummy_aggregate_signature(),
-        };
+        // Create properly aggregated attestations (validators 0 and 1 attesting)
+        let agg1 = create_aggregated_attestation(&car1, &[0, 1], 4);
+        let agg2 = create_aggregated_attestation(&car2, &[0, 1], 4);
 
         state.mark_attested(car1.clone(), agg1.clone());
         state.mark_attested(car2.clone(), agg2.clone());
@@ -899,21 +935,20 @@ mod tests {
 
     #[test]
     fn test_next_height_attestations() {
+        use crate::car::Car;
+
         let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
         let mut state = PrimaryState::new(our_id, 1000);
         state.current_height = 5;
 
         let attester = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
-        let car_hash = Hash::compute(b"car_for_height_6");
 
-        // Create attestation for future height
-        let attestation = Attestation {
-            car_hash,
-            car_position: 0,
-            car_proposer: attester,
-            attester,
-            signature: dummy_signature(),
-        };
+        // Create a car for the attestation
+        let car = Car::new(attester, 0, vec![], None);
+        let car_hash = car.hash();
+
+        // Create properly signed attestation for future height
+        let attestation = create_signed_attestation(&car, 2);
 
         // Store for height 6 (next height)
         state.store_next_height_attestation(6, attestation.clone());
@@ -932,18 +967,18 @@ mod tests {
 
     #[test]
     fn test_finalize_height() {
+        use crate::car::Car;
+
         let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
         let mut state = PrimaryState::new(our_id, 1000);
         state.current_height = 5;
 
-        // Store some next-height attestations
-        let attestation = Attestation {
-            car_hash: Hash::compute(b"car"),
-            car_position: 0,
-            car_proposer: our_id,
-            attester: our_id,
-            signature: dummy_signature(),
-        };
+        // Create a car for the attestation
+        let car = Car::new(our_id, 0, vec![], None);
+
+        // Create properly signed attestation
+        let attestation = create_signed_attestation(&car, 0);
+
         state.store_next_height_attestation(4, attestation.clone()); // Old - should be cleared
         state.store_next_height_attestation(6, attestation.clone()); // Future - should be kept
 
@@ -962,38 +997,22 @@ mod tests {
     #[test]
     fn test_get_all_attested_cars_merges_preserved() {
         use crate::car::Car;
-        use bitvec::prelude::*;
 
         let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
         let mut state = PrimaryState::new(our_id, 1000);
 
         let validator = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
 
-        // Create preserved car at position 3
+        // Create preserved car at position 3 with proper aggregated attestation
         let car_old = Car::new(validator, 3, vec![], None);
-        let mut bv = bitvec![u8, Lsb0; 0; 4];
-        bv.set(0, true);
-        bv.set(1, true);
-        let agg_old = AggregatedAttestation {
-            car_hash: car_old.hash(),
-            car_position: car_old.position,
-            car_proposer: car_old.proposer,
-            validators: bv.clone(),
-            aggregated_signature: dummy_aggregate_signature(),
-        };
+        let agg_old = create_aggregated_attestation(&car_old, &[0, 1], 4);
         state
             .preserved_attested_cars
             .insert(validator, (car_old.clone(), agg_old));
 
-        // Create current car at position 5 (newer)
+        // Create current car at position 5 (newer) with proper aggregated attestation
         let car_new = Car::new(validator, 5, vec![], None);
-        let agg_new = AggregatedAttestation {
-            car_hash: car_new.hash(),
-            car_position: car_new.position,
-            car_proposer: car_new.proposer,
-            validators: bv,
-            aggregated_signature: dummy_aggregate_signature(),
-        };
+        let agg_new = create_aggregated_attestation(&car_new, &[0, 1], 4);
         state
             .attested_cars
             .insert(validator, (car_new.clone(), agg_new));
@@ -1018,5 +1037,361 @@ mod tests {
         assert_eq!(summary.attested_car_count, 0);
         assert_eq!(summary.preserved_car_count, 0);
         assert_eq!(summary.next_height_attestation_count, 0);
+    }
+
+    // =========================================================
+    // Queued CAR Processing After Consensus Decision Tests
+    // =========================================================
+
+    /// Test that verifies the race condition fix: queued CARs become ready
+    /// after sync_positions_from_cut() updates position tracking.
+    ///
+    /// Scenario:
+    /// 1. Validator A has seen position 4 for validator B
+    /// 2. Consensus decides a cut with validator B at position 6
+    /// 3. Validator A receives validator B's CAR at position 7 (queued due to gap)
+    /// 4. Validator A processes consensus decision, sync_positions_from_cut() sets B's position to 6
+    /// 5. Now the queued CAR at position 7 should be returned by get_cars_ready_after_gap_filled()
+    #[test]
+    fn test_queued_cars_ready_after_consensus_sync() {
+        use crate::car::Car;
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let mut state = PrimaryState::new(our_id, 1000);
+
+        let validator_b = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
+
+        // Step 1: Validator A has seen position 4 for validator B
+        state.update_last_seen(validator_b, 4, Hash::compute(b"car4"));
+        assert_eq!(state.expected_position(&validator_b), 5);
+
+        // Step 2: Validator A receives validator B's CAR at position 7 (out of order)
+        // This gets queued because expected_position is 5, but we received 7
+        let car_at_7 = Car::new(validator_b, 7, vec![], Some(Hash::compute(b"car6")));
+        state.queue_car_awaiting_gap(car_at_7.clone(), 5); // expected was 5 when received
+
+        // Verify the CAR is queued
+        assert!(state.is_awaiting_gap_sync(&validator_b, 7));
+
+        // Step 3: Check that get_cars_ready_after_gap_filled returns nothing
+        // because expected_position (5) != queued car position (7)
+        let ready_before = state.get_cars_ready_after_gap_filled(&validator_b);
+        assert!(
+            ready_before.is_empty(),
+            "No CARs should be ready before sync"
+        );
+
+        // Re-queue the CAR since get_cars_ready_after_gap_filled clears checked positions
+        state.queue_car_awaiting_gap(car_at_7.clone(), 5);
+
+        // Step 4: Consensus decides a cut with validator B at position 6
+        let mut decided_cut = Cut::new(2);
+        let car_at_6 = Car::new(validator_b, 6, vec![], Some(Hash::compute(b"car5")));
+        decided_cut.cars.insert(validator_b, car_at_6);
+
+        // Sync positions from the decided cut
+        state.sync_positions_from_cut(&decided_cut);
+
+        // Expected position should now be 7 (6 + 1)
+        assert_eq!(state.expected_position(&validator_b), 7);
+
+        // Step 5: Now the queued CAR at position 7 should be ready
+        let ready_after = state.get_cars_ready_after_gap_filled(&validator_b);
+        assert_eq!(ready_after.len(), 1, "CAR at position 7 should be ready");
+        assert_eq!(ready_after[0].position, 7);
+        assert_eq!(ready_after[0].proposer, validator_b);
+
+        // Verify the CAR is no longer queued
+        assert!(!state.is_awaiting_gap_sync(&validator_b, 7));
+    }
+
+    /// Test that queued CARs for multiple validators are handled correctly
+    /// after sync_positions_from_cut().
+    #[test]
+    fn test_queued_cars_multiple_validators_after_sync() {
+        use crate::car::Car;
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let mut state = PrimaryState::new(our_id, 1000);
+
+        let validator_b = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
+        let validator_c = ValidatorId::from_bytes([3u8; VALIDATOR_ID_SIZE]);
+
+        // Set up initial positions
+        state.update_last_seen(validator_b, 2, Hash::compute(b"b_car2"));
+        state.update_last_seen(validator_c, 3, Hash::compute(b"c_car3"));
+
+        // Queue CARs that arrived out of order
+        let car_b_at_5 = Car::new(validator_b, 5, vec![], Some(Hash::compute(b"b_car4")));
+        let car_c_at_6 = Car::new(validator_c, 6, vec![], Some(Hash::compute(b"c_car5")));
+
+        state.queue_car_awaiting_gap(car_b_at_5.clone(), 3); // expected was 3
+        state.queue_car_awaiting_gap(car_c_at_6.clone(), 4); // expected was 4
+
+        // Create a decided cut that advances both validators
+        let mut decided_cut = Cut::new(2);
+        let car_b_at_4 = Car::new(validator_b, 4, vec![], Some(Hash::compute(b"b_car3")));
+        let car_c_at_5 = Car::new(validator_c, 5, vec![], Some(Hash::compute(b"c_car4")));
+        decided_cut.cars.insert(validator_b, car_b_at_4);
+        decided_cut.cars.insert(validator_c, car_c_at_5);
+
+        // Sync positions
+        state.sync_positions_from_cut(&decided_cut);
+
+        // Check validator B: expected is now 5, queued CAR is at 5 -> should be ready
+        assert_eq!(state.expected_position(&validator_b), 5);
+        let ready_b = state.get_cars_ready_after_gap_filled(&validator_b);
+        assert_eq!(ready_b.len(), 1);
+        assert_eq!(ready_b[0].position, 5);
+
+        // Check validator C: expected is now 6, queued CAR is at 6 -> should be ready
+        assert_eq!(state.expected_position(&validator_c), 6);
+        let ready_c = state.get_cars_ready_after_gap_filled(&validator_c);
+        assert_eq!(ready_c.len(), 1);
+        assert_eq!(ready_c[0].position, 6);
+    }
+
+    /// Test that sync_positions_from_cut only updates if position is higher
+    #[test]
+    fn test_sync_positions_only_advances() {
+        use crate::car::Car;
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let mut state = PrimaryState::new(our_id, 1000);
+
+        let validator = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
+
+        // Set initial position to 5
+        state.update_last_seen(validator, 5, Hash::compute(b"car5"));
+        assert_eq!(state.expected_position(&validator), 6);
+
+        // Try to sync with a cut that has a lower position (3)
+        let mut old_cut = Cut::new(1);
+        let car_at_3 = Car::new(validator, 3, vec![], None);
+        old_cut.cars.insert(validator, car_at_3);
+
+        state.sync_positions_from_cut(&old_cut);
+
+        // Position should NOT have changed (5 > 3)
+        assert_eq!(
+            state.expected_position(&validator),
+            6,
+            "Position should not go backwards"
+        );
+
+        // Now sync with a higher position (7)
+        let mut new_cut = Cut::new(2);
+        let car_at_7 = Car::new(validator, 7, vec![], Some(Hash::compute(b"car6")));
+        new_cut.cars.insert(validator, car_at_7);
+
+        state.sync_positions_from_cut(&new_cut);
+
+        // Position should now be 7, so expected is 8
+        assert_eq!(
+            state.expected_position(&validator),
+            8,
+            "Position should advance to 8"
+        );
+    }
+
+    /// Test get_validators_with_queued_cars returns all unique validators with queued CARs.
+    ///
+    /// This is critical for the consensus decision handling: we need to check ALL
+    /// validators with queued CARs, not just those in the decided cut.
+    #[test]
+    fn test_get_validators_with_queued_cars() {
+        use crate::car::Car;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let mut state = PrimaryState::new(our_id, 1000);
+
+        // Initially no validators with queued CARs
+        assert!(
+            state.get_validators_with_queued_cars().is_empty(),
+            "Should have no validators with queued CARs initially"
+        );
+
+        let validator_a = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
+        let validator_b = ValidatorId::from_bytes([3u8; VALIDATOR_ID_SIZE]);
+        let validator_c = ValidatorId::from_bytes([4u8; VALIDATOR_ID_SIZE]);
+
+        // Queue CARs from different validators at different positions
+        let car_a_pos5 = Car::new(validator_a, 5, vec![], None);
+        let car_a_pos6 = Car::new(validator_a, 6, vec![], Some(Hash::compute(b"a_car5")));
+        let car_b_pos3 = Car::new(validator_b, 3, vec![], None);
+        let car_c_pos10 = Car::new(validator_c, 10, vec![], None);
+
+        state.queue_car_awaiting_gap(car_a_pos5, 3); // validator_a at position 5
+        state.queue_car_awaiting_gap(car_a_pos6, 3); // validator_a at position 6
+        state.queue_car_awaiting_gap(car_b_pos3, 1); // validator_b at position 3
+        state.queue_car_awaiting_gap(car_c_pos10, 5); // validator_c at position 10
+
+        // Should return exactly 3 unique validators
+        let validators = state.get_validators_with_queued_cars();
+        assert_eq!(
+            validators.len(),
+            3,
+            "Should have 3 validators with queued CARs"
+        );
+
+        // All validators should be present
+        assert!(
+            validators.contains(&validator_a),
+            "Should contain validator_a"
+        );
+        assert!(
+            validators.contains(&validator_b),
+            "Should contain validator_b"
+        );
+        assert!(
+            validators.contains(&validator_c),
+            "Should contain validator_c"
+        );
+    }
+
+    /// Test that processing queued CARs works for validators NOT in the decided cut.
+    ///
+    /// This simulates the scenario where:
+    /// 1. A cut is decided with validators A and B
+    /// 2. Validator C has queued CARs
+    /// 3. We should still check validator C (even though their position won't advance)
+    #[test]
+    fn test_queued_cars_from_validators_not_in_cut() {
+        use crate::car::Car;
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let mut state = PrimaryState::new(our_id, 1000);
+
+        let validator_a = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
+        let validator_b = ValidatorId::from_bytes([3u8; VALIDATOR_ID_SIZE]);
+        let validator_c = ValidatorId::from_bytes([4u8; VALIDATOR_ID_SIZE]); // NOT in cut
+
+        // Set initial positions
+        state.update_last_seen(validator_a, 4, Hash::compute(b"a_car4"));
+        state.update_last_seen(validator_b, 4, Hash::compute(b"b_car4"));
+        state.update_last_seen(validator_c, 4, Hash::compute(b"c_car4"));
+
+        // Queue a CAR from validator_c at position 5 (expected position)
+        let car_c_at_5 = Car::new(validator_c, 5, vec![], Some(Hash::compute(b"c_car4")));
+        state.queue_car_awaiting_gap(car_c_at_5.clone(), 5);
+
+        // Create a decided cut with only validators A and B (NOT C)
+        let mut decided_cut = Cut::new(2);
+        let car_a_at_6 = Car::new(validator_a, 6, vec![], Some(Hash::compute(b"a_car5")));
+        let car_b_at_5 = Car::new(validator_b, 5, vec![], Some(Hash::compute(b"b_car4")));
+        decided_cut.cars.insert(validator_a, car_a_at_6);
+        decided_cut.cars.insert(validator_b, car_b_at_5);
+
+        // Sync positions (only affects validators A and B)
+        state.sync_positions_from_cut(&decided_cut);
+
+        // Verify positions updated for A and B
+        assert_eq!(state.expected_position(&validator_a), 7);
+        assert_eq!(state.expected_position(&validator_b), 6);
+        // Validator C's position unchanged
+        assert_eq!(state.expected_position(&validator_c), 5);
+
+        // get_validators_with_queued_cars should include validator_c
+        let validators_with_queued = state.get_validators_with_queued_cars();
+        assert!(
+            validators_with_queued.contains(&validator_c),
+            "Validator C should be in the list of validators with queued CARs"
+        );
+
+        // The queued CAR for validator_c at position 5 should now be ready
+        // (because expected_position is 5)
+        let ready_c = state.get_cars_ready_after_gap_filled(&validator_c);
+        assert_eq!(
+            ready_c.len(),
+            1,
+            "Validator C's CAR at position 5 should be ready"
+        );
+        assert_eq!(ready_c[0].position, 5);
+    }
+
+    /// Test that a chain of queued CARs can be processed iteratively.
+    ///
+    /// This simulates the scenario where:
+    /// 1. Multiple CARs are queued at consecutive positions (10, 11, 12)
+    /// 2. After sync, position 10 becomes expected
+    /// 3. Processing CAR at 10 should make 11 expected, then 12, etc.
+    ///
+    /// The runner.rs loop should handle this by repeatedly calling
+    /// get_cars_ready_after_gap_filled until no more CARs are ready.
+    #[test]
+    fn test_queued_car_chain_processing() {
+        use crate::car::Car;
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let mut state = PrimaryState::new(our_id, 1000);
+
+        let validator = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
+
+        // Set initial position to 8
+        state.update_last_seen(validator, 8, Hash::compute(b"car8"));
+
+        // Queue CARs at positions 10, 11, 12 (chain with gap)
+        let car_at_10 = Car::new(validator, 10, vec![], Some(Hash::compute(b"car9")));
+        let car_at_11 = Car::new(validator, 11, vec![], Some(Hash::compute(b"car10")));
+        let car_at_12 = Car::new(validator, 12, vec![], Some(Hash::compute(b"car11")));
+
+        state.queue_car_awaiting_gap(car_at_10.clone(), 9);
+        state.queue_car_awaiting_gap(car_at_11.clone(), 9);
+        state.queue_car_awaiting_gap(car_at_12.clone(), 9);
+
+        // Verify all 3 CARs are queued
+        assert!(state.is_awaiting_gap_sync(&validator, 10));
+        assert!(state.is_awaiting_gap_sync(&validator, 11));
+        assert!(state.is_awaiting_gap_sync(&validator, 12));
+
+        // Sync with a cut that has position 9 (filling the immediate gap)
+        let mut decided_cut = Cut::new(2);
+        let car_at_9 = Car::new(validator, 9, vec![], Some(Hash::compute(b"car8")));
+        decided_cut.cars.insert(validator, car_at_9);
+        state.sync_positions_from_cut(&decided_cut);
+
+        // Expected position should now be 10
+        assert_eq!(state.expected_position(&validator), 10);
+
+        // First iteration: CAR at 10 should be ready
+        let ready_1 = state.get_cars_ready_after_gap_filled(&validator);
+        assert_eq!(ready_1.len(), 1);
+        assert_eq!(ready_1[0].position, 10);
+
+        // Simulate processing: update last_seen to 10
+        state.update_last_seen(validator, 10, car_at_10.hash());
+        assert_eq!(state.expected_position(&validator), 11);
+
+        // Second iteration: CAR at 11 should now be ready
+        let ready_2 = state.get_cars_ready_after_gap_filled(&validator);
+        assert_eq!(ready_2.len(), 1);
+        assert_eq!(ready_2[0].position, 11);
+
+        // Simulate processing: update last_seen to 11
+        state.update_last_seen(validator, 11, car_at_11.hash());
+        assert_eq!(state.expected_position(&validator), 12);
+
+        // Third iteration: CAR at 12 should now be ready
+        let ready_3 = state.get_cars_ready_after_gap_filled(&validator);
+        assert_eq!(ready_3.len(), 1);
+        assert_eq!(ready_3[0].position, 12);
+
+        // Simulate processing: update last_seen to 12
+        state.update_last_seen(validator, 12, car_at_12.hash());
+        assert_eq!(state.expected_position(&validator), 13);
+
+        // Fourth iteration: no more CARs should be ready
+        let ready_4 = state.get_cars_ready_after_gap_filled(&validator);
+        assert!(ready_4.is_empty(), "No more CARs should be ready");
+
+        // All queued CARs should have been removed
+        assert!(!state.is_awaiting_gap_sync(&validator, 10));
+        assert!(!state.is_awaiting_gap_sync(&validator, 11));
+        assert!(!state.is_awaiting_gap_sync(&validator, 12));
     }
 }
