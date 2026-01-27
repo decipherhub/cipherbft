@@ -157,7 +157,11 @@ pub enum StateChange {
     },
 
     /// Collection item added
-    CollectionInsert { collection: String, key: Vec<u8>, value: Vec<u8> },
+    CollectionInsert {
+        collection: String,
+        key: Vec<u8>,
+        value: Vec<u8>,
+    },
 
     /// Collection item removed
     CollectionRemove { collection: String, key: Vec<u8> },
@@ -357,7 +361,8 @@ impl DeltaLog {
             result = StateDelta::merge(&result, &next)?;
         }
 
-        self.pending_bytes.store(result.size_bytes as u64, Ordering::SeqCst);
+        self.pending_bytes
+            .store(result.size_bytes as u64, Ordering::SeqCst);
         debug!(
             from = result.from_version,
             to = result.to_version,
@@ -391,7 +396,8 @@ impl DeltaLog {
             }
         }
 
-        self.pending_bytes.fetch_sub(cleared_bytes, Ordering::SeqCst);
+        self.pending_bytes
+            .fetch_sub(cleared_bytes, Ordering::SeqCst);
         trace!(version, cleared_bytes, "Cleared deltas before version");
     }
 }
@@ -845,14 +851,13 @@ impl<S: VersionedState + Default> StateRecovery<S> {
         self.store.version.store(final_version, Ordering::SeqCst);
 
         // Create initial snapshot
-        self.store.snapshots.add_snapshot(StateSnapshot::new(state))?;
+        self.store
+            .snapshots
+            .add_snapshot(StateSnapshot::new(state))?;
 
         debug!(
             initial_version,
-            final_version,
-            applied,
-            stale_skipped,
-            "State recovery completed"
+            final_version, applied, stale_skipped, "State recovery completed"
         );
 
         Ok(final_version)

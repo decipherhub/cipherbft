@@ -481,10 +481,7 @@ mod tests {
         }
 
         // Load all deltas since version 1
-        let deltas = persistence
-            .load_deltas_since(1)
-            .await
-            .expect("load failed");
+        let deltas = persistence.load_deltas_since(1).await.expect("load failed");
         assert_eq!(deltas.len(), 3);
         assert_eq!(deltas[0].from_version, 1);
         assert_eq!(deltas[0].to_version, 2);
@@ -492,10 +489,7 @@ mod tests {
         assert_eq!(deltas[2].to_version, 4);
 
         // Load deltas since version 2 (should get 2)
-        let deltas = persistence
-            .load_deltas_since(2)
-            .await
-            .expect("load failed");
+        let deltas = persistence.load_deltas_since(2).await.expect("load failed");
         assert_eq!(deltas.len(), 2);
     }
 
@@ -523,10 +517,7 @@ mod tests {
         assert_eq!(cleared, 2); // Deltas 1 and 2 should be cleared
 
         // Verify remaining deltas
-        let remaining = persistence
-            .load_deltas_since(1)
-            .await
-            .expect("load failed");
+        let remaining = persistence.load_deltas_since(1).await.expect("load failed");
         assert_eq!(remaining.len(), 3); // 3, 4, 5
         assert_eq!(remaining[0].from_version, 3);
     }
@@ -563,10 +554,7 @@ mod tests {
             .expect("load failed");
         assert!(snapshot.is_none());
 
-        let deltas = persistence
-            .load_deltas_since(0)
-            .await
-            .expect("load failed");
+        let deltas = persistence.load_deltas_since(0).await.expect("load failed");
         assert!(deltas.is_empty());
     }
 }

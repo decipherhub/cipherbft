@@ -77,13 +77,13 @@ pub use error::StorageError;
 pub use evm::{EvmAccount, EvmBytecode, EvmStore, EvmStoreResult};
 pub use logs::{LogFilter, LogStore, LogStoreResult, StoredLog};
 pub use memory::InMemoryStore;
-pub use pruning::{PruningConfig, PruningHandle, PruningTask};
-pub use receipts::{Log, Receipt, ReceiptStore, ReceiptStoreResult};
-pub use staking::{StakingStore, StakingStoreResult, StoredValidator};
 pub use persistent_state::{
     DeltaLog, PersistentStateStore, SnapshotManager, StateChange, StateConfig, StateDelta,
     StatePersistence, StateRecovery, StateSnapshot, StateTimeline, StoreStats, VersionedState,
 };
+pub use pruning::{PruningConfig, PruningHandle, PruningTask};
+pub use receipts::{Log, Receipt, ReceiptStore, ReceiptStoreResult};
+pub use staking::{StakingStore, StakingStoreResult, StoredValidator};
 pub use wal::{Wal, WalEntry};
 
 // Re-export MDBX types when feature is enabled

@@ -37,6 +37,7 @@ pub use blocks::MdbxBlockStore;
 pub use database::{Database, DatabaseConfig, DatabaseEnv};
 pub use evm::MdbxEvmStore;
 pub use logs::MdbxLogStore;
+pub use persistent_state::{MdbxPersistentStateBuilder, MdbxStatePersistence};
 pub use provider::{MdbxDclStore, MdbxDclStoreTx};
 pub use receipts::MdbxReceiptStore;
 pub use staking::MdbxStakingStore;
@@ -110,5 +111,4 @@ pub use tables::{
     ValidatorSets,
     Votes,
 };
-pub use persistent_state::{MdbxPersistentStateBuilder, MdbxStatePersistence};
 pub use wal::MdbxWal;
