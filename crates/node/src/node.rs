@@ -895,17 +895,27 @@ impl Node {
             (&rpc_storage, &rpc_debug_executor, &subscription_manager)
         {
             use cipherbft_rpc::{
-                RpcConfig, RpcServer, StubExecutionApi, StubMempoolApi, StubNetworkApi,
+                EvmExecutionApi, RpcConfig, RpcServer, StubMempoolApi, StubNetworkApi,
             };
 
-            let mut rpc_config = RpcConfig::with_chain_id(85300); // CipherBFT testnet chain ID
+            let chain_id = 85300u64; // CipherBFT testnet chain ID
+            let mut rpc_config = RpcConfig::with_chain_id(chain_id);
             rpc_config.http_port = self.config.rpc_http_port;
             rpc_config.ws_port = self.config.rpc_ws_port;
 
-            // For now, use stub implementations for mempool, execution, and network
-            // Block storage is now backed by MDBX
+            // Get provider from ExecutionBridge for eth_call/eth_estimateGas
+            // This shares the same genesis-initialized state as MdbxRpcStorage
+            let exec_provider = if let Some(ref bridge) = self.execution_bridge {
+                bridge.provider().await
+            } else {
+                warn!("RPC execution using empty provider - eth_call may not work correctly");
+                Arc::new(InMemoryProvider::new())
+            };
+
+            // Use stub implementations for mempool and network
+            // Use real EVM execution with shared provider for eth_call/eth_estimateGas
             let mempool = Arc::new(StubMempoolApi::new());
-            let executor = Arc::new(StubExecutionApi::new());
+            let executor = Arc::new(EvmExecutionApi::new(exec_provider, chain_id));
             let network = Arc::new(StubNetworkApi::new());
 
             // Use with_subscription_manager to share the subscription manager
