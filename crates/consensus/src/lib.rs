@@ -27,6 +27,8 @@ pub mod signing;
 #[cfg(feature = "malachite")]
 pub mod staking_bridge;
 #[cfg(feature = "malachite")]
+pub mod sync;
+#[cfg(feature = "malachite")]
 pub mod validator_set;
 #[cfg(feature = "malachite")]
 pub mod validator_set_manager;
@@ -65,6 +67,8 @@ pub use signing::{ConsensusSigner, ConsensusSigningProvider};
 pub use staking_bridge::{
     ConsensusValidatorProvider, EpochTransitionTrigger, ValidatorSetEvent, ValidatorSetObserver,
 };
+#[cfg(feature = "malachite")]
+pub use sync::spawn_sync;
 #[cfg(feature = "malachite")]
 pub use validator_set::{ConsensusAddress, ConsensusValidator, ConsensusValidatorSet};
 #[cfg(feature = "malachite")]
