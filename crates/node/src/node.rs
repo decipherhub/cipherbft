@@ -22,8 +22,8 @@ use crate::supervisor::NodeSupervisor;
 use anyhow::{Context, Result};
 use cipherbft_consensus::{
     create_context, default_consensus_params, default_engine_config_single_part, spawn_host,
-    spawn_network, spawn_wal, ConsensusHeight, ConsensusSigner, ConsensusSigningProvider,
-    ConsensusValidator, EpochConfig, MalachiteEngineBuilder,
+    spawn_network, spawn_sync, spawn_wal, ConsensusHeight, ConsensusSigner,
+    ConsensusSigningProvider, ConsensusValidator, EpochConfig, MalachiteEngineBuilder, SyncConfig,
 };
 use cipherbft_crypto::{BlsKeyPair, BlsPublicKey, Ed25519KeyPair, Ed25519PublicKey};
 use cipherbft_data_chain::{
@@ -777,7 +777,11 @@ impl Node {
         )
         .await?;
 
-        // Build and spawn Consensus engine
+        // Spawn Sync actor for state synchronization
+        let sync_config = SyncConfig::new(true); // enabled by default
+        let sync = spawn_sync(ctx.clone(), network.clone(), host.clone(), sync_config).await?;
+
+        // Build and spawn Consensus engine with sync support
         let _engine_handles = MalachiteEngineBuilder::new(
             ctx.clone(),
             params,
@@ -787,6 +791,7 @@ impl Node {
             host,
             wal,
         )
+        .with_sync(sync)
         .spawn()
         .await?;
 

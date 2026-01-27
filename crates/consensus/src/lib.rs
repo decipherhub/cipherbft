@@ -58,6 +58,8 @@ pub use host::{
     HostConfig, ValueBuilder,
 };
 #[cfg(feature = "malachite")]
+pub use informalsystems_malachitebft_sync::Config as SyncConfig;
+#[cfg(feature = "malachite")]
 pub use network::spawn_network;
 #[cfg(feature = "malachite")]
 pub use proposal::{CutProposal, CutProposalPart};
