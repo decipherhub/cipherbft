@@ -1,6 +1,11 @@
 # Build stage
 FROM rust:1.88-bookworm AS builder
 
+# Install build dependencies for reth-mdbx-sys (bindgen needs libclang)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends clang libclang-dev && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Copy manifests first for better layer caching
