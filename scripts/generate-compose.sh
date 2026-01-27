@@ -139,7 +139,7 @@ for NODE_DIR in $NODES; do
     # Calculate port offsets (base ports: 8545, 8546, 9100)
     RPC_HTTP_PORT=$((8545 + NODE_INDEX * 10))
     RPC_WS_PORT=$((8546 + NODE_INDEX * 10))
-    METRICS_PORT=$((9100 + NODE_INDEX))
+    METRICS_PORT=$((19100 + NODE_INDEX))
 
     # Build prometheus targets list
     if [ -n "$PROMETHEUS_TARGETS" ]; then
@@ -194,7 +194,7 @@ cat >> "$COMPOSE_FILE" << 'EOF'
       - '--storage.tsdb.path=/prometheus'
       - '--storage.tsdb.retention.time=7d'
     ports:
-      - "9090:9090"
+      - "19090:9090"
     networks:
       - cipherbft
     restart: unless-stopped
@@ -203,7 +203,7 @@ cat >> "$COMPOSE_FILE" << 'EOF'
     image: grafana/grafana:10.3.0
     container_name: cipherbft-grafana
     ports:
-      - "3000:3000"
+      - "13000:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_AUTH_ANONYMOUS_ENABLED=true
