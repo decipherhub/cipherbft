@@ -22,10 +22,10 @@ DEVNET_DIR="${1:-$PROJECT_ROOT/devnet}"
 OUTPUT_DIR="${2:-$PROJECT_ROOT/docker}"
 
 # Docker network configuration - static IPs for validators
-# Subnet: 172.28.0.0/16, validators start at 172.28.0.10
-DOCKER_SUBNET="172.28.0.0/16"
-DOCKER_GATEWAY="172.28.0.1"
-VALIDATOR_IP_BASE="172.28.0"
+# Subnet: 10.200.0.0/24, validators start at 10.200.0.10
+DOCKER_SUBNET="10.200.0.0/24"
+DOCKER_GATEWAY="10.200.0.1"
+VALIDATOR_IP_BASE="10.200.0"
 VALIDATOR_IP_START=10
 
 # Ensure the devnet directory exists
@@ -92,7 +92,7 @@ config["data_dir"] = "/app/data"
 config["genesis_path"] = "/app/genesis.json"
 
 # Update peer addresses to use static Docker IPs
-# Map 127.0.0.1:90X0 -> 172.28.0.(10+X):90X0
+# Map 127.0.0.1:90X0 -> 10.200.0.(10+X):90X0
 IP_BASE = "$VALIDATOR_IP_BASE"
 IP_START = $VALIDATOR_IP_START
 
@@ -186,12 +186,12 @@ for NODE_DIR in $NODES; do
     environment:
       - RUST_LOG=info
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8545"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
+    #healthcheck:
+    #  test: ["CMD", "curl", "-f", "http://localhost:8545"]
+    #  interval: 10s
+    #  timeout: 5s
+    #  retries: 3
+    #  start_period: 30s
 
 EOF
 
@@ -241,7 +241,7 @@ networks:
     ipam:
       config:
         - subnet: ${DOCKER_SUBNET}
-          gateway: ${DOCKER_GATEWAY}
+          #gateway: ${DOCKER_GATEWAY}
 EOF
 
 echo "Generated: $COMPOSE_FILE"
