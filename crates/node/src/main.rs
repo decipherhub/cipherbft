@@ -316,6 +316,10 @@ enum TestnetCommands {
         #[arg(long, default_value = "32")]
         initial_stake_eth: u64,
 
+        /// Initial balance per validator in ETH (for gas fees and transactions)
+        #[arg(long, default_value = "100")]
+        initial_balance_eth: u64,
+
         /// Starting P2P port (increments by 10 for each validator)
         #[arg(long, default_value = "9000")]
         starting_port: u16,
@@ -794,6 +798,7 @@ async fn cmd_testnet(command: TestnetCommands) -> Result<()> {
             chain_id,
             network_id,
             initial_stake_eth,
+            initial_balance_eth,
             starting_port,
             extra_alloc,
         } => cmd_testnet_init_files(
@@ -802,6 +807,7 @@ async fn cmd_testnet(command: TestnetCommands) -> Result<()> {
             chain_id,
             &network_id,
             initial_stake_eth,
+            initial_balance_eth,
             starting_port,
             extra_alloc,
         ),
@@ -812,12 +818,14 @@ async fn cmd_testnet(command: TestnetCommands) -> Result<()> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_testnet_init_files(
     num_validators: usize,
     output: &std::path::Path,
     chain_id: u64,
     network_id: &str,
     initial_stake_eth: u64,
+    initial_balance_eth: u64,
     starting_port: u16,
     extra_alloc: Vec<String>,
 ) -> Result<()> {
@@ -856,12 +864,15 @@ fn cmd_testnet_init_files(
     }
 
     // Generate genesis with validators - this is our single source of truth for keys
-    let initial_stake = U256::from(initial_stake_eth) * U256::from(1_000_000_000_000_000_000u128);
+    let eth_to_wei = U256::from(1_000_000_000_000_000_000u128);
+    let initial_stake = U256::from(initial_stake_eth) * eth_to_wei;
+    let initial_balance = U256::from(initial_balance_eth) * eth_to_wei;
     let genesis_config = GenesisGeneratorConfig {
         num_validators,
         chain_id,
         network_id: network_id.to_string(),
         initial_stake,
+        initial_balance,
         extra_alloc: extra_alloc_parsed,
         ..Default::default()
     };
