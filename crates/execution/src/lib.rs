@@ -617,7 +617,7 @@ mod tests {
         let validator = GenesisValidatorData {
             address: Address::repeat_byte(0x01),
             bls_pubkey: [0u8; 48],
-            stake: U256::from(32_000_000_000_000_000_000u128), // 32 ETH
+            stake: U256::from(32_000_000_000_000_000_000u128), // 32 CPH
         };
 
         let execution_layer =
@@ -636,17 +636,17 @@ mod tests {
             GenesisValidatorData {
                 address: Address::repeat_byte(0x01),
                 bls_pubkey: [0u8; 48],
-                stake: U256::from(32_000_000_000_000_000_000u128), // 32 ETH
+                stake: U256::from(32_000_000_000_000_000_000u128), // 32 CPH
             },
             GenesisValidatorData {
                 address: Address::repeat_byte(0x02),
                 bls_pubkey: [1u8; 48],
-                stake: U256::from(64_000_000_000_000_000_000u128), // 64 ETH
+                stake: U256::from(64_000_000_000_000_000_000u128), // 64 CPH
             },
             GenesisValidatorData {
                 address: Address::repeat_byte(0x03),
                 bls_pubkey: [2u8; 48],
-                stake: U256::from(100_000_000_000_000_000_000u128), // 100 ETH
+                stake: U256::from(100_000_000_000_000_000_000u128), // 100 CPH
             },
         ];
 

@@ -20,10 +20,13 @@
 //! ```
 
 use alloy_primitives::{Address, U256};
-use cipherbft_crypto::{ValidatorKeys, mnemonic::{Mnemonic, derive_validator_keys}};
+use cipherbft_crypto::{
+    mnemonic::{derive_validator_keys, Mnemonic},
+    ValidatorKeys,
+};
 use cipherbft_types::genesis::{
     CipherBftConfig, ConsensusParams, DclParams, Genesis, GenesisError, GenesisValidator,
-    StakingParams,
+    NativeTokenConfig, StakingParams,
 };
 use cipherbft_types::geth::{AllocEntry, GethConfig};
 use cipherbft_types::ValidatorId;
@@ -40,8 +43,7 @@ use tracing::{debug, info};
 ///
 /// The same mnemonic derives different keys for each validator using
 /// different account indices (0, 1, 2, 3...).
-const DEVNET_TEST_MNEMONIC: &str =
-    "test test test test test test test test test test test junk";
+const DEVNET_TEST_MNEMONIC: &str = "test test test test test test test test test test test junk";
 
 /// Genesis loader for CipherBFT node.
 ///
@@ -207,9 +209,9 @@ pub struct GenesisGeneratorConfig {
     pub chain_id: u64,
     /// Network identifier (e.g., "cipherbft-testnet-1").
     pub network_id: String,
-    /// Initial stake per validator in wei (default: 32 ETH).
+    /// Initial stake per validator in wei (default: 32 CPH).
     pub initial_stake: U256,
-    /// Initial balance for validator accounts in wei (default: 100 ETH).
+    /// Initial balance for validator accounts in wei (default: 100 CPH).
     pub initial_balance: U256,
     /// Gas limit for genesis block (default: 30M).
     pub gas_limit: U256,
@@ -221,9 +223,9 @@ impl Default for GenesisGeneratorConfig {
             num_validators: 4,
             chain_id: 85300,
             network_id: "cipherbft-testnet-1".to_string(),
-            // 32 ETH = 32 * 10^18 wei = 0x1bc16d674ec80000
+            // 32 CPH = 32 * 10^18 wei = 0x1bc16d674ec80000
             initial_stake: U256::from(32_000_000_000_000_000_000u128),
-            // 100 ETH = 100 * 10^18 wei
+            // 100 CPH = 100 * 10^18 wei
             initial_balance: U256::from(100_000_000_000_000_000_000u128),
             gas_limit: U256::from(30_000_000u64),
         }
@@ -391,6 +393,7 @@ impl GenesisGenerator {
             cipherbft: CipherBftConfig {
                 genesis_time,
                 network_id: config.network_id,
+                native_token: NativeTokenConfig::default(),
                 consensus: ConsensusParams::default(),
                 dcl: DclParams::default(),
                 staking: StakingParams::default(),
@@ -437,6 +440,7 @@ impl GenesisGenerator {
             cipherbft: CipherBftConfig {
                 genesis_time: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
                 network_id: network_id.to_string(),
+                native_token: NativeTokenConfig::default(),
                 consensus: ConsensusParams::default(),
                 dcl: DclParams::default(),
                 staking: StakingParams::default(),
@@ -470,8 +474,8 @@ impl GenesisGenerator {
     ///     &keys,
     ///     85300,
     ///     "cipherbft-testnet-1",
-    ///     32_000_000_000_000_000_000u128.into(),  // 32 ETH
-    ///     100_000_000_000_000_000_000u128.into(), // 100 ETH
+    ///     32_000_000_000_000_000_000u128.into(),  // 32 CPH
+    ///     100_000_000_000_000_000_000u128.into(), // 100 CPH
     /// )?;
     /// ```
     pub fn generate_from_validator_keys(
@@ -529,6 +533,7 @@ impl GenesisGenerator {
             cipherbft: CipherBftConfig {
                 genesis_time,
                 network_id: network_id.to_string(),
+                native_token: NativeTokenConfig::default(),
                 consensus: ConsensusParams::default(),
                 dcl: DclParams::default(),
                 staking: StakingParams::default(),
@@ -591,7 +596,8 @@ mod tests {
     use super::*;
     use alloy_primitives::{Address, U256};
     use cipherbft_types::genesis::{
-        CipherBftConfig, ConsensusParams, DclParams, GenesisValidator, StakingParams,
+        CipherBftConfig, ConsensusParams, DclParams, GenesisValidator, NativeTokenConfig,
+        StakingParams,
     };
     use cipherbft_types::geth::{AllocEntry, GethConfig};
     use std::collections::HashMap;
@@ -623,6 +629,7 @@ mod tests {
             cipherbft: CipherBftConfig {
                 genesis_time: "2024-01-15T00:00:00Z".to_string(),
                 network_id: "cipherbft-testnet-1".to_string(),
+                native_token: NativeTokenConfig::default(),
                 consensus: ConsensusParams::default(),
                 dcl: DclParams::default(),
                 staking: StakingParams::default(),
@@ -962,12 +969,12 @@ mod tests {
         assert_eq!(config.num_validators, 4);
         assert_eq!(config.chain_id, 85300);
         assert_eq!(config.network_id, "cipherbft-testnet-1");
-        // 32 ETH in wei
+        // 32 CPH in wei
         assert_eq!(
             config.initial_stake,
             U256::from(32_000_000_000_000_000_000u128)
         );
-        // 100 ETH in wei
+        // 100 CPH in wei
         assert_eq!(
             config.initial_balance,
             U256::from(100_000_000_000_000_000_000u128)
@@ -1095,7 +1102,7 @@ mod tests {
         let mut rng = rand::thread_rng();
         let config = GenesisGeneratorConfig {
             num_validators: 3,
-            initial_balance: U256::from(50_000_000_000_000_000_000u128), // 50 ETH
+            initial_balance: U256::from(50_000_000_000_000_000_000u128), // 50 CPH
             ..Default::default()
         };
 
@@ -1115,13 +1122,13 @@ mod tests {
         let mut rng = rand::thread_rng();
         let config = GenesisGeneratorConfig {
             num_validators: 5,
-            initial_stake: U256::from(10_000_000_000_000_000_000u128), // 10 ETH each
+            initial_stake: U256::from(10_000_000_000_000_000_000u128), // 10 CPH each
             ..Default::default()
         };
 
         let result = GenesisGenerator::generate(&mut rng, config).expect("should generate genesis");
 
-        // Total stake should be 5 * 10 ETH = 50 ETH
+        // Total stake should be 5 * 10 CPH = 50 CPH
         let expected_total = U256::from(50_000_000_000_000_000_000u128);
         assert_eq!(result.genesis.total_staked(), expected_total);
     }

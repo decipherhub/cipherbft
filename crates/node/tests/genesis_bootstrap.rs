@@ -55,10 +55,10 @@ fn minimal_genesis_json() -> &'static str {
 /// Note: BLS keys must be 96 hex chars (48 bytes), Ed25519 keys must be 64 hex chars (32 bytes)
 /// All U256 values (staked_amount) must use hex format per the `u256_quantity` serde module.
 /// Hex values (verified using Rust U256):
-///   - 64 ETH = 64000000000000000000 wei = 0x3782dace9d900000
-///   - 32 ETH = 32000000000000000000 wei = 0x1bc16d674ec80000
+///   - 64 CPH = 64000000000000000000 wei = 0x3782dace9d900000
+///   - 32 CPH = 32000000000000000000 wei = 0x1bc16d674ec80000
 ///
-/// Total: 64 + 32 + 32 = 128 ETH = 128000000000000000000 wei = 0x6f05b59d3b200000
+/// Total: 64 + 32 + 32 = 128 CPH = 128000000000000000000 wei = 0x6f05b59d3b200000
 fn multi_validator_genesis_json() -> &'static str {
     r#"{
         "config": {
@@ -219,7 +219,7 @@ fn test_genesis_total_stake_calculation() {
 #[test]
 fn test_genesis_invalid_ed25519_key_length() {
     // Genesis with invalid Ed25519 key (too short)
-    // Note: staked_amount uses hex format (0x1bc16d674ec80000 = 32 ETH in wei)
+    // Note: staked_amount uses hex format (0x1bc16d674ec80000 = 32 CPH in wei)
     let json = r#"{
         "config": { "chainId": 85300 },
         "alloc": {
@@ -252,7 +252,7 @@ fn test_genesis_invalid_ed25519_key_length() {
 #[test]
 fn test_genesis_invalid_bls_key_length() {
     // Genesis with invalid BLS key (too short)
-    // Note: staked_amount uses hex format (0x1bc16d674ec80000 = 32 ETH in wei)
+    // Note: staked_amount uses hex format (0x1bc16d674ec80000 = 32 CPH in wei)
     let json = r#"{
         "config": { "chainId": 85300 },
         "alloc": {

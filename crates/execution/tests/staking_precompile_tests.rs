@@ -35,7 +35,7 @@ fn test_bls_pubkey(seed: u8) -> FixedBytes<32> {
 
 /// T064: Integration test for registerValidator() function.
 ///
-/// Tests validator registration with stake above minimum (1 ETH).
+/// Tests validator registration with stake above minimum (1 CPH).
 #[test]
 fn test_register_validator_success() {
     let precompile = StakingPrecompile::new();
@@ -49,7 +49,7 @@ fn test_register_validator_success() {
     .abi_encode();
     let input = Bytes::from(call_data);
 
-    // Call with exactly minimum stake (1 ETH)
+    // Call with exactly minimum stake (1 CPH)
     let stake_amount = U256::from(MIN_VALIDATOR_STAKE);
     let block_number = 100;
     let gas_limit = 100_000;
@@ -102,7 +102,7 @@ fn test_register_validator_high_stake() {
     .abi_encode();
     let input = Bytes::from(call_data);
 
-    // Stake 50 ETH
+    // Stake 50 CPH
     let stake_amount = U256::from(50_000_000_000_000_000_000u128);
 
     let result = precompile.run(&input, 100_000, validator_addr, stake_amount, 100);
@@ -118,7 +118,7 @@ fn test_register_validator_high_stake() {
 
 /// T068: Integration test for minimum stake enforcement.
 ///
-/// Tests that registration fails when stake is below 1 ETH minimum.
+/// Tests that registration fails when stake is below 1 CPH minimum.
 #[test]
 fn test_register_validator_insufficient_stake() {
     let precompile = StakingPrecompile::new();
@@ -131,7 +131,7 @@ fn test_register_validator_insufficient_stake() {
     .abi_encode();
     let input = Bytes::from(call_data);
 
-    // Try to stake 0.5 ETH (below minimum)
+    // Try to stake 0.5 CPH (below minimum)
     let stake_amount = U256::from(500_000_000_000_000_000u128);
 
     let result = precompile.run(&input, 100_000, validator_addr, stake_amount, 100);
@@ -255,7 +255,7 @@ fn test_get_stake() {
     let validator_addr = test_address(7);
     let bls_pubkey = test_bls_pubkey(6);
 
-    // Register validator with 10 ETH
+    // Register validator with 10 CPH
     let stake_amount = U256::from(10_000_000_000_000_000_000u128);
     let register_call = IStaking::registerValidatorCall {
         blsPubkey: bls_pubkey,
@@ -336,7 +336,7 @@ fn test_slash_validator() {
     let validator_addr = test_address(11);
     let bls_pubkey = test_bls_pubkey(7);
 
-    // Register with 10 ETH
+    // Register with 10 CPH
     let initial_stake = U256::from(10_000_000_000_000_000_000u128);
     let register_call = IStaking::registerValidatorCall {
         blsPubkey: bls_pubkey,
@@ -351,7 +351,7 @@ fn test_slash_validator() {
         100,
     );
 
-    // Slash 2 ETH (only system can call this)
+    // Slash 2 CPH (only system can call this)
     let slash_amount = U256::from(2_000_000_000_000_000_000u128);
     let slash_call = IStaking::slashCall {
         validator: validator_addr,
@@ -600,4 +600,422 @@ fn test_multiple_validators_individual_queries() {
         let returned_stake = U256::from_be_slice(&output.bytes);
         assert_eq!(returned_stake, *expected_stake);
     }
+}
+
+// ============================================================================
+// Reward Distribution Tests
+// ============================================================================
+
+/// Test fee accumulation in staking state.
+#[test]
+fn test_fee_accumulation() {
+    let precompile = StakingPrecompile::new();
+
+    // Accumulate fees in multiple batches
+    let fee1 = U256::from(1_000_000_000_000_000_000u128); // 1 CPH
+    let fee2 = U256::from(500_000_000_000_000_000u128); // 0.5 CPH
+    let fee3 = U256::from(250_000_000_000_000_000u128); // 0.25 CPH
+
+    {
+        let state = precompile.state();
+        let mut state_lock = state.write();
+        state_lock.accumulate_fees(fee1);
+        state_lock.accumulate_fees(fee2);
+        state_lock.accumulate_fees(fee3);
+    }
+
+    // Verify accumulated fees
+    let state = precompile.state();
+    let state_lock = state.read();
+    let expected_total = fee1 + fee2 + fee3;
+    assert_eq!(
+        state_lock.rewards.accumulated_fees, expected_total,
+        "Accumulated fees should sum correctly"
+    );
+}
+
+/// Test epoch reward distribution to single validator.
+#[test]
+fn test_distribute_rewards_single_validator() {
+    let precompile = StakingPrecompile::new();
+    let validator_addr = test_address(30);
+    let bls_pubkey = test_bls_pubkey(30);
+
+    // Register validator with 10 CPH
+    let initial_stake = U256::from(10_000_000_000_000_000_000u128);
+    let register_call = IStaking::registerValidatorCall {
+        blsPubkey: bls_pubkey,
+    }
+    .abi_encode();
+    let _ = precompile.run(
+        &Bytes::from(register_call),
+        100_000,
+        validator_addr,
+        initial_stake,
+        100,
+    );
+
+    // Accumulate some fees (0.5 CPH)
+    let accumulated_fees = U256::from(500_000_000_000_000_000u128);
+    {
+        let state = precompile.state();
+        let mut state_lock = state.write();
+        state_lock.accumulate_fees(accumulated_fees);
+    }
+
+    // Distribute epoch rewards (2 CPH block reward)
+    let epoch_block_reward = U256::from(2_000_000_000_000_000_000u128);
+    let current_epoch = 1u64;
+
+    {
+        let state = precompile.state();
+        let mut state_lock = state.write();
+        let distributed = state_lock.distribute_epoch_rewards(epoch_block_reward, current_epoch);
+
+        // Single validator gets all rewards (block reward + fees)
+        let expected_distributed = epoch_block_reward + accumulated_fees;
+        assert_eq!(
+            distributed, expected_distributed,
+            "Single validator should receive all rewards"
+        );
+    }
+
+    // Verify validator stake increased
+    let state = precompile.state();
+    let state_lock = state.read();
+    let expected_stake = initial_stake + epoch_block_reward + accumulated_fees;
+    assert_eq!(
+        state_lock.get_stake(&validator_addr),
+        expected_stake,
+        "Validator stake should include rewards"
+    );
+
+    // Verify accumulated fees reset
+    assert!(
+        state_lock.rewards.accumulated_fees.is_zero(),
+        "Accumulated fees should be reset after distribution"
+    );
+
+    // Verify total_distributed tracking
+    assert_eq!(
+        state_lock.rewards.total_distributed,
+        epoch_block_reward + accumulated_fees,
+        "Total distributed should track cumulative rewards"
+    );
+}
+
+/// Test epoch reward distribution to multiple validators (proportional).
+#[test]
+fn test_distribute_rewards_multiple_validators_proportional() {
+    let precompile = StakingPrecompile::new();
+
+    // Register 3 validators with different stakes:
+    // Validator 1: 25 CPH (25%)
+    // Validator 2: 50 CPH (50%)
+    // Validator 3: 25 CPH (25%)
+    let validators = vec![
+        (
+            test_address(31),
+            test_bls_pubkey(31),
+            U256::from(25_000_000_000_000_000_000u128),
+        ),
+        (
+            test_address(32),
+            test_bls_pubkey(32),
+            U256::from(50_000_000_000_000_000_000u128),
+        ),
+        (
+            test_address(33),
+            test_bls_pubkey(33),
+            U256::from(25_000_000_000_000_000_000u128),
+        ),
+    ];
+
+    for (addr, bls, stake) in &validators {
+        let register_call = IStaking::registerValidatorCall { blsPubkey: *bls }.abi_encode();
+        let _ = precompile.run(&Bytes::from(register_call), 100_000, *addr, *stake, 100);
+    }
+
+    // Accumulate 1 CPH in fees
+    let accumulated_fees = U256::from(1_000_000_000_000_000_000u128);
+    {
+        let state = precompile.state();
+        let mut state_lock = state.write();
+        state_lock.accumulate_fees(accumulated_fees);
+    }
+
+    // Distribute 3 CPH block reward (total 4 CPH to distribute)
+    let epoch_block_reward = U256::from(3_000_000_000_000_000_000u128);
+    let total_to_distribute = epoch_block_reward + accumulated_fees; // 4 CPH
+    let current_epoch = 1u64;
+
+    {
+        let state = precompile.state();
+        let mut state_lock = state.write();
+        let distributed = state_lock.distribute_epoch_rewards(epoch_block_reward, current_epoch);
+
+        // Total distributed should equal rewards + fees
+        assert_eq!(
+            distributed, total_to_distribute,
+            "Total distributed should equal block reward + fees"
+        );
+    }
+
+    // Verify proportional distribution:
+    // Validator 1: 25% of 4 CPH = 1 CPH
+    // Validator 2: 50% of 4 CPH = 2 CPH
+    // Validator 3: 25% of 4 CPH = 1 CPH
+    let state = precompile.state();
+    let state_lock = state.read();
+
+    let stake1 = state_lock.get_stake(&validators[0].0);
+    let stake2 = state_lock.get_stake(&validators[1].0);
+    let stake3 = state_lock.get_stake(&validators[2].0);
+
+    // Initial stakes + rewards
+    let expected1 = validators[0].2 + U256::from(1_000_000_000_000_000_000u128); // 25 + 1 = 26 CPH
+    let expected2 = validators[1].2 + U256::from(2_000_000_000_000_000_000u128); // 50 + 2 = 52 CPH
+    let expected3 = validators[2].2 + U256::from(1_000_000_000_000_000_000u128); // 25 + 1 = 26 CPH
+
+    assert_eq!(
+        stake1, expected1,
+        "Validator 1 should receive 25% of rewards"
+    );
+    assert_eq!(
+        stake2, expected2,
+        "Validator 2 should receive 50% of rewards"
+    );
+    assert_eq!(
+        stake3, expected3,
+        "Validator 3 should receive 25% of rewards"
+    );
+
+    // Verify total stake increased
+    let expected_total_stake = expected1 + expected2 + expected3;
+    assert_eq!(
+        state_lock.total_stake, expected_total_stake,
+        "Total stake should include all distributed rewards"
+    );
+}
+
+/// Test distribute_epoch_rewards via precompile call (system-only).
+#[test]
+fn test_distribute_rewards_precompile_system_only() {
+    let precompile = StakingPrecompile::new();
+    let validator_addr = test_address(34);
+    let bls_pubkey = test_bls_pubkey(34);
+
+    // Register validator
+    let register_call = IStaking::registerValidatorCall {
+        blsPubkey: bls_pubkey,
+    }
+    .abi_encode();
+    let _ = precompile.run(
+        &Bytes::from(register_call),
+        100_000,
+        validator_addr,
+        U256::from(MIN_VALIDATOR_STAKE),
+        100,
+    );
+
+    // Try to call distributeEpochRewards from non-system address
+    let epoch_reward = U256::from(2_000_000_000_000_000_000u128);
+    let distribute_call = IStaking::distributeEpochRewardsCall {
+        epochBlockReward: epoch_reward,
+    }
+    .abi_encode();
+
+    let attacker_addr = test_address(35);
+    let result = precompile.run(
+        &Bytes::from(distribute_call.clone()),
+        200_000,
+        attacker_addr, // Not SYSTEM_ADDRESS
+        U256::ZERO,
+        100,
+    );
+
+    assert!(
+        result.is_err(),
+        "distributeEpochRewards should fail when called by non-system address"
+    );
+
+    // Call from SYSTEM_ADDRESS should succeed
+    let result = precompile.run(
+        &Bytes::from(distribute_call),
+        200_000,
+        SYSTEM_ADDRESS,
+        U256::ZERO,
+        100,
+    );
+
+    assert!(
+        result.is_ok(),
+        "distributeEpochRewards should succeed when called by system"
+    );
+}
+
+/// Test getAccumulatedFees query.
+#[test]
+fn test_get_accumulated_fees_query() {
+    let precompile = StakingPrecompile::new();
+
+    // Accumulate fees
+    let fees = U256::from(3_500_000_000_000_000_000u128); // 3.5 CPH
+    {
+        let state = precompile.state();
+        let mut state_lock = state.write();
+        state_lock.accumulate_fees(fees);
+    }
+
+    // Query accumulated fees via precompile
+    let get_fees_call = IStaking::getAccumulatedFeesCall {}.abi_encode();
+    let result = precompile.run(
+        &Bytes::from(get_fees_call),
+        10_000,
+        test_address(36), // Anyone can query
+        U256::ZERO,
+        100,
+    );
+
+    assert!(result.is_ok(), "getAccumulatedFees should succeed");
+    let output = result.unwrap();
+    let returned_fees = U256::from_be_slice(&output.bytes);
+    assert_eq!(
+        returned_fees, fees,
+        "Returned fees should match accumulated amount"
+    );
+}
+
+/// Test getTotalDistributed query.
+#[test]
+fn test_get_total_distributed_query() {
+    let precompile = StakingPrecompile::new();
+    let validator_addr = test_address(37);
+    let bls_pubkey = test_bls_pubkey(37);
+
+    // Register validator
+    let register_call = IStaking::registerValidatorCall {
+        blsPubkey: bls_pubkey,
+    }
+    .abi_encode();
+    let _ = precompile.run(
+        &Bytes::from(register_call),
+        100_000,
+        validator_addr,
+        U256::from(10_000_000_000_000_000_000u128),
+        100,
+    );
+
+    // Distribute rewards via system call
+    let epoch_reward = U256::from(2_000_000_000_000_000_000u128);
+    let distribute_call = IStaking::distributeEpochRewardsCall {
+        epochBlockReward: epoch_reward,
+    }
+    .abi_encode();
+
+    let _ = precompile.run(
+        &Bytes::from(distribute_call),
+        200_000,
+        SYSTEM_ADDRESS,
+        U256::ZERO,
+        100,
+    );
+
+    // Query total distributed
+    let get_total_call = IStaking::getTotalDistributedCall {}.abi_encode();
+    let result = precompile.run(
+        &Bytes::from(get_total_call),
+        10_000,
+        test_address(38),
+        U256::ZERO,
+        100,
+    );
+
+    assert!(result.is_ok(), "getTotalDistributed should succeed");
+    let output = result.unwrap();
+    let returned_total = U256::from_be_slice(&output.bytes);
+    assert_eq!(
+        returned_total, epoch_reward,
+        "Total distributed should match epoch reward"
+    );
+}
+
+/// Test reward distribution with zero validators (edge case).
+#[test]
+fn test_distribute_rewards_no_validators() {
+    let precompile = StakingPrecompile::new();
+
+    // No validators registered - try to distribute
+    let epoch_reward = U256::from(2_000_000_000_000_000_000u128);
+
+    {
+        let state = precompile.state();
+        let mut state_lock = state.write();
+        let distributed = state_lock.distribute_epoch_rewards(epoch_reward, 1);
+
+        // Should return zero since no validators
+        assert!(
+            distributed.is_zero(),
+            "Distribution with no validators should return zero"
+        );
+    }
+
+    // Verify no state corruption
+    let state = precompile.state();
+    let state_lock = state.read();
+    assert!(
+        state_lock.total_stake.is_zero(),
+        "Total stake should remain zero"
+    );
+}
+
+/// Test multiple epoch distributions accumulate correctly.
+#[test]
+fn test_multiple_epoch_distributions() {
+    let precompile = StakingPrecompile::new();
+    let validator_addr = test_address(40);
+    let bls_pubkey = test_bls_pubkey(40);
+
+    // Register validator with 10 CPH
+    let initial_stake = U256::from(10_000_000_000_000_000_000u128);
+    let register_call = IStaking::registerValidatorCall {
+        blsPubkey: bls_pubkey,
+    }
+    .abi_encode();
+    let _ = precompile.run(
+        &Bytes::from(register_call),
+        100_000,
+        validator_addr,
+        initial_stake,
+        100,
+    );
+
+    let epoch_reward = U256::from(2_000_000_000_000_000_000u128); // 2 CPH per epoch
+
+    // Distribute across 3 epochs
+    for epoch in 1..=3 {
+        let state = precompile.state();
+        let mut state_lock = state.write();
+        let distributed = state_lock.distribute_epoch_rewards(epoch_reward, epoch);
+        assert_eq!(distributed, epoch_reward);
+    }
+
+    // Verify cumulative results
+    let state = precompile.state();
+    let state_lock = state.read();
+
+    // Validator should have initial + 3 epochs of rewards = 10 + 6 = 16 CPH
+    let expected_stake = initial_stake + (epoch_reward * U256::from(3));
+    assert_eq!(
+        state_lock.get_stake(&validator_addr),
+        expected_stake,
+        "Stake should accumulate across epochs"
+    );
+
+    // Total distributed should be 6 CPH
+    let expected_total_distributed = epoch_reward * U256::from(3);
+    assert_eq!(
+        state_lock.rewards.total_distributed, expected_total_distributed,
+        "Total distributed should track cumulative rewards"
+    );
 }

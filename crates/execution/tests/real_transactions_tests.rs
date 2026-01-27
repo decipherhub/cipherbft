@@ -1,7 +1,7 @@
-//! Integration tests with real Ethereum transactions.
+//! Integration tests with real EVM transactions.
 //!
 //! These tests verify the execution engine works correctly with:
-//! - ETH transfers between accounts
+//! - CPH transfers between accounts
 //! - Contract deployment
 //! - Contract function calls
 //! - Multiple transactions in a single block

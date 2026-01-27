@@ -139,7 +139,7 @@ mod tests {
 
     #[test]
     fn test_rlp_encode_account_with_balance() {
-        let balance = U256::from(1_000_000_000_000_000_000u128); // 1 ETH
+        let balance = U256::from(1_000_000_000_000_000_000u128); // 1 CPH
         let encoded = rlp_encode_account(
             5,               // nonce
             balance,         // balance

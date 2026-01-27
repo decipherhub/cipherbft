@@ -23,7 +23,7 @@ use anyhow::{Context, Result};
 use cipherbft_consensus::{
     create_context, default_consensus_params, default_engine_config_single_part, spawn_host,
     spawn_network, spawn_wal, ConsensusHeight, ConsensusSigner, ConsensusSigningProvider,
-    ConsensusValidator, MalachiteEngineBuilder,
+    ConsensusValidator, EpochConfig, MalachiteEngineBuilder,
 };
 use cipherbft_crypto::{BlsKeyPair, BlsPublicKey, Ed25519KeyPair, Ed25519PublicKey};
 use cipherbft_data_chain::{
@@ -33,7 +33,7 @@ use cipherbft_data_chain::{
 };
 use cipherbft_execution::{
     keccak256, ChainConfig, InMemoryProvider, Log as ExecutionLog,
-    TransactionReceipt as ExecutionReceipt,
+    TransactionReceipt as ExecutionReceipt, U256,
 };
 use cipherbft_storage::{
     Block, BlockStore, Database, DatabaseConfig, Log as StorageLog, MdbxBlockStore,
@@ -105,6 +105,9 @@ pub struct Node {
     /// Whether DCL (Data Chain Layer) is enabled.
     /// When disabled, consensus proceeds without data availability attestations.
     dcl_enabled: bool,
+    /// Epoch block reward in wei (from genesis staking params).
+    /// Used for validator reward distribution at epoch boundaries.
+    epoch_block_reward: U256,
 }
 
 impl Node {
@@ -142,6 +145,7 @@ impl Node {
             validators: HashMap::new(),
             execution_bridge: None,
             dcl_enabled: true, // Default to enabled, overridden by genesis
+            epoch_block_reward: U256::from(2_000_000_000_000_000_000u128), // Default: 2 CPH
         })
     }
 
@@ -328,9 +332,14 @@ impl Node {
         let dcl_store: std::sync::Arc<dyn DclStore> = std::sync::Arc::new(InMemoryStore::new());
         let bridge = ExecutionBridge::from_genesis(chain_config, dcl_store, genesis)?;
         self.execution_bridge = Some(Arc::new(bridge));
+
+        // Store epoch block reward from genesis for reward distribution at epoch boundaries
+        self.epoch_block_reward = genesis.cipherbft.staking.epoch_block_reward_wei;
+
         info!(
-            "Execution layer initialized with {} validators from genesis",
-            genesis.validator_count()
+            "Execution layer initialized with {} validators from genesis (epoch reward: {} wei)",
+            genesis.validator_count(),
+            self.epoch_block_reward
         );
         Ok(self)
     }
@@ -919,6 +928,10 @@ impl Node {
         // Clone execution bridge for use in event loop
         let execution_bridge = self.execution_bridge.clone();
 
+        // Create epoch configuration for reward distribution timing
+        // Default: 100 blocks per epoch
+        let epoch_config = EpochConfig::default();
+
         // Run the main event loop with graceful shutdown support
         let result = Self::run_event_loop(
             cancel_token,
@@ -931,6 +944,8 @@ impl Node {
             rpc_storage,
             subscription_manager,
             rpc_debug_executor,
+            epoch_config,
+            self.epoch_block_reward,
         )
         .await;
 
@@ -962,6 +977,9 @@ impl Node {
     ///
     /// The `cut_advance_tx` channel is used to signal the empty cut sender (when DCL disabled)
     /// to advance to the next height after consensus decides on a block.
+    ///
+    /// At epoch boundaries, distributes accumulated transaction fees and block rewards
+    /// to validators proportionally to their stake.
     #[allow(clippy::too_many_arguments)]
     async fn run_event_loop(
         cancel_token: CancellationToken,
@@ -974,6 +992,8 @@ impl Node {
         rpc_storage: Option<Arc<cipherbft_rpc::MdbxRpcStorage<InMemoryProvider>>>,
         subscription_manager: Option<Arc<cipherbft_rpc::SubscriptionManager>>,
         rpc_debug_executor: Option<Arc<cipherbft_rpc::StubDebugExecutionApi>>,
+        epoch_config: EpochConfig,
+        epoch_block_reward: U256,
     ) -> Result<()> {
         loop {
             tokio::select! {
@@ -1135,6 +1155,26 @@ impl Node {
                                             error!("Failed to store {} receipts for block {}: {}", storage_receipts.len(), height.0, e);
                                         } else {
                                             debug!("Stored {} receipts for block {}", storage_receipts.len(), height.0);
+                                        }
+                                    }
+                                }
+
+                                // Check for epoch boundary and distribute rewards
+                                // Epoch rewards (block rewards + accumulated fees) are distributed
+                                // to validators proportionally to their stake at epoch boundaries
+                                if epoch_config.is_epoch_boundary(height) {
+                                    let current_epoch = epoch_config.epoch_for_height(height);
+                                    match bridge.distribute_epoch_rewards(epoch_block_reward, current_epoch).await {
+                                        Ok(distributed) => {
+                                            if !distributed.is_zero() {
+                                                info!(
+                                                    "Epoch {} rewards distributed: {} wei to validators",
+                                                    current_epoch, distributed
+                                                );
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to distribute epoch {} rewards: {}", current_epoch, e);
                                         }
                                     }
                                 }

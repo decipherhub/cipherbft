@@ -372,9 +372,9 @@ mod tests {
 
     #[test]
     fn test_alloc_entry_balance_hex() {
-        let entry = AllocEntry::new(U256::from(1000000000000000000u128)); // 1 ETH
+        let entry = AllocEntry::new(U256::from(1000000000000000000u128)); // 1 CPH
         let json = serde_json::to_string(&entry).unwrap();
-        assert!(json.contains("\"balance\":\"0xde0b6b3a7640000\"")); // 1 ETH in hex
+        assert!(json.contains("\"balance\":\"0xde0b6b3a7640000\"")); // 1 CPH in hex
     }
 
     #[test]
@@ -384,7 +384,7 @@ mod tests {
             "nonce": "0x1"
         }"#;
         let entry: AllocEntry = serde_json::from_str(json).unwrap();
-        // 2000 ETH = 2000 * 10^18 = 0x6c6b935b8bbd400000
+        // 2000 CPH = 2000 * 10^18 = 0x6c6b935b8bbd400000
         assert_eq!(
             entry.balance,
             U256::from_str("0x6c6b935b8bbd400000").unwrap()

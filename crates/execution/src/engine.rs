@@ -30,6 +30,15 @@ const BLOCK_HASH_CACHE_SIZE: NonZeroUsize = match NonZeroUsize::new(256) {
     None => panic!("block hash cache size must be non-zero"),
 };
 
+/// Result type for transaction processing.
+///
+/// Contains:
+/// - Transaction receipts with execution results
+/// - Cumulative gas used by all transactions
+/// - Logs emitted by each transaction
+/// - Total transaction fees collected (gas_used × effective_gas_price)
+type ProcessTransactionsResult = (Vec<TransactionReceipt>, u64, Vec<Vec<Log>>, U256);
+
 /// ExecutionLayer trait defines the interface for block execution.
 ///
 /// This trait provides the core methods needed by the consensus layer to:
@@ -211,17 +220,80 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
         &self.state_manager
     }
 
+    /// Get a reference to the staking precompile.
+    ///
+    /// This is useful for querying validator state and reward information.
+    pub fn staking_precompile(&self) -> &Arc<StakingPrecompile> {
+        &self.staking_precompile
+    }
+
+    /// Distribute epoch rewards to validators.
+    ///
+    /// This method should be called at epoch boundaries to distribute:
+    /// - Accumulated transaction fees from all blocks in the epoch
+    /// - Block rewards (fixed amount per epoch)
+    ///
+    /// Rewards are distributed proportionally to each validator's stake.
+    ///
+    /// # Arguments
+    /// * `epoch_block_reward` - Fixed block reward for the epoch (in wei)
+    /// * `current_epoch` - The epoch number being finalized
+    ///
+    /// # Returns
+    /// * Total amount of rewards distributed to validators
+    pub fn distribute_epoch_rewards(&self, epoch_block_reward: U256, current_epoch: u64) -> U256 {
+        let distributed = self
+            .staking_precompile
+            .state()
+            .write()
+            .distribute_epoch_rewards(epoch_block_reward, current_epoch);
+
+        if !distributed.is_zero() {
+            tracing::info!(
+                epoch = current_epoch,
+                distributed = %distributed,
+                epoch_block_reward = %epoch_block_reward,
+                "Epoch rewards distributed to validators"
+            );
+        }
+
+        distributed
+    }
+
+    /// Get accumulated fees pending distribution.
+    ///
+    /// This returns the total transaction fees accumulated since the last
+    /// epoch reward distribution.
+    pub fn get_accumulated_fees(&self) -> U256 {
+        self.staking_precompile
+            .state()
+            .read()
+            .get_accumulated_fees()
+    }
+
+    /// Get total rewards distributed to date.
+    pub fn get_total_distributed(&self) -> U256 {
+        self.staking_precompile
+            .state()
+            .read()
+            .get_total_distributed()
+    }
+
     /// Process all transactions in a block.
+    ///
+    /// Returns a tuple containing receipts, cumulative gas used, logs, and total fees.
+    /// See [`ProcessTransactionsResult`] for details.
     fn process_transactions(
         &mut self,
         transactions: &[Bytes],
         block_number: u64,
         timestamp: u64,
         parent_hash: B256,
-    ) -> Result<(Vec<TransactionReceipt>, u64, Vec<Vec<Log>>)> {
+    ) -> Result<ProcessTransactionsResult> {
         let mut receipts = Vec::new();
         let mut cumulative_gas_used = 0u64;
         let mut all_logs = Vec::new();
+        let mut total_fees = U256::ZERO;
 
         // Scope for EVM execution to ensure it's dropped before commit
         let state_changes = {
@@ -243,6 +315,15 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
                 // Compute logs bloom for this transaction
                 let logs_bloom = crate::receipts::logs_bloom(&tx_result.logs);
 
+                // Calculate effective gas price for fee tracking
+                // For now, use the base fee; full EIP-1559 would include priority fee
+                let effective_gas_price = self.chain_config.base_fee_per_gas;
+
+                // Accumulate transaction fee: gas_used × effective_gas_price
+                let tx_fee =
+                    U256::from(tx_result.gas_used).saturating_mul(U256::from(effective_gas_price));
+                total_fees = total_fees.saturating_add(tx_fee);
+
                 // Create receipt
                 let receipt = TransactionReceipt {
                     transaction_hash: tx_result.tx_hash,
@@ -257,7 +338,7 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
                     logs: tx_result.logs.clone(),
                     logs_bloom,
                     status: if tx_result.success { 1 } else { 0 },
-                    effective_gas_price: self.chain_config.base_fee_per_gas,
+                    effective_gas_price,
                     transaction_type: 2, // EIP-1559
                 };
 
@@ -278,7 +359,20 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
         // Commit pending state changes to persistent storage
         self.database.commit()?;
 
-        Ok((receipts, cumulative_gas_used, all_logs))
+        // Accumulate collected fees to staking precompile for later distribution
+        if !total_fees.is_zero() {
+            self.staking_precompile
+                .state()
+                .write()
+                .accumulate_fees(total_fees);
+            tracing::debug!(
+                block_number,
+                total_fees = %total_fees,
+                "Accumulated transaction fees for reward distribution"
+            );
+        }
+
+        Ok((receipts, cumulative_gas_used, all_logs, total_fees))
     }
 
     /// Compute or retrieve state root based on block number.
@@ -309,13 +403,21 @@ impl<P: Provider + Clone> ExecutionLayer for ExecutionEngine<P> {
         // Validate block first
         self.validate_block(&input)?;
 
-        // Process all transactions
-        let (receipts, gas_used, all_logs) = self.process_transactions(
+        // Process all transactions and collect fees
+        let (receipts, gas_used, all_logs, total_fees) = self.process_transactions(
             &input.transactions,
             input.block_number,
             input.timestamp,
             input.parent_hash,
         )?;
+
+        if !total_fees.is_zero() {
+            tracing::info!(
+                block_number = input.block_number,
+                total_fees = %total_fees,
+                "Block fees collected for validator rewards"
+            );
+        }
 
         // Compute state root (periodic)
         let state_root = self.handle_state_root(input.block_number)?;

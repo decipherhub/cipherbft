@@ -209,6 +209,21 @@ impl Genesis {
         self.cipherbft.validators.len()
     }
 
+    /// Get the native token name (e.g., "Cipher").
+    pub fn native_token_name(&self) -> &str {
+        &self.cipherbft.native_token.name
+    }
+
+    /// Get the native token symbol (e.g., "CPH").
+    pub fn native_token_symbol(&self) -> &str {
+        &self.cipherbft.native_token.symbol
+    }
+
+    /// Get the native token decimals (typically 18).
+    pub fn native_token_decimals(&self) -> u8 {
+        self.cipherbft.native_token.decimals
+    }
+
     /// Validate the genesis file for consistency.
     ///
     /// # Errors
@@ -299,6 +314,62 @@ impl Genesis {
 // CipherBFT Extension Types
 // ============================================================================
 
+/// Native token metadata configuration.
+///
+/// Similar to ERC20's `name()`, `symbol()`, and `decimals()` methods,
+/// this provides standard metadata for the chain's native token.
+/// This allows block explorers, wallets, and other tools to correctly
+/// identify and display the native token.
+///
+/// # Example
+///
+/// ```json
+/// {
+///   "native_token": {
+///     "name": "Cipher",
+///     "symbol": "CPH",
+///     "decimals": 18
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeTokenConfig {
+    /// Human-readable name of the native token (e.g., "Cipher", "Ether").
+    #[serde(default = "default_native_token_name")]
+    pub name: String,
+
+    /// Token symbol for display (e.g., "CPH", "ETH").
+    /// Typically 3-5 uppercase characters.
+    #[serde(default = "default_native_token_symbol")]
+    pub symbol: String,
+
+    /// Number of decimal places (standard: 18 for EVM compatibility).
+    #[serde(default = "default_native_token_decimals")]
+    pub decimals: u8,
+}
+
+impl Default for NativeTokenConfig {
+    fn default() -> Self {
+        Self {
+            name: default_native_token_name(),
+            symbol: default_native_token_symbol(),
+            decimals: default_native_token_decimals(),
+        }
+    }
+}
+
+fn default_native_token_name() -> String {
+    "Cipher".to_string()
+}
+
+fn default_native_token_symbol() -> String {
+    "CPH".to_string()
+}
+
+fn default_native_token_decimals() -> u8 {
+    18
+}
+
 /// CipherBFT-specific configuration namespace.
 ///
 /// Contains BFT consensus, DCL, staking parameters, and the initial validator set.
@@ -309,6 +380,11 @@ pub struct CipherBftConfig {
 
     /// Network identifier (e.g., "cipherbft-mainnet-1").
     pub network_id: String,
+
+    /// Native token metadata (name, symbol, decimals).
+    /// Provides ERC20-like identity for the chain's native currency.
+    #[serde(default)]
+    pub native_token: NativeTokenConfig,
 
     /// BFT consensus parameters.
     #[serde(default)]
@@ -458,7 +534,7 @@ fn default_attestation_threshold_percent() -> u8 {
 /// Staking system parameters (T012).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StakingParams {
-    /// Minimum stake in wei (default: 1 ETH).
+    /// Minimum stake in wei (default: 1 CPH).
     #[serde(default = "default_min_stake_wei", with = "u256_quantity")]
     pub min_stake_wei: U256,
 
@@ -469,6 +545,32 @@ pub struct StakingParams {
     /// Slashing penalty percentage (0-100).
     #[serde(default = "default_slashing_fraction_percent")]
     pub slashing_fraction_percent: u8,
+
+    /// Block reward per epoch in wei (default: 2 CPH per epoch).
+    /// This is the total reward minted and distributed to validators at each epoch boundary.
+    /// CPH is the native token of the CipherBFT network (symbol: $CPH).
+    #[serde(default = "default_epoch_block_reward_wei", with = "u256_quantity")]
+    pub epoch_block_reward_wei: U256,
+
+    /// Fee distribution mode: "burn" (EIP-1559 style) or "distribute" (to validators).
+    /// - "burn": Transaction fees are burned, reducing total supply
+    /// - "distribute": Transaction fees are distributed to validators proportionally
+    #[serde(default = "default_fee_distribution_mode")]
+    pub fee_distribution_mode: String,
+
+    /// Treasury address for ecosystem funding (optional).
+    /// If set, initial supply will be minted to this address at genesis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub treasury_address: Option<Address>,
+
+    /// Initial treasury supply in wei (optional).
+    /// Only used if treasury_address is also set.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "opt_u256_quantity"
+    )]
+    pub initial_treasury_supply_wei: Option<U256>,
 }
 
 impl Default for StakingParams {
@@ -477,18 +579,28 @@ impl Default for StakingParams {
             min_stake_wei: default_min_stake_wei(),
             unbonding_period_seconds: default_unbonding_period_seconds(),
             slashing_fraction_percent: default_slashing_fraction_percent(),
+            epoch_block_reward_wei: default_epoch_block_reward_wei(),
+            fee_distribution_mode: default_fee_distribution_mode(),
+            treasury_address: None,
+            initial_treasury_supply_wei: None,
         }
     }
 }
 
 fn default_min_stake_wei() -> U256 {
-    U256::from(1_000_000_000_000_000_000u128) // 1 ETH
+    U256::from(1_000_000_000_000_000_000u128) // 1 CPH
 }
 fn default_unbonding_period_seconds() -> u64 {
     604_800 // 7 days
 }
 fn default_slashing_fraction_percent() -> u8 {
     1
+}
+fn default_epoch_block_reward_wei() -> U256 {
+    U256::from(2_000_000_000_000_000_000u128) // 2 CPH per epoch
+}
+fn default_fee_distribution_mode() -> String {
+    "distribute".to_string()
 }
 
 /// Genesis validator definition with dual cryptographic keys (T013).
@@ -646,7 +758,7 @@ mod tests {
             name: Some("validator-1".to_string()),
             ed25519_pubkey: "0x".to_owned() + &"a".repeat(64), // 32 bytes
             bls_pubkey: "0x".to_owned() + &"b".repeat(96),     // 48 bytes
-            staked_amount: U256::from(32_000_000_000_000_000_000u128), // 32 ETH
+            staked_amount: U256::from(32_000_000_000_000_000_000u128), // 32 CPH
             commission_rate_percent: 10,
         }
     }
@@ -672,6 +784,7 @@ mod tests {
             cipherbft: CipherBftConfig {
                 genesis_time: "2024-01-15T00:00:00Z".to_string(),
                 network_id: "cipherbft-testnet-1".to_string(),
+                native_token: NativeTokenConfig::default(),
                 consensus: ConsensusParams::default(),
                 dcl: DclParams::default(),
                 staking: StakingParams::default(),
@@ -759,7 +872,7 @@ mod tests {
     #[test]
     fn test_genesis_validation_stake_below_minimum() {
         let mut genesis = sample_genesis();
-        genesis.cipherbft.validators[0].staked_amount = U256::from(1u64); // Far below 1 ETH
+        genesis.cipherbft.validators[0].staked_amount = U256::from(1u64); // Far below 1 CPH
         assert!(matches!(
             genesis.validate(),
             Err(GenesisError::StakeBelowMinimum { .. })
@@ -779,6 +892,26 @@ mod tests {
     fn test_validator_count() {
         let genesis = sample_genesis();
         assert_eq!(genesis.validator_count(), 1);
+    }
+
+    #[test]
+    fn test_native_token_metadata() {
+        let genesis = sample_genesis();
+
+        // Default native token should be CPH
+        assert_eq!(genesis.native_token_name(), "Cipher");
+        assert_eq!(genesis.native_token_symbol(), "CPH");
+        assert_eq!(genesis.native_token_decimals(), 18);
+
+        // Custom native token config
+        let custom = NativeTokenConfig {
+            name: "TestToken".to_string(),
+            symbol: "TST".to_string(),
+            decimals: 6,
+        };
+        assert_eq!(custom.name, "TestToken");
+        assert_eq!(custom.symbol, "TST");
+        assert_eq!(custom.decimals, 6);
     }
 
     #[test]

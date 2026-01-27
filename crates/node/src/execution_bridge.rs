@@ -332,6 +332,62 @@ impl ExecutionBridge {
     pub fn shared(self) -> Arc<Self> {
         Arc::new(self)
     }
+
+    /// Distribute epoch rewards to validators.
+    ///
+    /// This method should be called at epoch boundaries (e.g., every 100 blocks)
+    /// to distribute accumulated transaction fees and block rewards to validators
+    /// proportionally to their stake.
+    ///
+    /// # Arguments
+    ///
+    /// * `epoch_block_reward` - Fixed block reward for the epoch (in wei)
+    /// * `current_epoch` - The epoch number being finalized
+    ///
+    /// # Returns
+    ///
+    /// Total amount of rewards distributed to validators (in wei)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // At epoch boundary (e.g., block 100, 200, 300...)
+    /// let epoch_reward = genesis.cipherbft.staking.epoch_block_reward_wei;
+    /// let distributed = bridge.distribute_epoch_rewards(epoch_reward, current_epoch).await?;
+    /// info!(epoch = current_epoch, distributed = %distributed, "Epoch rewards distributed");
+    /// ```
+    pub async fn distribute_epoch_rewards(
+        &self,
+        epoch_block_reward: U256,
+        current_epoch: u64,
+    ) -> anyhow::Result<U256> {
+        let execution = self.execution.read().await;
+        let distributed = execution.distribute_epoch_rewards(epoch_block_reward, current_epoch);
+
+        info!(
+            epoch = current_epoch,
+            epoch_block_reward = %epoch_block_reward,
+            total_distributed = %distributed,
+            "Epoch rewards distributed to validators"
+        );
+
+        Ok(distributed)
+    }
+
+    /// Get accumulated fees pending distribution.
+    ///
+    /// Returns the total transaction fees accumulated since the last
+    /// epoch reward distribution.
+    pub async fn get_accumulated_fees(&self) -> U256 {
+        let execution = self.execution.read().await;
+        execution.get_accumulated_fees()
+    }
+
+    /// Get total rewards distributed to validators across all epochs.
+    pub async fn get_total_distributed(&self) -> U256 {
+        let execution = self.execution.read().await;
+        execution.get_total_distributed()
+    }
 }
 
 /// Compute a deterministic block hash from block components.
