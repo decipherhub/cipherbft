@@ -1,0 +1,45 @@
+{
+  "validator_id": "6017fe04d4465135f3f0f1a0a875a5e97109072b",
+  "keyring_backend": "test",
+  "key_name": "validator-0",
+  "keystore_dir": "./devnet/node0/keys",
+  "keystore_account": 0,
+  "primary_listen": "0.0.0.0:9000",
+  "consensus_listen": "0.0.0.0:9005",
+  "worker_listens": [
+    "0.0.0.0:9001"
+  ],
+  "peers": [
+    {
+      "validator_id": "5f9f7d5f49c65309a7d151dc8d80a3b65bad1978",
+      "bls_public_key_hex": "94b9fa119f3d1e7435d92a101cc94fda1080b618b587d9e513a09f45622652f56d095198f7624520fffbdf717a42774a",
+      "ed25519_public_key_hex": "92a4b1c3e007d6eaa84a51cd4e019437e4f75c9343e78cf65f1d67941c226fb4",
+      "primary_addr": "127.0.0.1:9010",
+      "consensus_addr": "127.0.0.1:9015",
+      "worker_addrs": [
+        "127.0.0.1:9011"
+      ]
+    },
+    {
+      "validator_id": "76858a8c0702a5761d5ea94e52d7e8513cab5d46",
+      "bls_public_key_hex": "8b373e99a8e1a3518f29df40a6cc7f0812f18986f21a665a78483a382511eddbacbf0f9b1f4b82cd260e5194e7c2d3c1",
+      "ed25519_public_key_hex": "2866f9071d75336e31ecf7eecd37e120d84878b207a386572d44247d9019976a",
+      "primary_addr": "127.0.0.1:9020",
+      "consensus_addr": "127.0.0.1:9025",
+      "worker_addrs": [
+        "127.0.0.1:9021"
+      ]
+    }
+  ],
+  "num_workers": 1,
+  "home_dir": "./devnet/node0",
+  "data_dir": "./devnet/node0/data",
+  "genesis_path": "./devnet/genesis.json",
+  "car_interval_ms": 100,
+  "max_batch_txs": 100,
+  "max_batch_bytes": 1048576,
+  "rpc_enabled": true,
+  "rpc_http_port": 8545,
+  "rpc_ws_port": 8546,
+  "metrics_port": 9100
+}
