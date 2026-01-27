@@ -215,6 +215,8 @@ pub struct GenesisGeneratorConfig {
     pub initial_balance: U256,
     /// Gas limit for genesis block (default: 30M).
     pub gas_limit: U256,
+    /// Extra accounts to allocate balances to (address, balance_wei) pairs.
+    pub extra_alloc: Vec<(Address, U256)>,
 }
 
 impl Default for GenesisGeneratorConfig {
@@ -228,6 +230,7 @@ impl Default for GenesisGeneratorConfig {
             // 100 CPH = 100 * 10^18 wei
             initial_balance: U256::from(100_000_000_000_000_000_000u128),
             gas_limit: U256::from(30_000_000u64),
+            extra_alloc: Vec::new(),
         }
     }
 }
@@ -1259,5 +1262,26 @@ mod tests {
         assert_eq!(parsed.address, key_file.address);
         assert_eq!(parsed.ed25519_pubkey, key_file.ed25519_pubkey);
         assert_eq!(parsed.bls_pubkey, key_file.bls_pubkey);
+    }
+
+    #[test]
+    fn test_genesis_generator_config_with_extra_alloc() {
+        let extra = vec![(
+            "0x3E54B36f4F8EFaa017888E66fb6dB17098437ac7"
+                .parse()
+                .unwrap(),
+            U256::from(1_000_000_000_000_000_000_000_u128), // 1000 ETH
+        )];
+        let config = GenesisGeneratorConfig {
+            extra_alloc: extra.clone(),
+            ..Default::default()
+        };
+        assert_eq!(config.extra_alloc.len(), 1);
+        assert_eq!(
+            config.extra_alloc[0].0,
+            "0x3E54B36f4F8EFaa017888E66fb6dB17098437ac7"
+                .parse::<Address>()
+                .unwrap()
+        );
     }
 }
