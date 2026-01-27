@@ -44,3 +44,6 @@ testnet/
 
 # Design plans (local only)
 docs/plans/
+
+# Docker auto-generated configs
+docker/configs/
