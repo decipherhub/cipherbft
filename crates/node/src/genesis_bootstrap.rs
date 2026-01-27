@@ -215,6 +215,8 @@ pub struct GenesisGeneratorConfig {
     pub initial_balance: U256,
     /// Gas limit for genesis block (default: 30M).
     pub gas_limit: U256,
+    /// Extra accounts to allocate balances to (address, balance_wei) pairs.
+    pub extra_alloc: Vec<(Address, U256)>,
 }
 
 impl Default for GenesisGeneratorConfig {
@@ -228,6 +230,7 @@ impl Default for GenesisGeneratorConfig {
             // 100 CPH = 100 * 10^18 wei
             initial_balance: U256::from(100_000_000_000_000_000_000u128),
             gas_limit: U256::from(30_000_000u64),
+            extra_alloc: Vec::new(),
         }
     }
 }
@@ -375,6 +378,11 @@ impl GenesisGenerator {
                 ed25519_secret_hex: Some(ed25519_secret_hex),
                 bls_secret_hex: Some(bls_secret_hex),
             });
+        }
+
+        // Add extra alloc accounts
+        for (address, balance) in &config.extra_alloc {
+            alloc.insert(*address, AllocEntry::new(*balance));
         }
 
         // Create the genesis structure
@@ -1259,5 +1267,53 @@ mod tests {
         assert_eq!(parsed.address, key_file.address);
         assert_eq!(parsed.ed25519_pubkey, key_file.ed25519_pubkey);
         assert_eq!(parsed.bls_pubkey, key_file.bls_pubkey);
+    }
+
+    #[test]
+    fn test_genesis_generator_config_with_extra_alloc() {
+        let extra = vec![(
+            "0x3E54B36f4F8EFaa017888E66fb6dB17098437ac7"
+                .parse()
+                .unwrap(),
+            U256::from(1_000_000_000_000_000_000_000_u128), // 1000 ETH
+        )];
+        let config = GenesisGeneratorConfig {
+            extra_alloc: extra.clone(),
+            ..Default::default()
+        };
+        assert_eq!(config.extra_alloc.len(), 1);
+        assert_eq!(
+            config.extra_alloc[0].0,
+            "0x3E54B36f4F8EFaa017888E66fb6dB17098437ac7"
+                .parse::<Address>()
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_genesis_generator_includes_extra_alloc() {
+        let extra_addr: Address = "0x3E54B36f4F8EFaa017888E66fb6dB17098437ac7"
+            .parse()
+            .unwrap();
+        let extra_balance = U256::from(500_000_000_000_000_000_000u128); // 500 ETH
+
+        let config = GenesisGeneratorConfig {
+            num_validators: 1,
+            extra_alloc: vec![(extra_addr, extra_balance)],
+            ..Default::default()
+        };
+
+        let mut rng = rand::thread_rng();
+        let result = GenesisGenerator::generate(&mut rng, config).unwrap();
+
+        // Verify extra account is in alloc
+        assert!(result.genesis.alloc.contains_key(&extra_addr));
+        assert_eq!(
+            result.genesis.alloc.get(&extra_addr).unwrap().balance,
+            extra_balance
+        );
+
+        // Verify we have 2 accounts total (1 validator + 1 extra)
+        assert_eq!(result.genesis.alloc.len(), 2);
     }
 }

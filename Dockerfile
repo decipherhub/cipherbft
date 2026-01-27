@@ -1,9 +1,14 @@
 # Build stage
-FROM rust:1.75-bookworm as builder
+FROM rust:1.88-bookworm AS builder
+
+# Install build dependencies for reth-mdbx-sys (bindgen needs libclang)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends clang libclang-dev && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy manifests
+# Copy manifests first for better layer caching
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
@@ -14,7 +19,7 @@ RUN cargo build --release -p cipherd
 FROM debian:bookworm-slim
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates && \
+    apt-get install -y --no-install-recommends ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/cipherd /usr/local/bin/
