@@ -6,8 +6,8 @@
 use cipherbft_data_chain::worker::TransactionValidator;
 use cipherbft_execution::{
     keccak256, BlockInput, Bytes, Car as ExecutionCar, ChainConfig, Cut as ExecutionCut,
-    ExecutionEngine, ExecutionLayerTrait, ExecutionResult, GenesisInitializer, GenesisValidatorData,
-    InMemoryProvider, B256, U256,
+    ExecutionEngine, ExecutionLayerTrait, ExecutionResult, GenesisInitializer,
+    GenesisValidatorData, InMemoryProvider, B256, U256,
 };
 use cipherbft_storage::DclStore;
 use cipherbft_types::genesis::Genesis;
@@ -154,9 +154,9 @@ impl ExecutionBridge {
         // This must be done BEFORE creating the ExecutionEngine so that
         // eth_getBalance and other RPC queries can see the initial state.
         let initializer = GenesisInitializer::new(provider_arc);
-        let bootstrap_result = initializer.initialize(genesis).map_err(|e| {
-            anyhow::anyhow!("Failed to initialize genesis state: {}", e)
-        })?;
+        let bootstrap_result = initializer
+            .initialize(genesis)
+            .map_err(|e| anyhow::anyhow!("Failed to initialize genesis state: {}", e))?;
 
         info!(
             accounts = bootstrap_result.account_count,
