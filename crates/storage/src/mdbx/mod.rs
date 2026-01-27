@@ -25,6 +25,7 @@ mod blocks;
 mod database;
 mod evm;
 mod logs;
+mod persistent_state;
 mod provider;
 mod receipts;
 mod staking;
@@ -109,4 +110,5 @@ pub use tables::{
     ValidatorSets,
     Votes,
 };
+pub use persistent_state::{MdbxPersistentStateBuilder, MdbxStatePersistence};
 pub use wal::MdbxWal;

@@ -59,6 +59,7 @@ pub mod error;
 pub mod evm;
 pub mod logs;
 pub mod memory;
+pub mod persistent_state;
 pub mod pruning;
 pub mod receipts;
 pub mod staking;
@@ -79,6 +80,10 @@ pub use memory::InMemoryStore;
 pub use pruning::{PruningConfig, PruningHandle, PruningTask};
 pub use receipts::{Log, Receipt, ReceiptStore, ReceiptStoreResult};
 pub use staking::{StakingStore, StakingStoreResult, StoredValidator};
+pub use persistent_state::{
+    DeltaLog, PersistentStateStore, SnapshotManager, StateChange, StateConfig, StateDelta,
+    StatePersistence, StateRecovery, StateSnapshot, StateTimeline, StoreStats, VersionedState,
+};
 pub use wal::{Wal, WalEntry};
 
 // Re-export MDBX types when feature is enabled

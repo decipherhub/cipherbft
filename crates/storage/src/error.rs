@@ -57,6 +57,14 @@ pub enum StorageError {
     /// Configuration error
     #[error("configuration error: {0}")]
     Config(String),
+
+    /// Invalid state error (for persistent state operations)
+    #[error("invalid state: {0}")]
+    InvalidState(String),
+
+    /// State recovery error
+    #[error("state recovery error: {0}")]
+    StateRecovery(String),
 }
 
 /// Result type for storage operations
