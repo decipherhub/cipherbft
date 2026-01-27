@@ -335,16 +335,14 @@ mod tests {
 
         fn apply_delta(&mut self, delta: &StateDelta) -> Result<()> {
             for change in &delta.changes {
-                match change {
-                    StateChange::FieldUpdate {
-                        path, new_value, ..
-                    } => {
-                        if path == "value" && new_value.len() >= 8 {
-                            self.value =
-                                u64::from_le_bytes(new_value[..8].try_into().expect("checked len"));
-                        }
+                if let StateChange::FieldUpdate {
+                    path, new_value, ..
+                } = change
+                {
+                    if path == "value" && new_value.len() >= 8 {
+                        self.value =
+                            u64::from_le_bytes(new_value[..8].try_into().expect("checked len"));
                     }
-                    _ => {}
                 }
             }
             self.version = delta.to_version;

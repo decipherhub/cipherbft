@@ -958,17 +958,15 @@ mod tests {
 
         fn apply_delta(&mut self, delta: &StateDelta) -> Result<()> {
             for change in &delta.changes {
-                match change {
-                    StateChange::FieldUpdate {
-                        path, new_value, ..
-                    } => {
-                        if path == "counter" && new_value.len() >= 8 {
-                            self.counter = u64::from_le_bytes(new_value[..8].try_into().unwrap());
-                        } else if path == "data" {
-                            self.data = String::from_utf8_lossy(new_value).to_string();
-                        }
+                if let StateChange::FieldUpdate {
+                    path, new_value, ..
+                } = change
+                {
+                    if path == "counter" && new_value.len() >= 8 {
+                        self.counter = u64::from_le_bytes(new_value[..8].try_into().unwrap());
+                    } else if path == "data" {
+                        self.data = String::from_utf8_lossy(new_value).to_string();
                     }
-                    _ => {}
                 }
             }
             self.version = delta.to_version;
@@ -1133,7 +1131,7 @@ mod tests {
 
         // Should have initial + one auto-snapshot
         let versions = store.snapshot_versions();
-        assert!(versions.len() >= 1);
+        assert!(!versions.is_empty());
     }
 
     #[test]
