@@ -813,8 +813,17 @@ impl Node {
             let block_store = Arc::new(MdbxBlockStore::new(db_env.clone()));
             let receipt_store = Arc::new(MdbxReceiptStore::new(db_env));
 
-            // Create a provider for state queries (shared with execution layer)
-            let provider = Arc::new(InMemoryProvider::new());
+            // Get provider from ExecutionBridge to share state with execution layer.
+            // This ensures eth_getBalance and other RPC queries see the same state
+            // as the execution layer, including genesis allocations.
+            let provider = if let Some(ref bridge) = self.execution_bridge {
+                bridge.provider().await
+            } else {
+                // Fallback: create new provider if no execution bridge is configured
+                // (e.g., for tests or minimal node configurations)
+                warn!("RPC enabled but no execution bridge configured - creating empty provider");
+                Arc::new(InMemoryProvider::new())
+            };
 
             // Create MdbxRpcStorage with chain ID
             let chain_id = 85300u64; // CipherBFT testnet chain ID

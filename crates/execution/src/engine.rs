@@ -283,6 +283,15 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
             .get_total_distributed()
     }
 
+    /// Get a reference to the underlying storage provider.
+    ///
+    /// This allows sharing the provider with other components (e.g., RPC layer)
+    /// that need to read committed state. Since the provider uses `Arc` internally,
+    /// cloning it shares the underlying data.
+    pub fn provider(&self) -> Arc<P> {
+        self.database.provider()
+    }
+
     /// Process all transactions in a block.
     ///
     /// Returns a tuple containing receipts, cumulative gas used, logs, and total fees.
