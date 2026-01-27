@@ -380,6 +380,11 @@ impl GenesisGenerator {
             });
         }
 
+        // Add extra alloc accounts
+        for (address, balance) in &config.extra_alloc {
+            alloc.insert(*address, AllocEntry::new(*balance));
+        }
+
         // Create the genesis structure
         let genesis_time = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
@@ -1283,5 +1288,32 @@ mod tests {
                 .parse::<Address>()
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn test_genesis_generator_includes_extra_alloc() {
+        let extra_addr: Address = "0x3E54B36f4F8EFaa017888E66fb6dB17098437ac7"
+            .parse()
+            .unwrap();
+        let extra_balance = U256::from(500_000_000_000_000_000_000u128); // 500 ETH
+
+        let config = GenesisGeneratorConfig {
+            num_validators: 1,
+            extra_alloc: vec![(extra_addr, extra_balance)],
+            ..Default::default()
+        };
+
+        let mut rng = rand::thread_rng();
+        let result = GenesisGenerator::generate(&mut rng, config).unwrap();
+
+        // Verify extra account is in alloc
+        assert!(result.genesis.alloc.contains_key(&extra_addr));
+        assert_eq!(
+            result.genesis.alloc.get(&extra_addr).unwrap().balance,
+            extra_balance
+        );
+
+        // Verify we have 2 accounts total (1 validator + 1 extra)
+        assert_eq!(result.genesis.alloc.len(), 2);
     }
 }
