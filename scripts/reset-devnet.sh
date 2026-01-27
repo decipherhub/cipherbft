@@ -2,7 +2,7 @@
 # Reset devnet state while preserving keys and configuration
 #
 # This script:
-# - Stops all running nodes (if any)
+# - Stops all running containers (if any)
 # - Wipes all blockchain state (data directories)
 # - Preserves keys and configuration files
 # - Clears logs
@@ -16,8 +16,11 @@
 
 set -e
 
-DEVNET_DIR="${1:-./devnet}"
-SCRIPT_DIR="$(dirname "$0")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+DEVNET_DIR="${1:-$PROJECT_ROOT/devnet}"
+DOCKER_DIR="$PROJECT_ROOT/docker"
+COMPOSE_FILE="$DOCKER_DIR/docker-compose.yml"
 
 # Ensure the devnet directory exists
 if [ ! -d "$DEVNET_DIR" ]; then
@@ -28,10 +31,30 @@ fi
 echo "Resetting devnet: $DEVNET_DIR"
 echo ""
 
-# Stop any running nodes first
+# Stop any running containers first
+if [ -f "$COMPOSE_FILE" ]; then
+    if docker info > /dev/null 2>&1; then
+        echo "Stopping any running containers..."
+        cd "$DOCKER_DIR"
+        docker compose down --timeout 5 2>/dev/null || true
+        cd - > /dev/null
+        echo ""
+    fi
+fi
+
+# Also clean up old-style PID files if they exist
 if [ -d "${DEVNET_DIR}/pids" ]; then
-    echo "Stopping any running nodes..."
-    "$SCRIPT_DIR/stop-devnet.sh" "$DEVNET_DIR"
+    echo "Cleaning up legacy PID files..."
+    for PID_FILE in "${DEVNET_DIR}"/pids/*.pid; do
+        if [ -f "$PID_FILE" ]; then
+            PID=$(cat "$PID_FILE" 2>/dev/null || true)
+            if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+                echo "  Stopping legacy process (PID $PID)..."
+                kill -TERM "$PID" 2>/dev/null || true
+            fi
+        fi
+    done
+    rm -rf "${DEVNET_DIR}/pids"
     echo ""
 fi
 
@@ -54,19 +77,11 @@ for NODE_DIR in $NODES; do
     fi
 done
 
-# Clear logs directory
+# Clear logs directory (legacy)
 LOG_DIR="${DEVNET_DIR}/logs"
 if [ -d "$LOG_DIR" ]; then
-    echo "Clearing logs..."
+    echo "Clearing legacy logs..."
     rm -rf "$LOG_DIR"
-    mkdir -p "$LOG_DIR"
-fi
-
-# Clear PIDs directory
-PID_DIR="${DEVNET_DIR}/pids"
-if [ -d "$PID_DIR" ]; then
-    rm -rf "$PID_DIR"
-    mkdir -p "$PID_DIR"
 fi
 
 echo ""
@@ -79,7 +94,7 @@ echo "  - Validator keys"
 echo ""
 echo "Cleared:"
 echo "  - Blockchain state (data directories)"
-echo "  - Logs"
-echo "  - PID files"
+echo "  - Docker containers"
+echo "  - Legacy logs and PID files"
 echo ""
 echo "To start fresh: ./scripts/start-devnet.sh $DEVNET_DIR"

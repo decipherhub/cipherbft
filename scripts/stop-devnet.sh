@@ -1,70 +1,79 @@
 #!/bin/bash
-# Stop all devnet validator nodes gracefully
+# Stop all devnet validator nodes using Docker Compose
 #
 # Usage:
-#   ./scripts/stop-devnet.sh [devnet_dir]
+#   ./scripts/stop-devnet.sh [options]
+#
+# Options:
+#   --remove-volumes  Also remove named volumes
+#   --timeout N       Timeout in seconds for graceful shutdown (default: 10)
 #
 # Example:
-#   ./scripts/stop-devnet.sh ./devnet
-#   ./scripts/stop-devnet.sh  # defaults to ./devnet
+#   ./scripts/stop-devnet.sh
+#   ./scripts/stop-devnet.sh --remove-volumes
 
 set -e
 
-DEVNET_DIR="${1:-./devnet}"
-PID_DIR="${DEVNET_DIR}/pids"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+DOCKER_DIR="$PROJECT_ROOT/docker"
+COMPOSE_FILE="$DOCKER_DIR/docker-compose.yml"
 
-if [ ! -d "$PID_DIR" ]; then
-    echo "No PID directory found: $PID_DIR"
-    echo "Devnet may not be running."
+# Parse arguments
+VOLUMES_FLAG=""
+TIMEOUT="10"
+
+for arg in "$@"; do
+    case $arg in
+        --remove-volumes)
+            VOLUMES_FLAG="-v"
+            ;;
+        --timeout)
+            shift
+            TIMEOUT="$1"
+            ;;
+        --timeout=*)
+            TIMEOUT="${arg#*=}"
+            ;;
+        -*)
+            echo "Unknown option: $arg"
+            exit 1
+            ;;
+    esac
+done
+
+# Check if compose file exists
+if [ ! -f "$COMPOSE_FILE" ]; then
+    echo "No docker-compose.yml found at: $COMPOSE_FILE"
+    echo "Devnet may not be running or was started differently."
     exit 0
 fi
 
-# Find all PID files
-PID_FILES=$(ls "${PID_DIR}"/*.pid 2>/dev/null || true)
-
-if [ -z "$PID_FILES" ]; then
-    echo "No running nodes found."
-    exit 0
+# Check if Docker is running
+if ! docker info > /dev/null 2>&1; then
+    echo "Error: Docker is not running."
+    exit 1
 fi
 
 echo "Stopping devnet validators..."
 echo ""
 
-for PID_FILE in $PID_FILES; do
-    NODE_NAME=$(basename "$PID_FILE" .pid)
+cd "$DOCKER_DIR"
 
-    if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE")
+# Check if any containers are running
+RUNNING=$(docker compose ps -q 2>/dev/null || true)
 
-        if kill -0 "$PID" 2>/dev/null; then
-            echo "Stopping $NODE_NAME (PID $PID)..."
-            kill -TERM "$PID" 2>/dev/null || true
-        else
-            echo "$NODE_NAME not running (stale PID file)"
-        fi
+if [ -z "$RUNNING" ]; then
+    echo "No running containers found."
+    exit 0
+fi
 
-        rm -f "$PID_FILE"
-    fi
-done
-
-# Wait a moment for graceful shutdown
-sleep 1
-
-# Check if any processes are still running and force kill if needed
-for PID_FILE in $PID_FILES; do
-    NODE_NAME=$(basename "$PID_FILE" .pid)
-    PID_FILE_PATH="${PID_DIR}/${NODE_NAME}.pid"
-
-    # Re-read in case file was recreated
-    if [ -f "$PID_FILE_PATH" ]; then
-        PID=$(cat "$PID_FILE_PATH")
-        if kill -0 "$PID" 2>/dev/null; then
-            echo "Force killing $NODE_NAME (PID $PID)..."
-            kill -9 "$PID" 2>/dev/null || true
-            rm -f "$PID_FILE_PATH"
-        fi
-    fi
-done
+# Stop and remove containers
+docker compose down $VOLUMES_FLAG --timeout "$TIMEOUT"
 
 echo ""
 echo "Devnet stopped."
+
+if [ -n "$VOLUMES_FLAG" ]; then
+    echo "Named volumes have been removed."
+fi

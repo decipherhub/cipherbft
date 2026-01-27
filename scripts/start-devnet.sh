@@ -1,18 +1,59 @@
 #!/bin/bash
-# Start all devnet validator nodes as background processes
+# Start all devnet validator nodes using Docker Compose
 #
 # Usage:
-#   ./scripts/start-devnet.sh [devnet_dir]
+#   ./scripts/start-devnet.sh [devnet_dir] [options]
+#
+# Options:
+#   --build    Force rebuild of Docker images
+#   --no-monitoring  Skip Prometheus and Grafana services
+#   --detach   Run in detached mode (default)
+#   --attach   Run in foreground (shows logs)
 #
 # Example:
 #   ./scripts/start-devnet.sh ./devnet
+#   ./scripts/start-devnet.sh ./devnet --build
 #   ./scripts/start-devnet.sh  # defaults to ./devnet
 
 set -e
 
-DEVNET_DIR="${1:-./devnet}"
-LOG_DIR="${DEVNET_DIR}/logs"
-PID_DIR="${DEVNET_DIR}/pids"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# Parse arguments
+DEVNET_DIR=""
+BUILD_FLAG=""
+DETACH_FLAG="-d"
+MONITORING="true"
+
+for arg in "$@"; do
+    case $arg in
+        --build)
+            BUILD_FLAG="--build"
+            ;;
+        --no-monitoring)
+            MONITORING="false"
+            ;;
+        --attach)
+            DETACH_FLAG=""
+            ;;
+        --detach)
+            DETACH_FLAG="-d"
+            ;;
+        -*)
+            echo "Unknown option: $arg"
+            exit 1
+            ;;
+        *)
+            if [ -z "$DEVNET_DIR" ]; then
+                DEVNET_DIR="$arg"
+            fi
+            ;;
+    esac
+done
+
+DEVNET_DIR="${DEVNET_DIR:-$PROJECT_ROOT/devnet}"
+DOCKER_DIR="$PROJECT_ROOT/docker"
 
 # Ensure the devnet directory exists
 if [ ! -d "$DEVNET_DIR" ]; then
@@ -23,10 +64,6 @@ if [ ! -d "$DEVNET_DIR" ]; then
     exit 1
 fi
 
-# Create log and pid directories
-mkdir -p "$LOG_DIR"
-mkdir -p "$PID_DIR"
-
 # Find all node directories
 NODES=$(ls -d "${DEVNET_DIR}"/node* 2>/dev/null | sort -V)
 
@@ -35,73 +72,67 @@ if [ -z "$NODES" ]; then
     exit 1
 fi
 
-echo "Starting devnet validators from: $DEVNET_DIR"
+NODE_COUNT=$(echo "$NODES" | wc -l | tr -d ' ')
+
+echo "Starting devnet with $NODE_COUNT validators using Docker Compose..."
 echo ""
 
-# Build cipherd first
-echo "Building cipherd..."
-cargo build -p cipherd --release
-CIPHERD_BIN="$(pwd)/target/release/cipherd"
+# Generate docker-compose.yml
+echo "Generating Docker Compose configuration..."
+"$SCRIPT_DIR/generate-compose.sh" "$DEVNET_DIR" "$DOCKER_DIR"
+echo ""
 
-if [ ! -f "$CIPHERD_BIN" ]; then
-    echo "Error: Failed to build cipherd"
+# Check if Docker is running
+if ! docker info > /dev/null 2>&1; then
+    echo "Error: Docker is not running. Please start Docker first."
     exit 1
 fi
 
-# Start each node
+# Build services list
+SERVICES=""
 for NODE_DIR in $NODES; do
     NODE_NAME=$(basename "$NODE_DIR")
-    CONFIG_FILE="${NODE_DIR}/config/node.json"
-
-    if [ ! -f "$CONFIG_FILE" ]; then
-        echo "Warning: Config not found for $NODE_NAME, skipping"
-        continue
-    fi
-
-    LOG_FILE="${LOG_DIR}/${NODE_NAME}.log"
-    PID_FILE="${PID_DIR}/${NODE_NAME}.pid"
-
-    # Check if already running
-    if [ -f "$PID_FILE" ]; then
-        OLD_PID=$(cat "$PID_FILE")
-        if kill -0 "$OLD_PID" 2>/dev/null; then
-            echo "$NODE_NAME already running (PID $OLD_PID), skipping"
-            continue
-        fi
-        rm -f "$PID_FILE"
-    fi
-
-    echo "Starting $NODE_NAME..."
-
-    # Start the node in background
-    nohup "$CIPHERD_BIN" start --config "$CONFIG_FILE" > "$LOG_FILE" 2>&1 &
-    NODE_PID=$!
-
-    echo "$NODE_PID" > "$PID_FILE"
-    echo "  PID: $NODE_PID"
-    echo "  Log: $LOG_FILE"
-
-    # Small delay between node starts
-    sleep 0.5
+    NODE_NUM=${NODE_NAME#node}
+    SERVICES="$SERVICES validator-$NODE_NUM"
 done
 
-echo ""
-echo "Devnet started successfully!"
-echo ""
-echo "Logs:     $LOG_DIR/"
-echo "PIDs:     $PID_DIR/"
-echo ""
-echo "To stop:  ./scripts/stop-devnet.sh $DEVNET_DIR"
-echo "To reset: ./scripts/reset-devnet.sh $DEVNET_DIR"
-echo ""
-echo "RPC endpoints:"
+if [ "$MONITORING" = "true" ]; then
+    SERVICES="$SERVICES prometheus grafana"
+fi
 
-# Extract RPC ports from configs
-for NODE_DIR in $NODES; do
-    NODE_NAME=$(basename "$NODE_DIR")
-    CONFIG_FILE="${NODE_DIR}/config/node.json"
-    if [ -f "$CONFIG_FILE" ]; then
-        HTTP_PORT=$(jq -r '.rpc_http_port // 8545' "$CONFIG_FILE")
-        echo "  $NODE_NAME: http://localhost:$HTTP_PORT"
+# Start docker-compose
+cd "$DOCKER_DIR"
+
+echo "Starting services..."
+if [ -n "$BUILD_FLAG" ]; then
+    echo "  (rebuilding images)"
+fi
+
+docker compose up $DETACH_FLAG $BUILD_FLAG $SERVICES
+
+if [ -n "$DETACH_FLAG" ]; then
+    echo ""
+    echo "Devnet started successfully!"
+    echo ""
+    echo "Logs:     docker compose -f $DOCKER_DIR/docker-compose.yml logs -f"
+    echo ""
+    echo "To stop:  ./scripts/stop-devnet.sh"
+    echo "To reset: ./scripts/reset-devnet.sh"
+    echo ""
+    echo "RPC endpoints:"
+
+    NODE_INDEX=0
+    for NODE_DIR in $NODES; do
+        NODE_NAME=$(basename "$NODE_DIR")
+        RPC_HTTP_PORT=$((8545 + NODE_INDEX * 10))
+        echo "  $NODE_NAME: http://localhost:$RPC_HTTP_PORT"
+        NODE_INDEX=$((NODE_INDEX + 1))
+    done
+
+    if [ "$MONITORING" = "true" ]; then
+        echo ""
+        echo "Monitoring:"
+        echo "  Prometheus: http://localhost:9090"
+        echo "  Grafana:    http://localhost:3000 (admin/admin)"
     fi
-done
+fi
