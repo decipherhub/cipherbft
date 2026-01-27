@@ -1241,6 +1241,61 @@ impl Table for BlockBlooms {
     type Value = BincodeValue<StoredBloom>;
 }
 
+// =============================================================================
+// Persistent State Tables (for StatePersistence trait)
+// =============================================================================
+
+/// Stored state snapshot for MDBX persistence
+/// Note: Uses timestamp_secs instead of Instant since Instant can't be serialized
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredStateSnapshot {
+    /// The serialized state as bytes
+    pub state_bytes: Vec<u8>,
+    /// Version at snapshot time
+    pub version: u64,
+    /// Unix timestamp when snapshot was taken
+    pub timestamp_secs: u64,
+    /// Whether this snapshot has been marked as persisted
+    pub persisted: bool,
+}
+
+/// Stored state delta for MDBX persistence
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredStateDelta {
+    /// Starting version
+    pub from_version: u64,
+    /// Ending version
+    pub to_version: u64,
+    /// Serialized delta data (bincode-encoded changes)
+    pub data: Vec<u8>,
+    /// Creation timestamp (Unix seconds)
+    pub created_at: u64,
+}
+
+/// StateSnapshots table: Version -> StoredStateSnapshot
+/// Stores versioned state snapshots for recovery
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StateSnapshots;
+
+impl Table for StateSnapshots {
+    const NAME: &'static str = "StateSnapshots";
+    const DUPSORT: bool = false;
+    type Key = HeightKey;
+    type Value = BincodeValue<StoredStateSnapshot>;
+}
+
+/// StateDeltas table: FromVersion -> StoredStateDelta
+/// Stores state deltas between versions for incremental recovery
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StateDeltas;
+
+impl Table for StateDeltas {
+    const NAME: &'static str = "StateDeltas";
+    const DUPSORT: bool = false;
+    type Key = HeightKey;
+    type Value = BincodeValue<StoredStateDelta>;
+}
+
 // UnitKey needs Compress/Decompress for use as a Value
 impl Compress for UnitKey {
     type Compressed = Vec<u8>;
@@ -1297,6 +1352,9 @@ pub enum CipherBftTable {
     Logs,
     LogsByAddress,
     BlockBlooms,
+    // Persistent state tables
+    StateSnapshots,
+    StateDeltas,
 }
 
 impl CipherBftTable {
@@ -1332,6 +1390,9 @@ impl CipherBftTable {
         Self::Logs,
         Self::LogsByAddress,
         Self::BlockBlooms,
+        // Persistent state tables
+        Self::StateSnapshots,
+        Self::StateDeltas,
     ];
 }
 
@@ -1362,6 +1423,8 @@ impl TableInfo for CipherBftTable {
             Self::Logs => Logs::NAME,
             Self::LogsByAddress => LogsByAddress::NAME,
             Self::BlockBlooms => BlockBlooms::NAME,
+            Self::StateSnapshots => StateSnapshots::NAME,
+            Self::StateDeltas => StateDeltas::NAME,
         }
     }
 
@@ -1391,6 +1454,8 @@ impl TableInfo for CipherBftTable {
             Self::Logs => Logs::DUPSORT,
             Self::LogsByAddress => LogsByAddress::DUPSORT,
             Self::BlockBlooms => BlockBlooms::DUPSORT,
+            Self::StateSnapshots => StateSnapshots::DUPSORT,
+            Self::StateDeltas => StateDeltas::DUPSORT,
         }
     }
 }
@@ -1431,6 +1496,9 @@ impl Tables {
         Logs::NAME,
         LogsByAddress::NAME,
         BlockBlooms::NAME,
+        // Persistent state tables
+        StateSnapshots::NAME,
+        StateDeltas::NAME,
     ];
 }
 
