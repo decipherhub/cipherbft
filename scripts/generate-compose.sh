@@ -148,20 +148,23 @@ for NODE_DIR in $NODES; do
     NODE_NAME=$(basename "$NODE_DIR")
     NODE_NUM=${NODE_NAME#node}
 
-    # Calculate port offsets (base ports: 8545, 8546, 9100)
+    # Calculate port offsets
+    # RPC ports: 8545, 8555, 8565, 8575... (matches node.json config)
+    # Metrics: host 19100+ maps to container 9100, 9110, 9120...
     RPC_HTTP_PORT=$((8545 + NODE_INDEX * 10))
     RPC_WS_PORT=$((8546 + NODE_INDEX * 10))
-    METRICS_PORT=$((19100 + NODE_INDEX))
+    HOST_METRICS_PORT=$((19100 + NODE_INDEX))
+    CONTAINER_METRICS_PORT=$((9100 + NODE_INDEX * 10))
 
     # Calculate static IP for this validator
     VALIDATOR_IP="${VALIDATOR_IP_BASE}.$((VALIDATOR_IP_START + NODE_INDEX))"
 
-    # Build prometheus targets list (use static IPs)
+    # Build prometheus targets list (use static IPs with correct metrics ports)
     if [ -n "$PROMETHEUS_TARGETS" ]; then
         PROMETHEUS_TARGETS="${PROMETHEUS_TARGETS}
-        - '${VALIDATOR_IP}:9100'"
+        - '${VALIDATOR_IP}:${CONTAINER_METRICS_PORT}'"
     else
-        PROMETHEUS_TARGETS="        - '${VALIDATOR_IP}:9100'"
+        PROMETHEUS_TARGETS="        - '${VALIDATOR_IP}:${CONTAINER_METRICS_PORT}'"
     fi
 
     cat >> "$COMPOSE_FILE" << EOF
@@ -177,9 +180,9 @@ for NODE_DIR in $NODES; do
       - ${RELATIVE_PATH}/devnet/${NODE_NAME}/data:/app/data
       - ${RELATIVE_PATH}/devnet/genesis.json:/app/genesis.json:ro
     ports:
-      - "${RPC_HTTP_PORT}:8545"
-      - "${RPC_WS_PORT}:8546"
-      - "${METRICS_PORT}:9100"
+      - "${RPC_HTTP_PORT}:${RPC_HTTP_PORT}"
+      - "${RPC_WS_PORT}:${RPC_WS_PORT}"
+      - "${HOST_METRICS_PORT}:${CONTAINER_METRICS_PORT}"
     networks:
       cipherbft:
         ipv4_address: ${VALIDATOR_IP}
