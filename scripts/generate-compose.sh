@@ -1,9 +1,10 @@
 #!/bin/bash
 # Generate docker-compose.yml dynamically based on devnet configuration
 #
-# This script creates a docker-compose.yml file that includes:
-# - One service per validator node found in the devnet directory
-# - Prometheus for metrics collection
+# This script creates:
+# - docker-compose.yml with one service per validator
+# - Docker-specific node configs with container paths
+# - Prometheus config for metrics collection
 # - Grafana for visualization
 #
 # Usage:
@@ -49,6 +50,74 @@ echo "Generating docker-compose.yml for $NODE_COUNT validators..."
 # Calculate relative path from output dir to project root
 RELATIVE_PATH=$(python3 -c "import os.path; print(os.path.relpath('$PROJECT_ROOT', '$OUTPUT_DIR'))")
 
+# Create configs directory for Docker-specific configs
+CONFIGS_DIR="$OUTPUT_DIR/configs"
+mkdir -p "$CONFIGS_DIR"
+
+# Generate Docker-specific node configs with container paths
+echo "Generating Docker node configs..."
+for NODE_DIR in $NODES; do
+    NODE_NAME=$(basename "$NODE_DIR")
+    NODE_NUM=${NODE_NAME#node}
+    ORIGINAL_CONFIG="${NODE_DIR}/config/node.json"
+    DOCKER_CONFIG_DIR="${CONFIGS_DIR}/${NODE_NAME}"
+    mkdir -p "$DOCKER_CONFIG_DIR"
+    DOCKER_CONFIG="${DOCKER_CONFIG_DIR}/node.json"
+
+    if [ ! -f "$ORIGINAL_CONFIG" ]; then
+        echo "Warning: Config not found: $ORIGINAL_CONFIG"
+        continue
+    fi
+
+    # Transform config paths for Docker container
+    # Also update peer addresses to use Docker container names
+    python3 << PYEOF
+import json
+import re
+
+with open("$ORIGINAL_CONFIG") as f:
+    config = json.load(f)
+
+# Update paths to container paths
+config["keystore_dir"] = "/app/keys"
+config["home_dir"] = "/app"
+config["data_dir"] = "/app/data"
+config["genesis_path"] = "/app/genesis.json"
+
+# Update peer addresses to use Docker container names
+# Map 127.0.0.1:90X0 -> validator-X:90X0
+for peer in config.get("peers", []):
+    for key in ["primary_addr", "consensus_addr"]:
+        if key in peer:
+            addr = peer[key]
+            # Extract port to determine which node this is
+            match = re.match(r"127\.0\.0\.1:(\d+)", addr)
+            if match:
+                port = int(match.group(1))
+                # Port pattern: 9000, 9010, 9020... -> node 0, 1, 2...
+                peer_node_num = (port - 9000) // 10
+                peer[key] = f"validator-{peer_node_num}:{port}"
+
+    # Update worker addresses
+    if "worker_addrs" in peer:
+        new_addrs = []
+        for addr in peer["worker_addrs"]:
+            match = re.match(r"127\.0\.0\.1:(\d+)", addr)
+            if match:
+                port = int(match.group(1))
+                peer_node_num = (port - 9000) // 10
+                new_addrs.append(f"validator-{peer_node_num}:{port}")
+            else:
+                new_addrs.append(addr)
+        peer["worker_addrs"] = new_addrs
+
+with open("$DOCKER_CONFIG", "w") as f:
+    json.dump(config, f, indent=2)
+PYEOF
+
+    echo "  Generated: $DOCKER_CONFIG"
+done
+
 # Start composing the docker-compose.yml
 COMPOSE_FILE="$OUTPUT_DIR/docker-compose.yml"
 
@@ -88,7 +157,7 @@ for NODE_DIR in $NODES; do
     container_name: cipherbft-validator-${NODE_NUM}
     command: ["start", "--config", "/app/config/node.json"]
     volumes:
-      - ${RELATIVE_PATH}/devnet/${NODE_NAME}/config:/app/config:ro
+      - ./configs/${NODE_NAME}:/app/config:ro
       - ${RELATIVE_PATH}/devnet/${NODE_NAME}/keys:/app/keys:ro
       - ${RELATIVE_PATH}/devnet/${NODE_NAME}/data:/app/data
       - ${RELATIVE_PATH}/devnet/genesis.json:/app/genesis.json:ro
