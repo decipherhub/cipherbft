@@ -218,6 +218,11 @@ enum GenesisCommands {
         /// Skip writing validator key files
         #[arg(long, default_value = "false")]
         no_keys: bool,
+
+        /// Extra account allocations in format address:balance_eth (can be repeated)
+        /// Example: --extra-alloc 0x123...abc:1000 --extra-alloc 0x456...def:500
+        #[arg(long = "extra-alloc", value_name = "ADDR:ETH")]
+        extra_alloc: Vec<String>,
     },
 
     /// Add a genesis account to an existing genesis file
@@ -314,6 +319,11 @@ enum TestnetCommands {
         /// Starting P2P port (increments by 10 for each validator)
         #[arg(long, default_value = "9000")]
         starting_port: u16,
+
+        /// Extra account allocations in format address:balance_eth (can be repeated)
+        /// Example: --extra-alloc 0x123...abc:1000 --extra-alloc 0x456...def:500
+        #[arg(long = "extra-alloc", value_name = "ADDR:ETH")]
+        extra_alloc: Vec<String>,
     },
 
     /// Start a local testnet with multiple validators (in-process)
@@ -785,6 +795,7 @@ async fn cmd_testnet(command: TestnetCommands) -> Result<()> {
             network_id,
             initial_stake_eth,
             starting_port,
+            extra_alloc,
         } => cmd_testnet_init_files(
             validators,
             &output,
@@ -792,6 +803,7 @@ async fn cmd_testnet(command: TestnetCommands) -> Result<()> {
             &network_id,
             initial_stake_eth,
             starting_port,
+            extra_alloc,
         ),
         TestnetCommands::Start {
             validators,
@@ -807,7 +819,9 @@ fn cmd_testnet_init_files(
     network_id: &str,
     initial_stake_eth: u64,
     starting_port: u16,
+    extra_alloc: Vec<String>,
 ) -> Result<()> {
+    use alloy_primitives::Address;
     use cipherd::PeerConfig;
 
     println!(
@@ -818,6 +832,29 @@ fn cmd_testnet_init_files(
 
     std::fs::create_dir_all(output)?;
 
+    // Parse extra alloc entries
+    let mut extra_alloc_parsed: Vec<(Address, U256)> = Vec::new();
+    for entry in &extra_alloc {
+        let parts: Vec<&str> = entry.split(':').collect();
+        if parts.len() != 2 {
+            anyhow::bail!(
+                "Invalid extra-alloc format: '{}'. Expected address:balance_eth",
+                entry
+            );
+        }
+        let address: Address = parts[0]
+            .parse()
+            .map_err(|_| anyhow::anyhow!("Invalid address in extra-alloc: {}", parts[0]))?;
+        let balance_eth: u64 = parts[1].parse().map_err(|_| {
+            anyhow::anyhow!(
+                "Invalid balance in extra-alloc: {}. Expected integer ETH value",
+                parts[1]
+            )
+        })?;
+        let balance_wei = U256::from(balance_eth) * U256::from(1_000_000_000_000_000_000u128);
+        extra_alloc_parsed.push((address, balance_wei));
+    }
+
     // Generate genesis with validators - this is our single source of truth for keys
     let initial_stake = U256::from(initial_stake_eth) * U256::from(1_000_000_000_000_000_000u128);
     let genesis_config = GenesisGeneratorConfig {
@@ -825,6 +862,7 @@ fn cmd_testnet_init_files(
         chain_id,
         network_id: network_id.to_string(),
         initial_stake,
+        extra_alloc: extra_alloc_parsed,
         ..Default::default()
     };
 
@@ -1279,6 +1317,7 @@ fn cmd_genesis(home: &std::path::Path, command: GenesisCommands) -> Result<()> {
             output,
             keys_dir,
             no_keys,
+            extra_alloc,
         } => cmd_genesis_generate(
             validators,
             chain_id,
@@ -1287,6 +1326,7 @@ fn cmd_genesis(home: &std::path::Path, command: GenesisCommands) -> Result<()> {
             &output,
             &keys_dir,
             no_keys,
+            extra_alloc,
         ),
         GenesisCommands::AddGenesisAccount {
             address,
@@ -1310,6 +1350,7 @@ fn cmd_genesis(home: &std::path::Path, command: GenesisCommands) -> Result<()> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_genesis_generate(
     num_validators: usize,
     chain_id: u64,
@@ -1318,9 +1359,35 @@ fn cmd_genesis_generate(
     output: &std::path::Path,
     keys_dir: &std::path::Path,
     no_keys: bool,
+    extra_alloc: Vec<String>,
 ) -> Result<()> {
+    use alloy_primitives::Address;
+
     println!("Generating genesis file...");
     println!();
+
+    // Parse extra alloc entries
+    let mut extra_alloc_parsed: Vec<(Address, U256)> = Vec::new();
+    for entry in &extra_alloc {
+        let parts: Vec<&str> = entry.split(':').collect();
+        if parts.len() != 2 {
+            anyhow::bail!(
+                "Invalid extra-alloc format: '{}'. Expected address:balance_eth",
+                entry
+            );
+        }
+        let address: Address = parts[0]
+            .parse()
+            .map_err(|_| anyhow::anyhow!("Invalid address in extra-alloc: {}", parts[0]))?;
+        let balance_eth: u64 = parts[1].parse().map_err(|_| {
+            anyhow::anyhow!(
+                "Invalid balance in extra-alloc: {}. Expected integer ETH value",
+                parts[1]
+            )
+        })?;
+        let balance_wei = U256::from(balance_eth) * U256::from(1_000_000_000_000_000_000u128);
+        extra_alloc_parsed.push((address, balance_wei));
+    }
 
     // Convert ETH to wei (1 ETH = 10^18 wei)
     let initial_stake = U256::from(initial_stake_eth) * U256::from(1_000_000_000_000_000_000u128);
@@ -1330,6 +1397,7 @@ fn cmd_genesis_generate(
         chain_id,
         network_id: network_id.to_string(),
         initial_stake,
+        extra_alloc: extra_alloc_parsed,
         ..Default::default()
     };
 
