@@ -1,0 +1,93 @@
+version: "3.8"
+
+services:
+  validator-0:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: cipherbft-validator-0
+    command: ["start", "--config", "/app/config/node.json"]
+    volumes:
+      - ../devnet/node0/config:/app/config:ro
+      - ../devnet/node0/keys:/app/keys:ro
+      - ../devnet/node0/data:/app/data
+      - ../devnet/genesis.json:/app/genesis.json:ro
+    ports:
+      - "8545:8545"
+      - "8546:8546"
+      - "9100:9100"
+    networks:
+      - cipherbft
+    environment:
+      - RUST_LOG=info
+
+  validator-1:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: cipherbft-validator-1
+    command: ["start", "--config", "/app/config/node.json"]
+    volumes:
+      - ../devnet/node1/config:/app/config:ro
+      - ../devnet/node1/keys:/app/keys:ro
+      - ../devnet/node1/data:/app/data
+      - ../devnet/genesis.json:/app/genesis.json:ro
+    ports:
+      - "8555:8545"
+      - "8556:8546"
+      - "9101:9100"
+    networks:
+      - cipherbft
+    environment:
+      - RUST_LOG=info
+
+  validator-2:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: cipherbft-validator-2
+    command: ["start", "--config", "/app/config/node.json"]
+    volumes:
+      - ../devnet/node2/config:/app/config:ro
+      - ../devnet/node2/keys:/app/keys:ro
+      - ../devnet/node2/data:/app/data
+      - ../devnet/genesis.json:/app/genesis.json:ro
+    ports:
+      - "8565:8545"
+      - "8566:8546"
+      - "9102:9100"
+    networks:
+      - cipherbft
+    environment:
+      - RUST_LOG=info
+
+  prometheus:
+    image: prom/prometheus:v2.50.0
+    container_name: cipherbft-prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+    ports:
+      - "9090:9090"
+    networks:
+      - cipherbft
+
+  grafana:
+    image: grafana/grafana:10.3.0
+    container_name: cipherbft-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+    networks:
+      - cipherbft
+    depends_on:
+      - prometheus
+
+networks:
+  cipherbft:
+    driver: bridge

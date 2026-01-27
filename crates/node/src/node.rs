@@ -53,6 +53,8 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
+use cipherbft_metrics;
+
 /// Validator public key information for both DCL and Consensus layers
 #[derive(Clone, Debug)]
 pub struct ValidatorInfo {
@@ -365,6 +367,17 @@ impl Node {
     /// * `supervisor` - The supervisor that manages task lifecycle
     pub async fn run_with_supervisor(self, supervisor: NodeSupervisor) -> Result<()> {
         info!("Starting node with validator ID: {:?}", self.validator_id);
+
+        // Initialize and start metrics server
+        cipherbft_metrics::init();
+        let metrics_addr: std::net::SocketAddr = format!("0.0.0.0:{}", self.config.metrics_port)
+            .parse()
+            .expect("valid metrics address");
+        let _metrics_handle = cipherbft_metrics::spawn_metrics_server(metrics_addr);
+        tracing::info!(
+            "Metrics server started on port {}",
+            self.config.metrics_port
+        );
 
         // Create data directory if needed
         std::fs::create_dir_all(&self.config.data_dir)?;

@@ -74,6 +74,9 @@ pub const DEFAULT_RPC_HTTP_PORT: u16 = 8545;
 /// Default RPC WebSocket port (Ethereum standard)
 pub const DEFAULT_RPC_WS_PORT: u16 = 8546;
 
+/// Default metrics port (Prometheus standard)
+pub const DEFAULT_METRICS_PORT: u16 = 9100;
+
 /// Serde default function for rpc_http_port
 fn default_rpc_http_port() -> u16 {
     DEFAULT_RPC_HTTP_PORT
@@ -82,6 +85,11 @@ fn default_rpc_http_port() -> u16 {
 /// Serde default function for rpc_ws_port
 fn default_rpc_ws_port() -> u16 {
     DEFAULT_RPC_WS_PORT
+}
+
+/// Serde default function for metrics_port
+fn default_metrics_port() -> u16 {
+    DEFAULT_METRICS_PORT
 }
 
 /// Peer configuration
@@ -188,6 +196,9 @@ pub struct NodeConfig {
     /// WebSocket JSON-RPC port (default: 8546)
     #[serde(default = "default_rpc_ws_port")]
     pub rpc_ws_port: u16,
+    /// Port for Prometheus metrics endpoint (default: 9100)
+    #[serde(default = "default_metrics_port")]
+    pub metrics_port: u16,
 }
 
 /// Test configuration with keypairs for local testing
@@ -241,6 +252,7 @@ impl NodeConfig {
             rpc_enabled: false,
             rpc_http_port: DEFAULT_RPC_HTTP_PORT + (index as u16),
             rpc_ws_port: DEFAULT_RPC_WS_PORT + (index as u16),
+            metrics_port: DEFAULT_METRICS_PORT + (index as u16),
         };
 
         LocalTestConfig {

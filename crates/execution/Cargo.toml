@@ -11,6 +11,7 @@ cipherbft-types = { path = "../types" }
 cipherbft-crypto = { path = "../crypto" }
 cipherbft-data-chain = { path = "../data-chain" }
 cipherbft-storage = { path = "../storage", optional = true }
+cipherbft-metrics = { path = "../metrics" }
 
 # EVM execution (revm 33.x uses modular crates)
 revm = { version = "33.1.0", default-features = false, features = ["std", "secp256k1"] }
