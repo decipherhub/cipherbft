@@ -57,7 +57,7 @@ use std::fmt::Debug;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{debug, trace, warn};
+use tracing::{debug, error, trace, warn};
 
 // ============================================================================
 // Core Traits
@@ -349,7 +349,10 @@ impl DeltaLog {
         }
 
         // Merge all pending deltas
-        let mut result = deltas.pop_front().unwrap();
+        // SAFETY: We checked deltas.len() >= 2 above, so pop_front() will succeed
+        let mut result = deltas
+            .pop_front()
+            .expect("deltas.len() >= 2 verified above");
         while let Some(next) = deltas.pop_front() {
             result = StateDelta::merge(&result, &next)?;
         }
@@ -520,8 +523,6 @@ pub struct PersistentStateStore<S: VersionedState> {
     version: AtomicU64,
     /// Last checkpoint version
     last_checkpoint: AtomicU64,
-    /// Pending changes (for batch commit)
-    pending_changes: RwLock<Option<S>>,
     /// Store statistics
     stats: RwLock<StoreStats>,
 }
@@ -572,8 +573,10 @@ impl<S: VersionedState> PersistentStateStore<S> {
         let timeline = StateTimeline::new(Arc::clone(&snapshots), Arc::clone(&delta_log));
 
         // Initialize stats with the initial snapshot counted
-        let mut initial_stats = StoreStats::default();
-        initial_stats.total_snapshots = 1;
+        let initial_stats = StoreStats {
+            total_snapshots: 1,
+            ..Default::default()
+        };
 
         Self {
             hot_state: RwLock::new(initial_state),
@@ -583,7 +586,6 @@ impl<S: VersionedState> PersistentStateStore<S> {
             config,
             version: AtomicU64::new(version),
             last_checkpoint: AtomicU64::new(version),
-            pending_changes: RwLock::new(None),
             stats: RwLock::new(initial_stats),
         }
     }
@@ -775,6 +777,13 @@ impl<S: VersionedState + Default> StateRecovery<S> {
     /// 2. Replay deltas since that snapshot
     /// 3. Validate recovered state
     /// 4. Set as current hot state
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - A delta has `from_version > state.version()` (indicates a gap)
+    /// - Delta application fails
+    /// - State validation fails
     pub async fn recover(&self, snapshot: Option<S>, deltas: Vec<StateDelta>) -> Result<u64> {
         let mut state = snapshot.unwrap_or_default();
         let initial_version = state.version();
@@ -785,21 +794,44 @@ impl<S: VersionedState + Default> StateRecovery<S> {
             "Starting state recovery"
         );
 
+        let mut applied = 0u64;
+        let mut stale_skipped = 0u64;
+
         // Apply deltas in order
         for delta in deltas {
-            if delta.from_version == state.version() {
+            let state_version = state.version();
+
+            if delta.from_version == state_version {
+                // Normal case: delta applies directly
                 state.apply_delta(&delta)?;
+                applied += 1;
                 trace!(
                     from = delta.from_version,
                     to = delta.to_version,
                     "Applied delta"
                 );
-            } else {
-                warn!(
-                    expected = state.version(),
-                    actual = delta.from_version,
-                    "Delta version mismatch, skipping"
+            } else if delta.from_version < state_version {
+                // Stale delta (already applied or compacted) - safe to skip
+                stale_skipped += 1;
+                trace!(
+                    delta_from = delta.from_version,
+                    state_version,
+                    "Skipping stale delta (already at or past this version)"
                 );
+            } else {
+                // Gap detected: delta.from_version > state.version()
+                // This indicates missing deltas and is an error
+                error!(
+                    expected = state_version,
+                    delta_from = delta.from_version,
+                    delta_to = delta.to_version,
+                    "Recovery gap detected: missing deltas"
+                );
+                return Err(StorageError::StateRecovery(format!(
+                    "Gap detected: state at version {}, but next delta starts at {}. \
+                     Missing deltas between {} and {}.",
+                    state_version, delta.from_version, state_version, delta.from_version
+                )));
             }
         }
 
@@ -817,7 +849,10 @@ impl<S: VersionedState + Default> StateRecovery<S> {
 
         debug!(
             initial_version,
-            final_version, "State recovery completed"
+            final_version,
+            applied,
+            stale_skipped,
+            "State recovery completed"
         );
 
         Ok(final_version)
@@ -1129,5 +1164,81 @@ mod tests {
         let stats = store.stats();
         assert_eq!(stats.total_updates, 0);
         assert_eq!(stats.total_snapshots, 1); // Initial snapshot
+    }
+
+    #[tokio::test]
+    async fn test_recovery_gap_detection() {
+        let config = StateConfig::default();
+        let store = Arc::new(PersistentStateStore::<TestState>::new(config));
+        let recovery = StateRecovery::new(Arc::clone(&store));
+
+        // Start with state at version 0
+        let snapshot = TestState {
+            version: 0,
+            counter: 0,
+            data: "start".to_string(),
+        };
+
+        // Create deltas with a gap: delta starts at version 5, but state is at version 0
+        let mut delta = StateDelta::new(5, 6);
+        delta.changes.push(StateChange::FieldUpdate {
+            path: "counter".to_string(),
+            old_value: 0u64.to_le_bytes().to_vec(),
+            new_value: 10u64.to_le_bytes().to_vec(),
+        });
+
+        // Recovery should fail due to the gap
+        let result = recovery.recover(Some(snapshot), vec![delta]).await;
+        assert!(result.is_err());
+
+        let err = result.unwrap_err();
+        match err {
+            StorageError::StateRecovery(msg) => {
+                assert!(msg.contains("Gap detected"));
+                assert!(msg.contains("version 0"));
+                assert!(msg.contains("starts at 5"));
+            }
+            _ => panic!("Expected StateRecovery error, got: {:?}", err),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_recovery_stale_delta_skip() {
+        let config = StateConfig::default();
+        let store = Arc::new(PersistentStateStore::<TestState>::new(config));
+        let recovery = StateRecovery::new(Arc::clone(&store));
+
+        // Start with state at version 5
+        let snapshot = TestState {
+            version: 5,
+            counter: 50,
+            data: "v5".to_string(),
+        };
+
+        // Create a stale delta (from version 2, but state is already at 5)
+        let mut stale_delta = StateDelta::new(2, 3);
+        stale_delta.changes.push(StateChange::FieldUpdate {
+            path: "counter".to_string(),
+            old_value: 20u64.to_le_bytes().to_vec(),
+            new_value: 30u64.to_le_bytes().to_vec(),
+        });
+
+        // Create a valid delta that continues from version 5
+        let mut valid_delta = StateDelta::new(5, 6);
+        valid_delta.changes.push(StateChange::FieldUpdate {
+            path: "counter".to_string(),
+            old_value: 50u64.to_le_bytes().to_vec(),
+            new_value: 60u64.to_le_bytes().to_vec(),
+        });
+
+        // Recovery should succeed, skipping the stale delta and applying the valid one
+        let result = recovery
+            .recover(Some(snapshot), vec![stale_delta, valid_delta])
+            .await;
+        assert!(result.is_ok());
+
+        let final_version = result.unwrap();
+        assert_eq!(final_version, 6);
+        assert_eq!(store.read().counter, 60);
     }
 }
