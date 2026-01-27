@@ -19,10 +19,14 @@ use crate::{
 };
 use alloy_consensus::Header as AlloyHeader;
 use alloy_primitives::{Address, Bytes, B256, B64, U256};
+use cipherbft_metrics::execution::{
+    EXECUTION_BLOCKS_EXECUTED, EXECUTION_BLOCK_TIME, EXECUTION_TXS_PER_BLOCK,
+};
 use parking_lot::RwLock;
 use revm::primitives::hardfork::SpecId;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Instant;
 
 /// Number of block hashes to cache for BLOCKHASH opcode (256 per EIP-210, compile-time verified).
 const BLOCK_HASH_CACHE_SIZE: NonZeroUsize = match NonZeroUsize::new(256) {
@@ -394,9 +398,12 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
 
 impl<P: Provider + Clone> ExecutionLayer for ExecutionEngine<P> {
     fn execute_block(&mut self, input: BlockInput) -> Result<ExecutionResult> {
+        let start = Instant::now();
+        let tx_count = input.transactions.len();
+
         tracing::info!(
             block_number = input.block_number,
-            tx_count = input.transactions.len(),
+            tx_count = tx_count,
             "Executing block"
         );
 
@@ -459,6 +466,16 @@ impl<P: Provider + Clone> ExecutionLayer for ExecutionEngine<P> {
             receipts_count = receipts.len(),
             "Block execution complete"
         );
+
+        // Record metrics
+        let duration = start.elapsed();
+        EXECUTION_BLOCKS_EXECUTED.inc();
+        EXECUTION_BLOCK_TIME
+            .with_label_values(&[])
+            .observe(duration.as_secs_f64());
+        EXECUTION_TXS_PER_BLOCK
+            .with_label_values(&[])
+            .observe(tx_count as f64);
 
         Ok(ExecutionResult {
             block_number: input.block_number,
