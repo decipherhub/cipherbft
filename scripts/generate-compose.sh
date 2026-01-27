@@ -3,7 +3,7 @@
 #
 # This script creates:
 # - docker-compose.yml with one service per validator
-# - Docker-specific node configs with container paths
+# - Docker-specific node configs with container paths and static IPs
 # - Prometheus config for metrics collection
 # - Grafana for visualization
 #
@@ -20,6 +20,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 DEVNET_DIR="${1:-$PROJECT_ROOT/devnet}"
 OUTPUT_DIR="${2:-$PROJECT_ROOT/docker}"
+
+# Docker network configuration - static IPs for validators
+# Subnet: 172.28.0.0/16, validators start at 172.28.0.10
+DOCKER_SUBNET="172.28.0.0/16"
+DOCKER_GATEWAY="172.28.0.1"
+VALIDATOR_IP_BASE="172.28.0"
+VALIDATOR_IP_START=10
 
 # Ensure the devnet directory exists
 if [ ! -d "$DEVNET_DIR" ]; then
@@ -54,7 +61,7 @@ RELATIVE_PATH=$(python3 -c "import os.path; print(os.path.relpath('$PROJECT_ROOT
 CONFIGS_DIR="$OUTPUT_DIR/configs"
 mkdir -p "$CONFIGS_DIR"
 
-# Generate Docker-specific node configs with container paths
+# Generate Docker-specific node configs with container paths and static IPs
 echo "Generating Docker node configs..."
 for NODE_DIR in $NODES; do
     NODE_NAME=$(basename "$NODE_DIR")
@@ -70,7 +77,7 @@ for NODE_DIR in $NODES; do
     fi
 
     # Transform config paths for Docker container
-    # Also update peer addresses to use Docker container names
+    # Also update peer addresses to use static Docker IPs
     python3 << PYEOF
 import json
 import re
@@ -84,8 +91,11 @@ config["home_dir"] = "/app"
 config["data_dir"] = "/app/data"
 config["genesis_path"] = "/app/genesis.json"
 
-# Update peer addresses to use Docker container names
-# Map 127.0.0.1:90X0 -> validator-X:90X0
+# Update peer addresses to use static Docker IPs
+# Map 127.0.0.1:90X0 -> 172.28.0.(10+X):90X0
+IP_BASE = "$VALIDATOR_IP_BASE"
+IP_START = $VALIDATOR_IP_START
+
 for peer in config.get("peers", []):
     for key in ["primary_addr", "consensus_addr"]:
         if key in peer:
@@ -96,7 +106,8 @@ for peer in config.get("peers", []):
                 port = int(match.group(1))
                 # Port pattern: 9000, 9010, 9020... -> node 0, 1, 2...
                 peer_node_num = (port - 9000) // 10
-                peer[key] = f"validator-{peer_node_num}:{port}"
+                peer_ip = f"{IP_BASE}.{IP_START + peer_node_num}"
+                peer[key] = f"{peer_ip}:{port}"
 
     # Update worker addresses
     if "worker_addrs" in peer:
@@ -106,7 +117,8 @@ for peer in config.get("peers", []):
             if match:
                 port = int(match.group(1))
                 peer_node_num = (port - 9000) // 10
-                new_addrs.append(f"validator-{peer_node_num}:{port}")
+                peer_ip = f"{IP_BASE}.{IP_START + peer_node_num}"
+                new_addrs.append(f"{peer_ip}:{port}")
             else:
                 new_addrs.append(addr)
         peer["worker_addrs"] = new_addrs
@@ -141,12 +153,15 @@ for NODE_DIR in $NODES; do
     RPC_WS_PORT=$((8546 + NODE_INDEX * 10))
     METRICS_PORT=$((19100 + NODE_INDEX))
 
-    # Build prometheus targets list
+    # Calculate static IP for this validator
+    VALIDATOR_IP="${VALIDATOR_IP_BASE}.$((VALIDATOR_IP_START + NODE_INDEX))"
+
+    # Build prometheus targets list (use static IPs)
     if [ -n "$PROMETHEUS_TARGETS" ]; then
         PROMETHEUS_TARGETS="${PROMETHEUS_TARGETS}
-        - 'validator-${NODE_NUM}:9100'"
+        - '${VALIDATOR_IP}:9100'"
     else
-        PROMETHEUS_TARGETS="        - 'validator-${NODE_NUM}:9100'"
+        PROMETHEUS_TARGETS="        - '${VALIDATOR_IP}:9100'"
     fi
 
     cat >> "$COMPOSE_FILE" << EOF
@@ -166,7 +181,8 @@ for NODE_DIR in $NODES; do
       - "${RPC_WS_PORT}:8546"
       - "${METRICS_PORT}:9100"
     networks:
-      - cipherbft
+      cipherbft:
+        ipv4_address: ${VALIDATOR_IP}
     environment:
       - RUST_LOG=info
     restart: unless-stopped
@@ -182,8 +198,12 @@ EOF
     NODE_INDEX=$((NODE_INDEX + 1))
 done
 
+# Calculate IPs for monitoring services
+PROMETHEUS_IP="${VALIDATOR_IP_BASE}.$((VALIDATOR_IP_START + NODE_COUNT))"
+GRAFANA_IP="${VALIDATOR_IP_BASE}.$((VALIDATOR_IP_START + NODE_COUNT + 1))"
+
 # Add monitoring services
-cat >> "$COMPOSE_FILE" << 'EOF'
+cat >> "$COMPOSE_FILE" << EOF
   prometheus:
     image: prom/prometheus:v2.50.0
     container_name: cipherbft-prometheus
@@ -196,7 +216,8 @@ cat >> "$COMPOSE_FILE" << 'EOF'
     ports:
       - "19090:9090"
     networks:
-      - cipherbft
+      cipherbft:
+        ipv4_address: ${PROMETHEUS_IP}
     restart: unless-stopped
 
   grafana:
@@ -208,7 +229,8 @@ cat >> "$COMPOSE_FILE" << 'EOF'
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_AUTH_ANONYMOUS_ENABLED=true
     networks:
-      - cipherbft
+      cipherbft:
+        ipv4_address: ${GRAFANA_IP}
     depends_on:
       - prometheus
     restart: unless-stopped
@@ -216,6 +238,10 @@ cat >> "$COMPOSE_FILE" << 'EOF'
 networks:
   cipherbft:
     driver: bridge
+    ipam:
+      config:
+        - subnet: ${DOCKER_SUBNET}
+          gateway: ${DOCKER_GATEWAY}
 EOF
 
 echo "Generated: $COMPOSE_FILE"
@@ -249,3 +275,5 @@ EOF
 echo "Generated: $PROMETHEUS_FILE"
 echo ""
 echo "Docker Compose configuration generated for $NODE_COUNT validators."
+echo "Network: ${DOCKER_SUBNET}"
+echo "Validator IPs: ${VALIDATOR_IP_BASE}.${VALIDATOR_IP_START} - ${VALIDATOR_IP_BASE}.$((VALIDATOR_IP_START + NODE_COUNT - 1))"
