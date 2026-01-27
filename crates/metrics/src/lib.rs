@@ -11,6 +11,8 @@ pub mod network;
 pub mod server;
 pub mod storage;
 
+pub use server::{spawn_metrics_server, start_metrics_server};
+
 use once_cell::sync::Lazy;
 use prometheus::Registry;
 
