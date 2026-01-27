@@ -1,0 +1,87 @@
+{
+  "config": {
+    "chainId": 85300,
+    "homesteadBlock": 0,
+    "eip150Block": 0,
+    "eip155Block": 0,
+    "eip158Block": 0,
+    "byzantiumBlock": 0,
+    "constantinopleBlock": 0,
+    "petersburgBlock": 0,
+    "istanbulBlock": 0,
+    "berlinBlock": 0,
+    "londonBlock": 0,
+    "shanghaiTime": 0,
+    "cancunTime": 0
+  },
+  "alloc": {
+    "0x6017fe04d4465135f3f0f1a0a875a5e97109072b": {
+      "balance": "0x56bc75e2d63100000"
+    },
+    "0x5f9f7d5f49c65309a7d151dc8d80a3b65bad1978": {
+      "balance": "0x56bc75e2d63100000"
+    },
+    "0x76858a8c0702a5761d5ea94e52d7e8513cab5d46": {
+      "balance": "0x56bc75e2d63100000"
+    }
+  },
+  "gasLimit": "0x1c9c380",
+  "difficulty": "0x1",
+  "nonce": "0x0",
+  "timestamp": "0x0",
+  "cipherbft": {
+    "genesis_time": "2026-01-27T05:56:15Z",
+    "network_id": "cipherbft-testnet-1",
+    "native_token": {
+      "name": "Cipher",
+      "symbol": "CPH",
+      "decimals": 18
+    },
+    "consensus": {
+      "target_block_time_ms": 2000,
+      "timeout_propose_ms": 3000,
+      "timeout_prevote_ms": 1000,
+      "timeout_precommit_ms": 1000
+    },
+    "dcl": {
+      "enabled": true,
+      "car_interval_ms": 100,
+      "max_batch_txs": 100,
+      "max_batch_bytes": 1048576,
+      "attestation_threshold_percent": 67
+    },
+    "staking": {
+      "min_stake_wei": "0xde0b6b3a7640000",
+      "unbonding_period_seconds": 604800,
+      "slashing_fraction_percent": 1,
+      "epoch_block_reward_wei": "0x1bc16d674ec80000",
+      "fee_distribution_mode": "distribute"
+    },
+    "validators": [
+      {
+        "address": "0x6017fe04d4465135f3f0f1a0a875a5e97109072b",
+        "name": "validator-0",
+        "ed25519_pubkey": "0x0c10a694de5287c291739144c0ffac4c98c666a88e24023480a581089d59ed64",
+        "bls_pubkey": "0x8108ae025455d480880ecb40421b4556011ed84c5daa63358fc2f0d509d18036b57360524ba5242fb5992140607705f8",
+        "staked_amount": "0x1bc16d674ec800000",
+        "commission_rate_percent": 10
+      },
+      {
+        "address": "0x5f9f7d5f49c65309a7d151dc8d80a3b65bad1978",
+        "name": "validator-1",
+        "ed25519_pubkey": "0x92a4b1c3e007d6eaa84a51cd4e019437e4f75c9343e78cf65f1d67941c226fb4",
+        "bls_pubkey": "0x94b9fa119f3d1e7435d92a101cc94fda1080b618b587d9e513a09f45622652f56d095198f7624520fffbdf717a42774a",
+        "staked_amount": "0x1bc16d674ec800000",
+        "commission_rate_percent": 10
+      },
+      {
+        "address": "0x76858a8c0702a5761d5ea94e52d7e8513cab5d46",
+        "name": "validator-2",
+        "ed25519_pubkey": "0x2866f9071d75336e31ecf7eecd37e120d84878b207a386572d44247d9019976a",
+        "bls_pubkey": "0x8b373e99a8e1a3518f29df40a6cc7f0812f18986f21a665a78483a382511eddbacbf0f9b1f4b82cd260e5194e7c2d3c1",
+        "staked_amount": "0x1bc16d674ec800000",
+        "commission_rate_percent": 10
+      }
+    ]
+  }
+}

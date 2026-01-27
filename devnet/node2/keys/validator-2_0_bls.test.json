@@ -1,0 +1,8 @@
+{
+  "name": "validator-2_0_bls",
+  "key_type": "bls12-381",
+  "pubkey": "8b373e99a8e1a3518f29df40a6cc7f0812f18986f21a665a78483a382511eddbacbf0f9b1f4b82cd260e5194e7c2d3c1",
+  "secret_hex": "1f091fecba62b13c9e9b3d25b539426a5e8285c1dc32c52b11d4f7b5afe9b25c",
+  "description": "Devnet validator 2 BLS key",
+  "warning": "PLAINTEXT KEY - NOT ENCRYPTED - FOR TESTING ONLY"
+}

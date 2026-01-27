@@ -1,0 +1,8 @@
+{
+  "name": "validator-2_0_ed25519",
+  "key_type": "ed25519",
+  "pubkey": "2866f9071d75336e31ecf7eecd37e120d84878b207a386572d44247d9019976a",
+  "secret_hex": "3660195d19d28d432717460e4a798357b8e13cdfcbe2b71d42351c3d24032871",
+  "description": "Devnet validator 2 Ed25519 key",
+  "warning": "PLAINTEXT KEY - NOT ENCRYPTED - FOR TESTING ONLY"
+}
