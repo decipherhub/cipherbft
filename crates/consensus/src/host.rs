@@ -686,19 +686,75 @@ impl Actor for CipherBftHost {
             HostMsg::ProcessSyncedValue {
                 height,
                 round,
-                proposer: _,
+                proposer,
                 value_bytes,
-                reply_to: _,
+                reply_to,
             } => {
                 debug!(
                     parent: &self.span,
                     height = height.0,
                     round = round.as_i64(),
                     bytes_len = value_bytes.len(),
+                    proposer = %proposer,
                     "Processing synced value"
                 );
-                // Parse and validate the synced value
-                // For now, we don't handle synced values
+
+                // Attempt to decode the synced value
+                // The value_bytes are bincode-encoded Cut from get_decided_value
+                match bincode::deserialize::<Cut>(&value_bytes) {
+                    Ok(cut) => {
+                        let value = ConsensusValue(cut);
+                        debug!(
+                            parent: &self.span,
+                            height = height.0,
+                            "Successfully decoded synced value"
+                        );
+
+                        // Store the value so it can be retrieved when consensus decides
+                        let value_id = informalsystems_malachitebft_core_types::Value::id(&value);
+                        self.value_builder
+                            .store_received_value(value_id, value.clone())
+                            .await;
+
+                        info!(
+                            parent: &self.span,
+                            height = height.0,
+                            round = round.as_i64(),
+                            "Synced value processed and stored"
+                        );
+
+                        // Build ProposedValue for the synced value
+                        // Synced values use Round::Nil for valid_round since they come from
+                        // committed blocks, not from in-progress consensus rounds
+                        let proposed_value = ProposedValue {
+                            height,
+                            round,
+                            valid_round: Round::Nil,
+                            proposer,
+                            value,
+                            validity: Validity::Valid,
+                        };
+
+                        // Reply to the consensus engine
+                        if reply_to.send(proposed_value).is_err() {
+                            warn!(
+                                parent: &self.span,
+                                height = height.0,
+                                "Failed to send ProcessSyncedValue reply"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            parent: &self.span,
+                            height = height.0,
+                            error = %e,
+                            "Failed to decode synced value - cannot reply"
+                        );
+                        // Note: We cannot reply with None because the channel expects ProposedValue.
+                        // The consensus engine will timeout and potentially retry from another peer.
+                    }
+                }
             }
 
             HostMsg::RestreamValue {
