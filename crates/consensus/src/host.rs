@@ -71,7 +71,11 @@ impl Default for HostConfig {
             max_proposal_parts: 100,
             strict_validator_checks: true,
             pending_cuts_retention: 10,
-            decided_retention: 100,
+            // Increased from 100 to 10000 to support sync for nodes that fall significantly behind.
+            // With fast block production (~50ms/block), a node can fall 100+ blocks behind in just
+            // 5 seconds. This larger window ensures peers can serve historical data for catch-up.
+            // Note: Persistent storage (dcl_store) is also used for older blocks.
+            decided_retention: 10000,
         }
     }
 }
@@ -756,20 +760,29 @@ impl Actor for CipherBftHost {
             }
 
             HostMsg::GetDecidedValue { height, reply_to } => {
-                trace!(
+                debug!(
                     parent: &self.span,
                     height = height.0,
-                    "Getting decided value"
+                    "Getting decided value for sync request"
                 );
 
                 match self.decision_handler.get_decided_value(height).await {
                     Ok(value) => {
-                        trace!(
-                            parent: &self.span,
-                            height = height.0,
-                            found = value.is_some(),
-                            "Retrieved decided value"
-                        );
+                        if value.is_none() {
+                            // Log at info level when we can't serve a sync request - this is important
+                            // for diagnosing sync issues where peers fall too far behind
+                            info!(
+                                parent: &self.span,
+                                height = height.0,
+                                "Sync request: decided value not found (may be pruned from cache or not in storage)"
+                            );
+                        } else {
+                            debug!(
+                                parent: &self.span,
+                                height = height.0,
+                                "Sync request: serving decided value"
+                            );
+                        }
                         if reply_to.send(value).is_err() {
                             warn!(parent: &self.span, "Failed to send GetDecidedValue reply");
                         }
@@ -1527,11 +1540,21 @@ impl DecisionHandler for ChannelDecisionHandler {
             if let Some((cut, cert)) = decided.get(&height) {
                 // Encode cut to bytes using bincode
                 let value_bytes = bincode::serialize(cut).unwrap_or_default().into();
+                trace!(
+                    "Retrieved decided value from memory cache at height {}",
+                    height.0
+                );
                 return Ok(Some(RawDecidedValue {
                     certificate: cert.clone(),
                     value_bytes,
                 }));
             }
+            // Log cache miss for debugging sync issues
+            trace!(
+                "Decided value not in memory cache at height {} (cache size: {})",
+                height.0,
+                decided.len()
+            );
         }
 
         // Fall back to persistent storage for older decisions
@@ -1544,6 +1567,31 @@ impl DecisionHandler for ChannelDecisionHandler {
             let cert_bytes_opt = store.get_commit_certificate(height.0).await.map_err(|e| {
                 ConsensusError::Other(format!("Failed to get commit certificate: {}", e))
             })?;
+
+            // Log what we found in storage for debugging
+            match (&cut_opt, &cert_bytes_opt) {
+                (Some(_), Some(_)) => {
+                    // Both found, will return below
+                }
+                (Some(_), None) => {
+                    debug!(
+                        "Decided value at height {}: cut found in storage but certificate missing",
+                        height.0
+                    );
+                }
+                (None, Some(_)) => {
+                    debug!(
+                        "Decided value at height {}: certificate found in storage but cut missing",
+                        height.0
+                    );
+                }
+                (None, None) => {
+                    trace!(
+                        "Decided value at height {}: not found in persistent storage",
+                        height.0
+                    );
+                }
+            }
 
             // Both cut and certificate must exist
             if let (Some(cut), Some(cert_bytes)) = (cut_opt, cert_bytes_opt) {
@@ -1560,7 +1608,7 @@ impl DecisionHandler for ChannelDecisionHandler {
                 let value_bytes = bincode::serialize(&cut).unwrap_or_default().into();
 
                 debug!(
-                    "Retrieved decided value from storage at height {}",
+                    "Retrieved decided value from persistent storage at height {}",
                     height.0
                 );
 
@@ -1583,8 +1631,36 @@ impl DecisionHandler for ChannelDecisionHandler {
         }
 
         // Fall back to in-memory cache minimum
+        // Note: If both storage and cache are empty, this returns the minimum
+        // from the cache (which may be 1 by default). This could cause sync issues
+        // if height 1 isn't actually available. Callers should verify the returned
+        // height is servable via get_decided_value.
         let decided = self.decided_cuts.read().await;
-        Ok(decided.keys().min().cloned().unwrap_or(ConsensusHeight(1)))
+        let min = decided.keys().min().cloned();
+
+        // Only return a height if we actually have data
+        // If the cache is empty and storage has nothing, return the latest
+        // finalized height (sync will request from tip backwards if needed)
+        match min {
+            Some(height) => Ok(height),
+            None => {
+                // No data in memory cache - check if storage has the latest cut.
+                // Note: This differs from the get_earliest_finalized_height check above.
+                // That check returns the *minimum* available height, which may be None
+                // if no cuts are stored yet. Here we check for *any* cut (the latest),
+                // which handles the case where storage has data but the earliest-height
+                // index isn't populated or the storage implementation doesn't track it.
+                if let Some(store) = &self.dcl_store {
+                    if let Ok(Some(latest)) = store.get_latest_finalized_cut().await {
+                        // Return latest as min - we at least have the tip
+                        return Ok(ConsensusHeight(latest.height));
+                    }
+                }
+                // Truly empty - return 1 as genesis height
+                // This is safe because we have no history to serve
+                Ok(ConsensusHeight(1))
+            }
+        }
     }
 
     async fn get_latest_finalized_height(&self) -> Result<Option<ConsensusHeight>, ConsensusError> {
