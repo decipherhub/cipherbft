@@ -36,9 +36,10 @@ use cipherbft_execution::{
     TransactionReceipt as ExecutionReceipt, U256,
 };
 use cipherbft_storage::{
-    Block, BlockStore, Database, DatabaseConfig, DclStore, Log as StorageLog, MdbxBlockStore,
-    MdbxDclStore, MdbxReceiptStore, MdbxTransactionStore, Receipt as StorageReceipt, ReceiptStore,
-    Transaction as StorageTransaction, TransactionStore,
+    Block, BlockStore, Database, DatabaseConfig, DclStore, Log as StorageLog, LogStore,
+    MdbxBlockStore, MdbxDclStore, MdbxLogStore, MdbxReceiptStore, MdbxTransactionStore,
+    Receipt as StorageReceipt, ReceiptStore, StoredLog, Transaction as StorageTransaction,
+    TransactionStore,
 };
 use cipherbft_types::genesis::Genesis;
 use cipherbft_types::ValidatorId;
@@ -443,6 +444,8 @@ impl Node {
         // Conditionally spawn DCL (Data Chain Layer) based on genesis config
         // When disabled, we bypass DCL and send empty cuts directly to consensus
         let mut primary_handle_opt: Option<cipherbft_data_chain::primary::PrimaryHandle> = None;
+        // Store reference to primary network for RPC NetworkApi
+        let mut primary_network_opt: Option<Arc<TcpPrimaryNetwork>> = None;
 
         if self.dcl_enabled {
             // Create primary network
@@ -451,6 +454,9 @@ impl Node {
                 &self.config.peers,
                 primary_incoming_tx.clone(),
             ));
+
+            // Store reference for RPC NetworkApi before moving into adapter
+            primary_network_opt = Some(Arc::clone(&primary_network));
 
             // Start primary listener
             Arc::clone(&primary_network)
@@ -917,10 +923,11 @@ impl Node {
                 Database::open(db_config).context("Failed to open RPC storage database")?;
             let db_env = database.env().clone();
 
-            // Create block, receipt, and transaction stores
+            // Create block, receipt, transaction, and log stores
             let block_store = Arc::new(MdbxBlockStore::new(db_env.clone()));
             let receipt_store = Arc::new(MdbxReceiptStore::new(db_env.clone()));
-            let transaction_store = Arc::new(MdbxTransactionStore::new(db_env));
+            let transaction_store = Arc::new(MdbxTransactionStore::new(db_env.clone()));
+            let log_store = Arc::new(MdbxLogStore::new(db_env));
 
             // Get provider from ExecutionBridge to share state with execution layer.
             // This ensures eth_getBalance and other RPC queries see the same state
@@ -943,7 +950,7 @@ impl Node {
                 block_store,
                 receipt_store,
                 transaction_store,
-                None, // log_store - not yet implemented
+                Some(log_store), // Enable eth_getLogs queries
                 chain_id,
             ));
 
@@ -1004,33 +1011,60 @@ impl Node {
             None
         };
 
+        // Create RPC executor before the RPC setup block so it can be shared
+        // with the event loop for updating latest_block on consensus decisions
+        use cipherbft_execution::StakingPrecompile;
+        use cipherbft_rpc::EvmExecutionApi;
+        let rpc_executor: Option<Arc<EvmExecutionApi<InMemoryProvider>>> =
+            if self.config.rpc_enabled {
+                let (exec_provider, staking_precompile) = if let Some(ref bridge) =
+                    self.execution_bridge
+                {
+                    // Get the provider and staking precompile from the execution bridge
+                    // to ensure RPC queries see the same state as the execution layer
+                    (bridge.provider().await, bridge.staking_precompile().await)
+                } else {
+                    warn!("RPC execution using empty provider - eth_call may not work correctly");
+                    (
+                        Arc::new(InMemoryProvider::new()),
+                        Arc::new(StakingPrecompile::new()),
+                    )
+                };
+                let chain_id = 85300u64;
+                Some(Arc::new(EvmExecutionApi::new(
+                    exec_provider,
+                    chain_id,
+                    staking_precompile,
+                )))
+            } else {
+                None
+            };
+
         // Start RPC server if enabled
         if let (Some(ref storage), Some(ref debug_executor), Some(ref sub_mgr)) =
             (&rpc_storage, &rpc_debug_executor, &subscription_manager)
         {
-            use cipherbft_rpc::{
-                EvmExecutionApi, RpcConfig, RpcServer, StubMempoolApi, StubNetworkApi,
-            };
+            use crate::NodeNetworkApi;
+            use cipherbft_rpc::{RpcConfig, RpcServer, StubMempoolApi};
 
             let chain_id = 85300u64; // CipherBFT testnet chain ID
             let mut rpc_config = RpcConfig::with_chain_id(chain_id);
             rpc_config.http_port = self.config.rpc_http_port;
             rpc_config.ws_port = self.config.rpc_ws_port;
 
-            // Get provider from ExecutionBridge for eth_call/eth_estimateGas
-            // This shares the same genesis-initialized state as MdbxRpcStorage
-            let exec_provider = if let Some(ref bridge) = self.execution_bridge {
-                bridge.provider().await
-            } else {
-                warn!("RPC execution using empty provider - eth_call may not work correctly");
-                Arc::new(InMemoryProvider::new())
-            };
+            // Use the shared executor created above
+            let executor = rpc_executor
+                .clone()
+                .expect("rpc_executor should be Some when RPC enabled");
 
-            // Use stub implementations for mempool and network
-            // Use real EVM execution with shared provider for eth_call/eth_estimateGas
+            // Use stub implementation for mempool
             let mempool = Arc::new(StubMempoolApi::new());
-            let executor = Arc::new(EvmExecutionApi::new(exec_provider, chain_id));
-            let network = Arc::new(StubNetworkApi::new());
+            // Use real NetworkApi when DCL enabled, stub otherwise
+            let network = Arc::new(if let Some(ref pn) = primary_network_opt {
+                NodeNetworkApi::tcp(Arc::clone(pn))
+            } else {
+                NodeNetworkApi::stub()
+            });
 
             // Use with_subscription_manager to share the subscription manager
             // between the RPC server and the event loop for broadcasting blocks
@@ -1099,6 +1133,7 @@ impl Node {
             rpc_storage,
             subscription_manager,
             rpc_debug_executor,
+            rpc_executor,
             epoch_config,
             self.epoch_block_reward,
             beneficiary,
@@ -1149,6 +1184,7 @@ impl Node {
         rpc_storage: Option<Arc<cipherbft_rpc::MdbxRpcStorage<InMemoryProvider>>>,
         subscription_manager: Option<Arc<cipherbft_rpc::SubscriptionManager>>,
         rpc_debug_executor: Option<Arc<cipherbft_rpc::StubDebugExecutionApi>>,
+        rpc_executor: Option<Arc<cipherbft_rpc::EvmExecutionApi<InMemoryProvider>>>,
         epoch_config: EpochConfig,
         epoch_block_reward: U256,
         beneficiary: [u8; 20],
@@ -1284,7 +1320,13 @@ impl Node {
                                 if let Some(ref storage) = rpc_storage {
                                     // Update latest block number
                                     storage.set_latest_block(height.0);
-                                    debug!("Updated RPC block number to {}", height.0);
+                                    debug!("Updated RPC storage block number to {}", height.0);
+
+                                    // Also update executor's latest block for eth_call context
+                                    if let Some(ref executor) = rpc_executor {
+                                        executor.set_latest_block(height.0);
+                                        debug!("Updated RPC executor block number to {}", height.0);
+                                    }
 
                                     // Create and store the block
                                     let block = Self::execution_result_to_block(height.0, &block_result, beneficiary, gas_limit);
@@ -1350,6 +1392,36 @@ impl Node {
                                                         height.0
                                                     );
                                                 }
+                                            }
+                                        }
+                                    }
+
+                                    // Store logs for eth_getLogs queries
+                                    if let Some(log_store) = storage.log_store() {
+                                        let mut all_logs: Vec<StoredLog> = Vec::new();
+                                        let block_hash = block_result.block_hash.0;
+
+                                        for (receipt_idx, receipt) in block_result.execution_result.receipts.iter().enumerate() {
+                                            for log in receipt.logs.iter() {
+                                                all_logs.push(StoredLog {
+                                                    address: log.address.0 .0,
+                                                    topics: log.topics.iter().map(|t| t.0).collect(),
+                                                    data: log.data.to_vec(),
+                                                    block_number: height.0,
+                                                    block_hash,
+                                                    transaction_hash: receipt.transaction_hash.0,
+                                                    transaction_index: receipt_idx as u32,
+                                                    log_index: all_logs.len() as u32,
+                                                    removed: false,
+                                                });
+                                            }
+                                        }
+
+                                        if !all_logs.is_empty() {
+                                            if let Err(e) = log_store.put_logs(&all_logs).await {
+                                                error!("Failed to store {} logs for block {}: {}", all_logs.len(), height.0, e);
+                                            } else {
+                                                debug!("Stored {} logs for block {}", all_logs.len(), height.0);
                                             }
                                         }
                                     }

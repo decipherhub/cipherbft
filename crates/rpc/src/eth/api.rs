@@ -756,11 +756,9 @@ where
     async fn gas_price(&self) -> JsonRpcResult<U256> {
         trace!("eth_gasPrice");
 
-        // Default values
-        const DEFAULT_GAS_PRICE: u64 = 1_000_000_000; // 1 gwei
-        const DEFAULT_PRIORITY_FEE: u64 = 1_000_000_000; // 1 gwei
+        const DEFAULT_GAS_PRICE: u64 = 1_000_000_000; // 1 gwei fallback
 
-        // Try to get the latest block's base fee for EIP-1559 chains
+        // Try to get the latest block's base fee
         let latest_block = self
             .storage
             .get_block_by_number(BlockNumberOrTag::Latest, false)
@@ -768,16 +766,15 @@ where
             .map_err(Self::to_json_rpc_error)?;
 
         if let Some(block) = latest_block {
-            // For EIP-1559 chains, return base_fee + priority_fee
-            // RpcBlock has flat structure - fields are top-level
             if let Some(base_fee) = block.base_fee_per_gas {
-                // Suggest base fee + 1 gwei priority fee
-                let suggested_price = base_fee.saturating_add(DEFAULT_PRIORITY_FEE);
+                // Get dynamic priority fee from mempool
+                let priority_fee = self.max_priority_fee_per_gas().await?;
+                let suggested_price = U256::from(base_fee).saturating_add(priority_fee);
                 debug!(
-                    "eth_gasPrice: base_fee={}, suggested_price={}",
-                    base_fee, suggested_price
+                    "eth_gasPrice: base_fee={}, priority_fee={}, suggested={}",
+                    base_fee, priority_fee, suggested_price
                 );
-                return Ok(U256::from(suggested_price));
+                return Ok(suggested_price);
             }
         }
 
@@ -897,9 +894,42 @@ where
 
                     // Calculate reward percentiles if requested
                     if let Some(ref percentiles) = reward_percentiles {
-                        // For simplicity, return zeros for now
-                        // A full implementation would need transaction priority fees
-                        let block_rewards: Vec<u128> = percentiles.iter().map(|_| 0u128).collect();
+                        // Get block receipts to calculate priority fees
+                        let block_receipts = self
+                            .storage
+                            .get_block_receipts(BlockNumberOrTag::Number(block_num))
+                            .await
+                            .map_err(Self::to_json_rpc_error)?;
+
+                        let block_rewards = if let Some(receipts) = block_receipts {
+                            // Calculate priority fee for each transaction
+                            // priority_fee = effective_gas_price - base_fee
+                            let mut priority_fees: Vec<u128> = receipts
+                                .iter()
+                                .map(|r| r.effective_gas_price.saturating_sub(base_fee))
+                                .collect();
+
+                            if priority_fees.is_empty() {
+                                // No transactions in block, return zeros
+                                percentiles.iter().map(|_| 0u128).collect()
+                            } else {
+                                // Sort and compute percentiles
+                                priority_fees.sort_unstable();
+                                percentiles
+                                    .iter()
+                                    .map(|p| {
+                                        let idx =
+                                            ((priority_fees.len() as f64) * (*p / 100.0)) as usize;
+                                        let idx = idx.min(priority_fees.len().saturating_sub(1));
+                                        priority_fees[idx]
+                                    })
+                                    .collect()
+                            }
+                        } else {
+                            // Block not found or no receipts, return zeros
+                            percentiles.iter().map(|_| 0u128).collect()
+                        };
+
                         if let Some(ref mut rewards) = reward {
                             rewards.push(block_rewards);
                         }
@@ -1079,29 +1109,39 @@ where
     async fn max_priority_fee_per_gas(&self) -> JsonRpcResult<U256> {
         trace!("eth_maxPriorityFeePerGas");
 
-        // Get the latest block to determine a reasonable priority fee
-        let latest_block = self
-            .storage
-            .get_block_by_number(BlockNumberOrTag::Latest, false)
+        const DEFAULT_PRIORITY_FEE: u128 = 1_000_000_000; // 1 gwei
+
+        // Get pending transactions from mempool
+        let pending_by_sender = self
+            .mempool
+            .get_pending_content()
             .await
             .map_err(Self::to_json_rpc_error)?;
 
-        // Default priority fee suggestion: 1 gwei
-        // In production, this would analyze recent blocks and pending transactions
-        const DEFAULT_PRIORITY_FEE: u128 = 1_000_000_000; // 1 gwei
+        // Collect priority fees from all pending transactions
+        let mut priority_fees: Vec<u128> = pending_by_sender
+            .values()
+            .flatten()
+            .filter_map(|tx| tx.inner.max_priority_fee_per_gas())
+            .collect();
 
-        if let Some(block) = latest_block {
-            // If the block has base fee, we're on EIP-1559
-            // RpcBlock has flat structure - fields are top-level
-            if block.base_fee_per_gas.is_some() {
-                // Return a reasonable default priority fee
-                // More sophisticated implementations would look at recent priority fees
-                return Ok(U256::from(DEFAULT_PRIORITY_FEE));
-            }
+        if priority_fees.is_empty() {
+            debug!("No pending transactions with priority fees, using default");
+            return Ok(U256::from(DEFAULT_PRIORITY_FEE));
         }
 
-        // For pre-EIP-1559 blocks or if block not found, return default
-        Ok(U256::from(DEFAULT_PRIORITY_FEE))
+        // Return median priority fee, ensuring it meets the minimum floor
+        priority_fees.sort_unstable();
+        let median_idx = priority_fees.len() / 2;
+        let median = std::cmp::max(priority_fees[median_idx], DEFAULT_PRIORITY_FEE);
+
+        debug!(
+            "eth_maxPriorityFeePerGas: {} pending txs, median priority fee: {} wei (floor: {})",
+            priority_fees.len(),
+            median,
+            DEFAULT_PRIORITY_FEE
+        );
+        Ok(U256::from(median))
     }
 
     async fn accounts(&self) -> JsonRpcResult<Vec<Address>> {

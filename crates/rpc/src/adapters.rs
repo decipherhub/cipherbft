@@ -38,6 +38,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing::{debug, trace, warn};
 
+use cipherbft_execution::precompiles::{CipherBftPrecompileProvider, StakingPrecompile};
 use cipherbft_execution::AccountProof;
 
 use crate::error::{RpcError, RpcResult};
@@ -1817,6 +1818,8 @@ pub struct EvmExecutionApi<P: Provider> {
     base_fee_per_gas: u64,
     /// Latest block number (for execution context).
     latest_block: AtomicU64,
+    /// Staking precompile for validator queries at address 0x100.
+    staking: Arc<StakingPrecompile>,
 }
 
 impl<P: Provider> EvmExecutionApi<P> {
@@ -1827,23 +1830,33 @@ impl<P: Provider> EvmExecutionApi<P> {
     /// Default gas limit for calls.
     const DEFAULT_CALL_GAS: u64 = 30_000_000;
 
-    /// Create a new EVM execution adapter.
-    pub fn new(provider: Arc<P>, chain_id: u64) -> Self {
+    /// Create a new EVM execution adapter with a shared staking precompile.
+    ///
+    /// The staking precompile should be obtained from the `ExecutionBridge` to ensure
+    /// that `eth_call` to address 0x100 returns the same validator state as the
+    /// execution layer.
+    pub fn new(provider: Arc<P>, chain_id: u64, staking: Arc<StakingPrecompile>) -> Self {
         Self {
             provider,
             chain_id,
             block_gas_limit: Self::DEFAULT_BLOCK_GAS_LIMIT,
             base_fee_per_gas: Self::DEFAULT_BASE_FEE,
             latest_block: AtomicU64::new(0),
+            staking,
         }
     }
 
-    /// Create with custom configuration.
+    /// Create with custom configuration and a shared staking precompile.
+    ///
+    /// The staking precompile should be obtained from the `ExecutionBridge` to ensure
+    /// that `eth_call` to address 0x100 returns the same validator state as the
+    /// execution layer.
     pub fn with_config(
         provider: Arc<P>,
         chain_id: u64,
         block_gas_limit: u64,
         base_fee_per_gas: u64,
+        staking: Arc<StakingPrecompile>,
     ) -> Self {
         Self {
             provider,
@@ -1851,12 +1864,46 @@ impl<P: Provider> EvmExecutionApi<P> {
             block_gas_limit,
             base_fee_per_gas,
             latest_block: AtomicU64::new(0),
+            staking,
         }
     }
 
     /// Update the latest block number.
     pub fn set_latest_block(&self, block: u64) {
         self.latest_block.store(block, Ordering::SeqCst);
+    }
+
+    /// Validate the block parameter for eth_call/eth_estimateGas.
+    ///
+    /// We only support queries against the current state (latest/pending/safe/finalized
+    /// or the current block number). Historical state queries are not supported.
+    fn validate_block_parameter(
+        &self,
+        block: &BlockNumberOrTag,
+        current_block: u64,
+    ) -> RpcResult<()> {
+        match block {
+            BlockNumberOrTag::Latest
+            | BlockNumberOrTag::Pending
+            | BlockNumberOrTag::Safe
+            | BlockNumberOrTag::Finalized => {
+                // Use current state - allowed
+                Ok(())
+            }
+            BlockNumberOrTag::Earliest => Err(RpcError::InvalidParams(
+                "Historical state queries not supported (earliest)".into(),
+            )),
+            BlockNumberOrTag::Number(n) if *n != current_block => {
+                Err(RpcError::InvalidParams(format!(
+                    "Historical state queries not supported (block {} requested, current is {})",
+                    n, current_block
+                )))
+            }
+            BlockNumberOrTag::Number(_) => {
+                // Requesting current block - allowed
+                Ok(())
+            }
+        }
     }
 
     /// Execute a call and return the result.
@@ -1873,7 +1920,6 @@ impl<P: Provider> EvmExecutionApi<P> {
         use revm::context::{BlockEnv, CfgEnv, Context, Evm, FrameStack, Journal, TxEnv};
         use revm::context_interface::result::{ExecutionResult, Output};
         use revm::handler::instructions::EthInstructions;
-        use revm::handler::EthPrecompiles;
         use revm::primitives::hardfork::SpecId;
         use revm::primitives::TxKind;
 
@@ -1916,12 +1962,14 @@ impl<P: Provider> EvmExecutionApi<P> {
         ctx.tx.data = data.unwrap_or_default();
         ctx.tx.nonce = 0; // For calls, nonce doesn't matter
 
-        // Build the EVM with standard precompiles
+        // Build the EVM with CipherBFT precompiles (includes staking at 0x100)
+        let precompiles =
+            CipherBftPrecompileProvider::new(Arc::clone(&self.staking), SpecId::CANCUN);
         let mut evm = Evm {
             ctx,
             inspector: (),
             instruction: EthInstructions::default(),
-            precompiles: EthPrecompiles::default(),
+            precompiles,
             frame_stack: FrameStack::new_prealloc(8),
         };
 
@@ -1971,14 +2019,19 @@ impl<P: Provider + 'static> ExecutionApi for EvmExecutionApi<P> {
         gas_price: Option<U256>,
         value: Option<U256>,
         data: Option<Bytes>,
-        _block: BlockNumberOrTag,
+        block: BlockNumberOrTag,
     ) -> RpcResult<Bytes> {
+        // Validate block parameter - only accept current state queries
+        let current_block = self.latest_block.load(Ordering::SeqCst);
+        self.validate_block_parameter(&block, current_block)?;
+
         debug!(
-            "EvmExecutionApi::call(from={:?}, to={:?}, gas={:?}, data_len={:?})",
+            "EvmExecutionApi::call(from={:?}, to={:?}, gas={:?}, data_len={:?}, block={:?})",
             from,
             to,
             gas,
-            data.as_ref().map(|d| d.len())
+            data.as_ref().map(|d| d.len()),
+            block
         );
 
         let (output, gas_used) =
@@ -2000,14 +2053,19 @@ impl<P: Provider + 'static> ExecutionApi for EvmExecutionApi<P> {
         gas_price: Option<U256>,
         value: Option<U256>,
         data: Option<Bytes>,
-        _block: BlockNumberOrTag,
+        block: BlockNumberOrTag,
     ) -> RpcResult<u64> {
+        // Validate block parameter - only accept current state queries
+        let current_block = self.latest_block.load(Ordering::SeqCst);
+        self.validate_block_parameter(&block, current_block)?;
+
         debug!(
-            "EvmExecutionApi::estimate_gas(from={:?}, to={:?}, gas={:?}, data_len={:?})",
+            "EvmExecutionApi::estimate_gas(from={:?}, to={:?}, gas={:?}, data_len={:?}, block={:?})",
             from,
             to,
             gas,
-            data.as_ref().map(|d| d.len())
+            data.as_ref().map(|d| d.len()),
+            block
         );
 
         let (_, gas_used) = self.execute_call_internal(from, to, gas, gas_price, value, data)?;

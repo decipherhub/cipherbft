@@ -7,7 +7,7 @@ use cipherbft_data_chain::worker::TransactionValidator;
 use cipherbft_execution::{
     keccak256, BlockInput, Bytes, Car as ExecutionCar, ChainConfig, Cut as ExecutionCut,
     ExecutionEngine, ExecutionLayerTrait, ExecutionResult, GenesisInitializer,
-    GenesisValidatorData, InMemoryProvider, B256, U256,
+    GenesisValidatorData, InMemoryProvider, StakingPrecompile, B256, U256,
 };
 use cipherbft_storage::DclStore;
 use cipherbft_types::genesis::Genesis;
@@ -443,6 +443,17 @@ impl ExecutionBridge {
     pub async fn provider(&self) -> Arc<InMemoryProvider> {
         let execution = self.execution.read().await;
         execution.provider()
+    }
+
+    /// Get a reference to the staking precompile.
+    ///
+    /// This allows sharing the staking precompile with the RPC layer so that
+    /// `eth_call` to address 0x100 can query the same validator state as the
+    /// execution layer. This is essential for RPC queries about validators,
+    /// stakes, and rewards.
+    pub async fn staking_precompile(&self) -> Arc<StakingPrecompile> {
+        let execution = self.execution.read().await;
+        Arc::clone(execution.staking_precompile())
     }
 }
 
