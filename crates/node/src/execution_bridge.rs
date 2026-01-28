@@ -30,6 +30,12 @@ pub struct BlockExecutionResult {
     pub parent_hash: B256,
     /// The block timestamp
     pub timestamp: u64,
+    /// Raw executed transactions (RLP-encoded bytes) for storage.
+    ///
+    /// These are the transactions that were included in the block,
+    /// in execution order. Used by the node to store transactions
+    /// for `eth_getTransactionByHash` RPC queries.
+    pub executed_transactions: Vec<Bytes>,
 }
 
 /// Bridge between consensus and execution layers
@@ -46,6 +52,9 @@ pub struct ExecutionBridge {
     /// Initialized to B256::ZERO for the genesis block.
     /// Updated after each successful block execution.
     last_block_hash: StdRwLock<B256>,
+    /// Block gas limit from genesis configuration.
+    /// Used when creating Cuts and blocks.
+    gas_limit: u64,
 }
 
 impl ExecutionBridge {
@@ -61,6 +70,7 @@ impl ExecutionBridge {
     /// For production use, prefer `from_genesis` to initialize the staking
     /// state from the genesis file.
     pub fn new(config: ChainConfig, dcl_store: Arc<dyn DclStore>) -> anyhow::Result<Self> {
+        let gas_limit = config.block_gas_limit;
         let provider = InMemoryProvider::new();
         let execution = ExecutionEngine::new(config, provider);
 
@@ -69,6 +79,7 @@ impl ExecutionBridge {
             dcl_store,
             // Genesis block has no parent, so initialize to zero
             last_block_hash: StdRwLock::new(B256::ZERO),
+            gas_limit,
         })
     }
 
@@ -140,9 +151,13 @@ impl ExecutionBridge {
             })
             .collect();
 
+        // Extract gas_limit from genesis (convert U256 to u64 safely)
+        let gas_limit: u64 = genesis.gas_limit.try_into().unwrap_or(30_000_000);
+
         info!(
             validator_count = genesis_validators.len(),
             total_stake = %genesis.total_staked(),
+            gas_limit = gas_limit,
             "Initializing execution layer from genesis"
         );
 
@@ -174,7 +189,13 @@ impl ExecutionBridge {
             dcl_store,
             // Genesis block has no parent, so initialize to zero
             last_block_hash: StdRwLock::new(B256::ZERO),
+            gas_limit,
         })
+    }
+
+    /// Get the configured block gas limit.
+    pub fn gas_limit(&self) -> u64 {
+        self.gas_limit
     }
 
     /// Validate a transaction for mempool CheckTx
@@ -228,15 +249,19 @@ impl ExecutionBridge {
         let timestamp = execution_cut.timestamp;
         let parent_hash = execution_cut.parent_hash;
 
+        // Capture all transactions BEFORE they're consumed by execution.
+        // These will be stored by the node for eth_getTransactionByHash queries.
+        let executed_transactions: Vec<Bytes> = execution_cut
+            .cars
+            .iter()
+            .flat_map(|car| car.transactions.iter().cloned())
+            .collect();
+
         // Convert Cut to BlockInput by flattening transactions from all Cars
         let block_input = BlockInput {
             block_number: execution_cut.block_number,
             timestamp: execution_cut.timestamp,
-            transactions: execution_cut
-                .cars
-                .iter()
-                .flat_map(|car| car.transactions.iter().cloned())
-                .collect(),
+            transactions: executed_transactions.clone(),
             parent_hash: execution_cut.parent_hash,
             gas_limit: execution_cut.gas_limit,
             base_fee_per_gas: execution_cut.base_fee_per_gas,
@@ -275,6 +300,7 @@ impl ExecutionBridge {
             block_hash: new_block_hash,
             parent_hash,
             timestamp,
+            executed_transactions,
         })
     }
 
@@ -342,7 +368,7 @@ impl ExecutionBridge {
                 .as_secs(),
             parent_hash,
             cars: execution_cars,
-            gas_limit: 30_000_000,                 // Default gas limit
+            gas_limit: self.gas_limit,             // Use genesis gas limit
             base_fee_per_gas: Some(1_000_000_000), // Default base fee
         })
     }
@@ -609,5 +635,27 @@ mod tests {
             B256::ZERO,
             "Initial last_block_hash should be B256::ZERO"
         );
+    }
+
+    #[tokio::test]
+    async fn test_gas_limit_from_config() {
+        let bridge = create_default_bridge().unwrap();
+
+        // Default gas limit from ChainConfig should be 30_000_000
+        assert_eq!(bridge.gas_limit(), 30_000_000);
+    }
+
+    #[tokio::test]
+    async fn test_gas_limit_custom() {
+        use cipherbft_storage::{DclStore, InMemoryStore};
+
+        let config = ChainConfig {
+            block_gas_limit: 50_000_000,
+            ..Default::default()
+        };
+        let dcl_store: Arc<dyn DclStore> = Arc::new(InMemoryStore::new());
+        let bridge = ExecutionBridge::new(config, dcl_store).unwrap();
+
+        assert_eq!(bridge.gas_limit(), 50_000_000);
     }
 }

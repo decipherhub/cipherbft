@@ -1015,9 +1015,9 @@ where
         };
 
         // Get transaction at index
-        // RpcBlock stores transactions as Vec<B256> (hashes only)
+        // BlockTransactions can be either hashes or full transactions
         let idx = index.to::<usize>();
-        if let Some(hash) = block.transactions.get(idx) {
+        if let Some(hash) = block.transactions.get_hash(idx) {
             self.storage
                 .get_transaction_by_hash(*hash)
                 .await
@@ -1052,9 +1052,9 @@ where
         };
 
         // Get transaction at index
-        // RpcBlock stores transactions as Vec<B256> (hashes only)
+        // BlockTransactions can be either hashes or full transactions
         let idx = index.to::<usize>();
-        if let Some(hash) = block.transactions.get(idx) {
+        if let Some(hash) = block.transactions.get_hash(idx) {
             self.storage
                 .get_transaction_by_hash(*hash)
                 .await
