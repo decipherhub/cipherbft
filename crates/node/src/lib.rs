@@ -10,6 +10,7 @@ pub mod execution_bridge;
 pub mod genesis_bootstrap;
 pub mod key_cli;
 pub mod network;
+pub mod network_api;
 pub mod node;
 pub mod supervisor;
 pub mod util;
@@ -27,5 +28,6 @@ pub use genesis_bootstrap::{
     GenesisLoader, ValidatorKeyFile,
 };
 pub use key_cli::{execute_keys_command, KeysCommand};
+pub use network_api::{NodeNetworkApi, TcpNetworkApi};
 pub use node::Node;
 pub use supervisor::{NodeSupervisor, ShutdownError};

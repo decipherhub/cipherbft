@@ -37,6 +37,7 @@ use cipherbft_data_chain::{
 use cipherbft_types::ValidatorId;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -66,6 +67,8 @@ pub struct TcpPrimaryNetwork {
     peer_addrs: HashMap<ValidatorId, SocketAddr>,
     /// Incoming message channel
     incoming_tx: mpsc::Sender<(ValidatorId, DclMessage)>,
+    /// Whether the network listener is active
+    listening: AtomicBool,
 }
 
 /// Connection to a peer
@@ -94,7 +97,18 @@ impl TcpPrimaryNetwork {
             peers: Arc::new(RwLock::new(HashMap::new())),
             peer_addrs,
             incoming_tx,
+            listening: AtomicBool::new(false),
         }
+    }
+
+    /// Returns whether the network listener is active.
+    pub fn is_listening(&self) -> bool {
+        self.listening.load(Ordering::Acquire)
+    }
+
+    /// Returns the number of currently connected peers.
+    pub async fn connected_peer_count(&self) -> usize {
+        self.peers.read().await.len()
     }
 
     /// Start listening for incoming connections
@@ -110,6 +124,7 @@ impl TcpPrimaryNetwork {
             )
         })?;
         info!("Primary listening on {}", listen_addr);
+        self.listening.store(true, Ordering::Release);
 
         tokio::spawn(async move {
             loop {
