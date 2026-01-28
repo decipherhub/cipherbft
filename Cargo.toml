@@ -139,6 +139,15 @@ informalsystems-malachitebft-signing-ed25519 = { version = "0.5", default-featur
 informalsystems-malachitebft-codec = { version = "0.5", default-features = false }
 informalsystems-malachitebft-metrics = { version = "0.5", default-features = false }
 
+# Patch Malachite crates with sync failure handling and recovery fixes
+# - network: Adds proper OutboundFailure handling to notify the sync layer
+#   when sync requests fail, enabling retries instead of silent timeouts
+# - sync: Adds SkipToHeight effect to allow nodes to skip ahead when peers
+#   have pruned old blocks and cannot serve the required heights
+[patch.crates-io]
+informalsystems-malachitebft-network = { path = "vendor/malachitebft-network" }
+informalsystems-malachitebft-sync = { path = "vendor/malachitebft-sync" }
+
 [profile.release]
 opt-level = 3
 lto = true
