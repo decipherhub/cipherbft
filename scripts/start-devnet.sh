@@ -132,7 +132,7 @@ if [ -n "$DETACH_FLAG" ]; then
     if [ "$MONITORING" = "true" ]; then
         echo ""
         echo "Monitoring:"
-        echo "  Prometheus: http://localhost:9090"
-        echo "  Grafana:    http://localhost:3000 (admin/admin)"
+        echo "  Prometheus: http://localhost:19090"
+        echo "  Grafana:    http://localhost:13000 (admin/admin)"
     fi
 fi
