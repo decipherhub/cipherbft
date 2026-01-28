@@ -364,14 +364,11 @@ impl Node {
         std::fs::create_dir_all(&self.config.data_dir)?;
         let dcl_db_path = self.config.data_dir.join("dcl_storage");
         let dcl_db_config = DatabaseConfig::new(&dcl_db_path);
-        let dcl_database = Database::open(dcl_db_config)
-            .context("Failed to open DCL storage database")?;
+        let dcl_database =
+            Database::open(dcl_db_config).context("Failed to open DCL storage database")?;
         let dcl_store: Arc<dyn DclStore> = Arc::new(MdbxDclStore::new(Arc::new(dcl_database)));
 
-        info!(
-            "Created persistent DCL store at {}",
-            dcl_db_path.display()
-        );
+        info!("Created persistent DCL store at {}", dcl_db_path.display());
 
         // Store the dcl_store for later use in spawn_host (consensus sync)
         self.dcl_store = Some(dcl_store.clone());

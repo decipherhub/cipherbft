@@ -924,8 +924,9 @@ impl DclStore for MdbxDclStore {
             .is_some();
 
         if existed {
-            tx.delete::<CommitCertificates>(key, None)
-                .map_err(|e| StorageError::Database(format!("Failed to delete certificate: {e}")))?;
+            tx.delete::<CommitCertificates>(key, None).map_err(|e| {
+                StorageError::Database(format!("Failed to delete certificate: {e}"))
+            })?;
             tx.commit()
                 .map_err(|e| StorageError::Database(format!("Failed to commit delete: {e}")))?;
             debug!(height, "Commit certificate deleted");
