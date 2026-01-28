@@ -210,6 +210,40 @@ impl Primary {
         worker_count: u8,
         storage: Option<Arc<dyn CarStore>>,
     ) -> (PrimaryHandle, Vec<mpsc::Receiver<PrimaryToWorker>>) {
+        Self::spawn_with_initial_cut(
+            config,
+            validator_pubkeys,
+            network,
+            worker_count,
+            storage,
+            None,
+        )
+    }
+
+    /// Spawn a new Primary task with optional initial cut for restart recovery
+    ///
+    /// When `initial_cut` is provided, Primary state is initialized from the cut:
+    /// - Position tracking (our_position, last_seen_positions) is restored
+    /// - Height tracking (current_height, last_finalized_height) is restored
+    ///
+    /// This enables seamless validator restart: other validators will accept
+    /// our CARs because positions are continuous from the last finalized state.
+    ///
+    /// # Arguments
+    /// * `config` - Primary configuration
+    /// * `validator_pubkeys` - BLS public keys for all validators
+    /// * `network` - Network interface for peer communication
+    /// * `worker_count` - Number of worker processes
+    /// * `storage` - Optional persistent storage for CARs
+    /// * `initial_cut` - Optional cut to initialize state from (for restart recovery)
+    pub fn spawn_with_initial_cut(
+        config: PrimaryConfig,
+        validator_pubkeys: HashMap<ValidatorId, BlsPublicKey>,
+        network: Box<dyn PrimaryNetwork>,
+        worker_count: u8,
+        storage: Option<Arc<dyn CarStore>>,
+        initial_cut: Option<Cut>,
+    ) -> (PrimaryHandle, Vec<mpsc::Receiver<PrimaryToWorker>>) {
         let (from_workers_tx, from_workers_rx) = mpsc::channel(1024);
         let (from_network_tx, from_network_rx) = mpsc::channel(1024);
         let (command_tx, command_rx) = mpsc::channel(64);
@@ -226,7 +260,7 @@ impl Primary {
 
         let config_clone = config.clone();
         let handle = tokio::spawn(async move {
-            let mut primary = Primary::new_with_storage(
+            let mut primary = Primary::new_with_initial_cut(
                 config_clone,
                 validator_pubkeys,
                 from_workers_rx,
@@ -236,6 +270,7 @@ impl Primary {
                 network,
                 event_tx,
                 storage,
+                initial_cut,
             );
             primary.run().await;
         });
@@ -289,7 +324,56 @@ impl Primary {
         event_sender: mpsc::Sender<PrimaryEvent>,
         storage: Option<Arc<dyn CarStore>>,
     ) -> Self {
-        let state = PrimaryState::new(config.validator_id, config.equivocation_retention);
+        Self::new_with_initial_cut(
+            config,
+            validator_pubkeys,
+            from_workers,
+            to_workers,
+            from_network,
+            from_commands,
+            network,
+            event_sender,
+            storage,
+            None,
+        )
+    }
+
+    /// Create a new Primary with optional initial cut for restart recovery
+    ///
+    /// When `initial_cut` is provided, Primary state is initialized from the cut,
+    /// restoring position tracking for seamless validator restart.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_initial_cut(
+        config: PrimaryConfig,
+        validator_pubkeys: HashMap<ValidatorId, BlsPublicKey>,
+        from_workers: mpsc::Receiver<WorkerToPrimary>,
+        to_workers: Vec<mpsc::Sender<PrimaryToWorker>>,
+        from_network: mpsc::Receiver<(ValidatorId, DclMessage)>,
+        from_commands: mpsc::Receiver<PrimaryCommand>,
+        network: Box<dyn PrimaryNetwork>,
+        event_sender: mpsc::Sender<PrimaryEvent>,
+        storage: Option<Arc<dyn CarStore>>,
+        initial_cut: Option<Cut>,
+    ) -> Self {
+        // Initialize state from cut if available, otherwise start fresh
+        let state = match initial_cut.as_ref() {
+            Some(cut) => {
+                info!(
+                    validator = %config.validator_id,
+                    cut_height = cut.height,
+                    cut_validators = cut.cars.len(),
+                    "Initializing Primary state from finalized cut"
+                );
+                PrimaryState::from_cut(config.validator_id, config.equivocation_retention, cut)
+            }
+            None => {
+                info!(
+                    validator = %config.validator_id,
+                    "Initializing Primary state from scratch (no finalized cut)"
+                );
+                PrimaryState::new(config.validator_id, config.equivocation_retention)
+            }
+        };
 
         let proposer = Proposer::new(
             config.validator_id,
@@ -335,7 +419,7 @@ impl Primary {
             network,
             storage,
             event_sender,
-            last_cut: None,
+            last_cut: initial_cut,
             shutdown: false,
         }
     }
