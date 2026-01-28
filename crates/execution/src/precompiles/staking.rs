@@ -11,6 +11,10 @@
 
 use alloy_primitives::{address, Address, Bytes, U256};
 use alloy_sol_types::sol;
+use cipherbft_metrics::execution::{
+    STAKING_REWARDS_DISTRIBUTED, STAKING_STAKE_DELEGATED, STAKING_VALIDATORS_DEREGISTERED,
+    STAKING_VALIDATORS_REGISTERED,
+};
 use parking_lot::RwLock;
 use revm::precompile::{PrecompileError, PrecompileOutput, PrecompileResult};
 use std::{collections::HashMap, sync::Arc};
@@ -613,6 +617,12 @@ impl StakingPrecompile {
 
         state.add_validator(validator);
 
+        // Track validator registration metrics
+        STAKING_VALIDATORS_REGISTERED.inc();
+        // Update total stake delegated gauge (convert U256 to f64 for gauge)
+        let total_stake_f64 = state.total_stake.to::<u128>() as f64;
+        STAKING_STAKE_DELEGATED.set(total_stake_f64);
+
         Ok(PrecompileOutput {
             gas_used: GAS_COST,
             gas_refunded: 0,
@@ -646,6 +656,9 @@ impl StakingPrecompile {
         state
             .mark_for_exit(&caller, exit_epoch)
             .map_err(|e| PrecompileError::Fatal(e.to_string()))?;
+
+        // Track validator deregistration metrics
+        STAKING_VALIDATORS_DEREGISTERED.inc();
 
         Ok(PrecompileOutput {
             gas_used: GAS_COST,
@@ -815,6 +828,14 @@ impl StakingPrecompile {
 
         // Distribute rewards
         let total_distributed = state.distribute_epoch_rewards(epoch_block_reward, current_epoch);
+
+        // Track rewards distribution metric
+        if !total_distributed.is_zero() {
+            STAKING_REWARDS_DISTRIBUTED.inc();
+            // Update total stake gauge after rewards are distributed
+            let total_stake_f64 = state.total_stake.to::<u128>() as f64;
+            STAKING_STAKE_DELEGATED.set(total_stake_f64);
+        }
 
         // Advance to next epoch
         state.advance_epoch();

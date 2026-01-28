@@ -21,10 +21,15 @@ use crate::primary::proposer::Proposer;
 use crate::primary::state::{PipelineStage, PrimaryState};
 use crate::storage::CarStore;
 use cipherbft_crypto::BlsPublicKey;
+use cipherbft_metrics::dcl::{
+    DCL_ATTESTATIONS_RECEIVED, DCL_ATTESTATIONS_SENT, DCL_DAG_CERTIFICATES, DCL_DAG_DEPTH,
+    DCL_DAG_PENDING_BATCHES, DCL_PRIMARY_CARS_CREATED, DCL_PRIMARY_CUTS_CREATED,
+    DCL_PRIMARY_CUT_LATENCY, DCL_QUORUM_REACHED, DCL_SYNC_LAG_BLOCKS, DCL_SYNC_REQUESTS,
+};
 use cipherbft_types::{Hash, ValidatorId};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::time::interval;
 use tracing::{debug, error, info, trace, warn};
@@ -189,6 +194,8 @@ pub struct Primary {
     last_cut: Option<Cut>,
     /// Shutdown flag
     shutdown: bool,
+    /// Time when cut formation started (for latency tracking)
+    cut_start_time: Option<Instant>,
 }
 
 impl Primary {
@@ -421,6 +428,7 @@ impl Primary {
             event_sender,
             last_cut: initial_cut,
             shutdown: false,
+            cut_start_time: None,
         }
     }
 
@@ -502,6 +510,9 @@ impl Primary {
                 );
                 self.state
                     .add_batch_digest(BatchDigest::new(worker_id, digest, tx_count, byte_size));
+
+                // Track pending batches count
+                DCL_DAG_PENDING_BATCHES.set(self.state.pending_digests.len() as f64);
             }
 
             WorkerToPrimary::BatchSynced { digest, success } => {
@@ -598,6 +609,15 @@ impl Primary {
                 // try_form_cut() would have returned early because pipeline_stage was still
                 // Proposing. Now that we're in Collecting stage, we can form the cut.
                 self.try_form_cut().await;
+
+                // Update DAG depth metric (current finalized height)
+                DCL_DAG_DEPTH.set(self.state.last_finalized_height as f64);
+
+                // Track total DAG certificates (attested CARs)
+                DCL_DAG_CERTIFICATES.set(self.state.attested_cars.len() as f64);
+
+                // Reset sync lag (we're caught up if consensus decided)
+                DCL_SYNC_LAG_BLOCKS.set(0.0);
 
                 debug!(
                     new_height = self.state.current_height,
@@ -750,6 +770,9 @@ impl Primary {
                 self.state
                     .add_car_awaiting_batches(car.clone(), missing_digests.clone());
 
+                // Track sync request metric
+                DCL_SYNC_REQUESTS.inc();
+
                 // Trigger batch sync via Workers (T098)
                 // Send sync request to first Worker (in production, would choose appropriate Worker)
                 if !self.to_workers.is_empty() {
@@ -780,6 +803,9 @@ impl Primary {
                     position = car.position,
                     "Generated attestation (T099)"
                 );
+
+                // Track attestation sent metric
+                DCL_ATTESTATIONS_SENT.inc();
 
                 // Send attestation to proposer (T100)
                 self.network
@@ -867,6 +893,9 @@ impl Primary {
             "Received attestation"
         );
 
+        // Track attestation received metric
+        DCL_ATTESTATIONS_RECEIVED.inc();
+
         // Verify attestation
         if let Err(e) = self.core.verify_attestation(&attestation) {
             warn!(
@@ -886,6 +915,10 @@ impl Primary {
                     count = aggregated.count(),
                     "Attestation threshold reached"
                 );
+
+                // Track quorum reached metric
+                DCL_QUORUM_REACHED.inc();
+
                 self.handle_aggregated_attestation(aggregated).await;
             }
 
@@ -920,6 +953,9 @@ impl Primary {
             // Mark as attested with the aggregated attestation (contains BLS aggregate signature)
             self.state.mark_attested(car.clone(), aggregated);
 
+            // Track total attested CARs (DAG certificates)
+            DCL_DAG_CERTIFICATES.set(self.state.attested_cars.len() as f64);
+
             // Try to form a Cut
             self.try_form_cut().await;
         }
@@ -947,6 +983,18 @@ impl Primary {
         ) {
             Ok(Some(car)) => {
                 let car_hash = car.hash();
+
+                // Track CAR creation metric
+                DCL_PRIMARY_CARS_CREATED.inc();
+
+                // Update pending batches gauge (cleared after forming a Car)
+                DCL_DAG_PENDING_BATCHES.set(0.0);
+
+                // Start cut formation timer if not already started
+                if self.cut_start_time.is_none() {
+                    self.cut_start_time = Some(Instant::now());
+                }
+
                 debug!(
                     position = car.position,
                     batch_count = car.batch_digests.len(),
@@ -1061,6 +1109,16 @@ impl Primary {
         {
             Ok(cut) => {
                 if cut.validator_count() > 0 {
+                    // Track cut creation metric
+                    DCL_PRIMARY_CUTS_CREATED.inc();
+
+                    // Track cut formation latency
+                    if let Some(start) = self.cut_start_time.take() {
+                        DCL_PRIMARY_CUT_LATENCY
+                            .with_label_values(&[])
+                            .observe(start.elapsed().as_secs_f64());
+                    }
+
                     debug!(
                         height = cut.height,
                         validators = cut.validator_count(),

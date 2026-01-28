@@ -34,6 +34,9 @@ async-trait = { workspace = true }
 # Logging
 tracing = { workspace = true }
 
+# Metrics
+cipherbft-metrics = { path = "../metrics" }
+
 [dev-dependencies]
 reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.10.0", features = ["test-utils"] }
 reth-provider = { git = "https://github.com/paradigmxyz/reth", tag = "v1.10.0", features = ["test-utils"] }

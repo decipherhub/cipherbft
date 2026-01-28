@@ -9,10 +9,12 @@ use crate::error::{ExecutionError, Result};
 use crate::mpt::compute_state_root;
 use crate::types::STATE_ROOT_SNAPSHOT_INTERVAL;
 use alloy_primitives::{Address, B256};
+use cipherbft_metrics::execution::EXECUTION_STATE_ROOT_TIME;
 use parking_lot::RwLock;
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Instant;
 
 /// State root cache size (compile-time verified non-zero).
 const STATE_ROOT_CACHE_SIZE: NonZeroUsize = match NonZeroUsize::new(1000) {
@@ -105,6 +107,8 @@ impl<P: Provider> StateManager<P> {
     /// the last checkpoint. For a full state root, this can take 50-100ms for
     /// 10,000 accounts.
     pub fn compute_state_root(&self, block_number: u64) -> Result<B256> {
+        let start = Instant::now();
+
         tracing::debug!(
             block_number,
             "Computing state root (checkpoint interval: {})",
@@ -113,6 +117,12 @@ impl<P: Provider> StateManager<P> {
 
         // Compute state root using Merkle Patricia Trie
         let state_root = self.compute_state_root_mpt()?;
+
+        // Record state root computation time
+        let duration = start.elapsed();
+        EXECUTION_STATE_ROOT_TIME
+            .with_label_values(&[])
+            .observe(duration.as_secs_f64());
 
         // Update current state root
         *self.current_state_root.write() = state_root;
@@ -127,6 +137,7 @@ impl<P: Provider> StateManager<P> {
         tracing::debug!(
             block_number,
             state_root = %state_root,
+            duration_ms = duration.as_millis(),
             "State root computed"
         );
 

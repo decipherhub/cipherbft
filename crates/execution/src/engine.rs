@@ -20,7 +20,10 @@ use crate::{
 use alloy_consensus::Header as AlloyHeader;
 use alloy_primitives::{Address, Bytes, B256, B64, U256};
 use cipherbft_metrics::execution::{
-    EXECUTION_BLOCKS_EXECUTED, EXECUTION_BLOCK_TIME, EXECUTION_TXS_PER_BLOCK,
+    EXECUTION_BLOCKS_EXECUTED, EXECUTION_BLOCK_TIME, EXECUTION_CONTRACT_CALLS,
+    EXECUTION_CONTRACT_DEPLOYMENTS, EXECUTION_GAS_PER_BLOCK, EXECUTION_GAS_UTILIZATION,
+    EXECUTION_TXS_PER_BLOCK, EXECUTION_TX_FAILED, EXECUTION_TX_REVERTED, EXECUTION_TX_SUCCESS,
+    EXECUTION_TX_TIME,
 };
 use parking_lot::RwLock;
 use revm::primitives::hardfork::SpecId;
@@ -320,8 +323,44 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
             );
 
             for (tx_index, tx_bytes) in transactions.iter().enumerate() {
+                let tx_start = Instant::now();
+
                 // Execute transaction
                 let tx_result = self.evm_config.execute_transaction(&mut evm, tx_bytes)?;
+
+                // Record per-transaction metrics
+                let tx_duration = tx_start.elapsed();
+                let tx_type = if tx_result.contract_address.is_some() {
+                    EXECUTION_CONTRACT_DEPLOYMENTS.inc();
+                    "contract_create"
+                } else if tx_result.to.is_some() {
+                    EXECUTION_CONTRACT_CALLS.inc();
+                    "contract_call"
+                } else {
+                    "transfer"
+                };
+                EXECUTION_TX_TIME
+                    .with_label_values(&[tx_type])
+                    .observe(tx_duration.as_secs_f64());
+
+                // Track transaction success/failure
+                if tx_result.success {
+                    EXECUTION_TX_SUCCESS.inc();
+                } else if let Some(ref reason) = tx_result.revert_reason {
+                    EXECUTION_TX_REVERTED.inc();
+                    // Categorize failure reason
+                    let failure_reason =
+                        if reason.contains("OutOfGas") || reason.contains("out of gas") {
+                            "out_of_gas"
+                        } else if reason.contains("Revert") {
+                            "revert"
+                        } else {
+                            "invalid_opcode"
+                        };
+                    EXECUTION_TX_FAILED
+                        .with_label_values(&[failure_reason])
+                        .inc();
+                }
 
                 cumulative_gas_used += tx_result.gas_used;
 
@@ -485,6 +524,15 @@ impl<P: Provider + Clone> ExecutionLayer for ExecutionEngine<P> {
         EXECUTION_TXS_PER_BLOCK
             .with_label_values(&[])
             .observe(tx_count as f64);
+        EXECUTION_GAS_PER_BLOCK
+            .with_label_values(&[])
+            .observe(gas_used as f64);
+
+        // Track gas utilization ratio
+        if input.gas_limit > 0 {
+            let utilization_ratio = gas_used as f64 / input.gas_limit as f64;
+            EXECUTION_GAS_UTILIZATION.set(utilization_ratio);
+        }
 
         Ok(ExecutionResult {
             block_number: input.block_number,

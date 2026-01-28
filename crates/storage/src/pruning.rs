@@ -6,8 +6,10 @@
 //! - Unreferenced Cars, Attestations, and Batches
 
 use crate::dcl::DclStore;
+use cipherbft_metrics::storage::{STORAGE_COMPACTION, STORAGE_COMPACTION_DURATION};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Notify;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, trace};
@@ -208,10 +210,22 @@ impl<S: DclStore + Send + Sync + 'static> PruningTask<S> {
 
                 debug!(current_height, prune_before_height, "Running pruning cycle");
 
+                let prune_start = Instant::now();
                 match store.prune_before(prune_before_height).await {
                     Ok(pruned_count) => {
+                        let duration = prune_start.elapsed();
+                        STORAGE_COMPACTION.inc();
+                        STORAGE_COMPACTION_DURATION
+                            .with_label_values(&[])
+                            .observe(duration.as_secs_f64());
+
                         if pruned_count > 0 {
-                            info!(pruned_count, prune_before_height, "Pruning cycle completed");
+                            info!(
+                                pruned_count,
+                                prune_before_height,
+                                duration_ms = duration.as_millis(),
+                                "Pruning cycle completed"
+                            );
                         } else {
                             debug!(prune_before_height, "Pruning cycle completed (no entries)");
                         }

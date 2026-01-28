@@ -4,8 +4,12 @@
 //! using MDBX as the backing storage engine for transaction persistence.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
+use cipherbft_metrics::storage::{
+    STORAGE_BATCH_COMMIT, STORAGE_READ_LATENCY, STORAGE_WRITE_LATENCY,
+};
 use reth_db::Database;
 use reth_db_api::transaction::{DbTx, DbTxMut};
 use tracing::{debug, trace};
@@ -111,6 +115,7 @@ impl MdbxTransactionStore {
 #[async_trait]
 impl TransactionStore for MdbxTransactionStore {
     async fn put_transaction(&self, tx: &Transaction) -> TransactionStoreResult<()> {
+        let start = Instant::now();
         let stored = Self::tx_to_stored(tx);
         let tx_key = HashKey(tx.hash);
         let block_key = BlockNumberKey::new(tx.block_number);
@@ -136,7 +141,15 @@ impl TransactionStore for MdbxTransactionStore {
                 .map_err(|e| db_err(e.to_string()))?;
         }
 
+        let commit_start = Instant::now();
         db_tx.commit().map_err(|e| db_err(e.to_string()))?;
+        STORAGE_BATCH_COMMIT
+            .with_label_values(&[])
+            .observe(commit_start.elapsed().as_secs_f64());
+
+        STORAGE_WRITE_LATENCY
+            .with_label_values(&["transactions"])
+            .observe(start.elapsed().as_secs_f64());
 
         debug!(tx_hash = ?tx.hash, "Stored transaction");
         Ok(())
@@ -146,12 +159,17 @@ impl TransactionStore for MdbxTransactionStore {
         &self,
         hash: &[u8; 32],
     ) -> TransactionStoreResult<Option<Transaction>> {
+        let start = Instant::now();
         let key = HashKey(*hash);
 
         let db_tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
         let result = db_tx
             .get::<Transactions>(key)
             .map_err(|e| db_err(e.to_string()))?;
+
+        STORAGE_READ_LATENCY
+            .with_label_values(&["transactions"])
+            .observe(start.elapsed().as_secs_f64());
 
         match result {
             Some(bincode_value) => {
@@ -171,6 +189,7 @@ impl TransactionStore for MdbxTransactionStore {
             return Ok(());
         }
 
+        let start = Instant::now();
         let db_tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         // Group transactions by block number for efficient block index updates
@@ -212,7 +231,15 @@ impl TransactionStore for MdbxTransactionStore {
                 .map_err(|e| db_err(e.to_string()))?;
         }
 
+        let commit_start = Instant::now();
         db_tx.commit().map_err(|e| db_err(e.to_string()))?;
+        STORAGE_BATCH_COMMIT
+            .with_label_values(&[])
+            .observe(commit_start.elapsed().as_secs_f64());
+
+        STORAGE_WRITE_LATENCY
+            .with_label_values(&["transactions"])
+            .observe(start.elapsed().as_secs_f64());
 
         debug!(count = txs.len(), "Stored transactions in batch");
         Ok(())
@@ -222,6 +249,7 @@ impl TransactionStore for MdbxTransactionStore {
         &self,
         block_number: u64,
     ) -> TransactionStoreResult<Vec<Transaction>> {
+        let start = Instant::now();
         let block_key = BlockNumberKey::new(block_number);
 
         let db_tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
@@ -248,6 +276,10 @@ impl TransactionStore for MdbxTransactionStore {
         // Sort by transaction index
         transactions.sort_by_key(|tx| tx.transaction_index);
 
+        STORAGE_READ_LATENCY
+            .with_label_values(&["transactions"])
+            .observe(start.elapsed().as_secs_f64());
+
         trace!(
             block_number,
             count = transactions.len(),
@@ -257,6 +289,7 @@ impl TransactionStore for MdbxTransactionStore {
     }
 
     async fn has_transaction(&self, hash: &[u8; 32]) -> TransactionStoreResult<bool> {
+        let start = Instant::now();
         let key = HashKey(*hash);
 
         let db_tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
@@ -264,10 +297,15 @@ impl TransactionStore for MdbxTransactionStore {
             .get::<Transactions>(key)
             .map_err(|e| db_err(e.to_string()))?;
 
+        STORAGE_READ_LATENCY
+            .with_label_values(&["transactions"])
+            .observe(start.elapsed().as_secs_f64());
+
         Ok(result.is_some())
     }
 
     async fn delete_transactions_by_block(&self, block_number: u64) -> TransactionStoreResult<()> {
+        let start = Instant::now();
         let block_key = BlockNumberKey::new(block_number);
 
         let db_tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
@@ -292,7 +330,15 @@ impl TransactionStore for MdbxTransactionStore {
             .delete::<TransactionsByBlock>(block_key, None)
             .map_err(|e| db_err(e.to_string()))?;
 
+        let commit_start = Instant::now();
         db_tx.commit().map_err(|e| db_err(e.to_string()))?;
+        STORAGE_BATCH_COMMIT
+            .with_label_values(&[])
+            .observe(commit_start.elapsed().as_secs_f64());
+
+        STORAGE_WRITE_LATENCY
+            .with_label_values(&["transactions"])
+            .observe(start.elapsed().as_secs_f64());
 
         debug!(
             block_number,

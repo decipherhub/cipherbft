@@ -9,6 +9,7 @@
 //! Reth's provider state.
 
 use alloy_eips::Encodable2718;
+use cipherbft_metrics::mempool::MEMPOOL_VALIDATION_TIME;
 use reth_chainspec::{ChainSpecProvider, EthereumHardforks};
 use reth_storage_api::StateProviderFactory;
 use reth_transaction_pool::{
@@ -20,6 +21,7 @@ use reth_transaction_pool::{
 };
 use std::any::Any;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::warn;
 
 /// Error type for execution layer validation failures.
@@ -205,11 +207,18 @@ where
         origin: TransactionOrigin,
         transaction: Self::Transaction,
     ) -> TransactionValidationOutcome<Self::Transaction> {
+        // Track validation time
+        let start = Instant::now();
+
         // Phase 1: Reth validation (signature, format, basic checks)
         let reth_outcome = self.inner.validate_transaction(origin, transaction).await;
 
-        // If Reth validation failed, return immediately
+        // If Reth validation failed, record time and return immediately
         if !reth_outcome.is_valid() {
+            let duration = start.elapsed().as_secs_f64();
+            MEMPOOL_VALIDATION_TIME
+                .with_label_values(&[])
+                .observe(duration);
             return reth_outcome;
         }
 
@@ -231,7 +240,7 @@ where
             recovered_consensus.encode_2718(&mut tx_bytes);
 
             // Call execution layer validation
-            match exec_validator.validate_transaction(&tx_bytes).await {
+            let result = match exec_validator.validate_transaction(&tx_bytes).await {
                 Ok(()) => {
                     // Both validations passed
                     reth_outcome
@@ -259,7 +268,15 @@ where
                         other => other, // Should not happen
                     }
                 }
-            }
+            };
+
+            // Record validation time
+            let duration = start.elapsed().as_secs_f64();
+            MEMPOOL_VALIDATION_TIME
+                .with_label_values(&[])
+                .observe(duration);
+
+            result
         } else {
             // No execution validator configured, return Reth result only
             // Log a warning in debug builds to encourage proper configuration
@@ -274,6 +291,13 @@ where
                     );
                 }
             }
+
+            // Record validation time (Reth only)
+            let duration = start.elapsed().as_secs_f64();
+            MEMPOOL_VALIDATION_TIME
+                .with_label_values(&[])
+                .observe(duration);
+
             reth_outcome
         }
     }

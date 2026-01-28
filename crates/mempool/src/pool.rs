@@ -44,6 +44,11 @@ use crate::validator::CipherBftValidator;
 use alloy_consensus::transaction::PooledTransaction;
 use alloy_consensus::Transaction;
 use alloy_primitives::TxHash;
+use cipherbft_metrics::mempool::{
+    MEMPOOL_DUPLICATE, MEMPOOL_GAS_PRICE_TOO_LOW, MEMPOOL_INSUFFICIENT_BALANCE,
+    MEMPOOL_INVALID_NONCE, MEMPOOL_TRANSACTIONS_INCLUDED, MEMPOOL_TRANSACTIONS_PENDING,
+    MEMPOOL_TRANSACTIONS_QUEUED, MEMPOOL_TRANSACTIONS_RECEIVED, MEMPOOL_TRANSACTIONS_REJECTED,
+};
 use reth_chainspec::EthereumHardforks;
 use reth_primitives::TransactionSigned;
 use reth_primitives_traits::{Recovered, SignedTransaction};
@@ -292,7 +297,16 @@ where
 
     /// Remove transactions that were finalized in a committed block (ADR-006)
     pub fn remove_finalized(&self, tx_hashes: &[TxHash]) {
+        let removed_count = tx_hashes.len();
         let _ = self.pool.remove_transactions(tx_hashes.to_vec());
+
+        // Track included transactions (transactions removed because they were in a block)
+        MEMPOOL_TRANSACTIONS_INCLUDED.inc_by(removed_count as f64);
+
+        // Update pool size metrics after removal
+        let size = self.pool.pool_size();
+        MEMPOOL_TRANSACTIONS_PENDING.set(size.pending as f64);
+        MEMPOOL_TRANSACTIONS_QUEUED.set(size.queued as f64);
     }
 
     /// Get pool statistics for metrics (ADR-006)
@@ -339,11 +353,66 @@ where
         origin: TransactionOrigin,
         tx: TransactionSigned,
     ) -> Result<(), MempoolError> {
-        let tx_recovered = self.recover_and_validate(tx).await?;
+        // Track received transactions
+        MEMPOOL_TRANSACTIONS_RECEIVED.inc();
+
+        let tx_recovered = match self.recover_and_validate(tx).await {
+            Ok(tx) => tx,
+            Err(e) => {
+                // Track rejections by reason
+                let reason = match &e {
+                    MempoolError::InvalidSignature => "invalid_signature",
+                    MempoolError::InsufficientGasPrice { .. } => "gas_price_too_low",
+                    MempoolError::NonceGapExceeded { .. } => "nonce_gap_exceeded",
+                    MempoolError::NonceTooLow { .. } => "nonce_too_low",
+                    MempoolError::InsufficientBalance { .. } => "insufficient_funds",
+                    _ => "other",
+                };
+                MEMPOOL_TRANSACTIONS_REJECTED
+                    .with_label_values(&[reason])
+                    .inc();
+
+                // Track specific rejection counters
+                match &e {
+                    MempoolError::InsufficientGasPrice { .. } => MEMPOOL_GAS_PRICE_TOO_LOW.inc(),
+                    MempoolError::NonceTooLow { .. } => MEMPOOL_INVALID_NONCE.inc(),
+                    MempoolError::InsufficientBalance { .. } => MEMPOOL_INSUFFICIENT_BALANCE.inc(),
+                    // InvalidSignature is already tracked via MEMPOOL_TRANSACTIONS_REJECTED with label "invalid_signature"
+                    _ => {}
+                }
+                return Err(e);
+            }
+        };
+
         let pooled_tx = P::Transaction::try_from(tx_recovered)
             .map_err(|err| MempoolError::Conversion(err.to_string()))?;
-        self.pool.add_transaction(origin, pooled_tx).await?;
-        Ok(())
+
+        match self.pool.add_transaction(origin, pooled_tx).await {
+            Ok(_) => {
+                // Update pool size metrics after successful addition
+                let size = self.pool.pool_size();
+                MEMPOOL_TRANSACTIONS_PENDING.set(size.pending as f64);
+                MEMPOOL_TRANSACTIONS_QUEUED.set(size.queued as f64);
+                Ok(())
+            }
+            Err(e) => {
+                // Track pool-level rejections (e.g., duplicate, pool full)
+                let reason = if e.to_string().contains("already known") {
+                    MEMPOOL_DUPLICATE.inc();
+                    "duplicate"
+                } else if e.to_string().contains("pool is full")
+                    || e.to_string().contains("limit reached")
+                {
+                    "pool_full"
+                } else {
+                    "other"
+                };
+                MEMPOOL_TRANSACTIONS_REJECTED
+                    .with_label_values(&[reason])
+                    .inc();
+                Err(e.into())
+            }
+        }
     }
 
     /// Add a pre-recovered transaction to the pool with BFT validation.
@@ -352,11 +421,54 @@ where
         origin: TransactionOrigin,
         tx_recovered: RecoveredTx,
     ) -> Result<(), MempoolError> {
-        self.validate_bft_policy(&tx_recovered).await?;
+        // Track received transactions
+        MEMPOOL_TRANSACTIONS_RECEIVED.inc();
+
+        if let Err(e) = self.validate_bft_policy(&tx_recovered).await {
+            // Track rejections by reason
+            let reason = match &e {
+                MempoolError::InsufficientGasPrice { .. } => "gas_price_too_low",
+                MempoolError::NonceGapExceeded { .. } => "nonce_gap_exceeded",
+                _ => "other",
+            };
+            MEMPOOL_TRANSACTIONS_REJECTED
+                .with_label_values(&[reason])
+                .inc();
+
+            if matches!(e, MempoolError::InsufficientGasPrice { .. }) {
+                MEMPOOL_GAS_PRICE_TOO_LOW.inc();
+            }
+            return Err(e);
+        }
+
         let pooled_tx = P::Transaction::try_from(tx_recovered)
             .map_err(|err| MempoolError::Conversion(err.to_string()))?;
-        self.pool.add_transaction(origin, pooled_tx).await?;
-        Ok(())
+
+        match self.pool.add_transaction(origin, pooled_tx).await {
+            Ok(_) => {
+                // Update pool size metrics after successful addition
+                let size = self.pool.pool_size();
+                MEMPOOL_TRANSACTIONS_PENDING.set(size.pending as f64);
+                MEMPOOL_TRANSACTIONS_QUEUED.set(size.queued as f64);
+                Ok(())
+            }
+            Err(e) => {
+                let reason = if e.to_string().contains("already known") {
+                    MEMPOOL_DUPLICATE.inc();
+                    "duplicate"
+                } else if e.to_string().contains("pool is full")
+                    || e.to_string().contains("limit reached")
+                {
+                    "pool_full"
+                } else {
+                    "other"
+                };
+                MEMPOOL_TRANSACTIONS_REJECTED
+                    .with_label_values(&[reason])
+                    .inc();
+                Err(e.into())
+            }
+        }
     }
 
     /// Add raw transaction bytes to the pool.

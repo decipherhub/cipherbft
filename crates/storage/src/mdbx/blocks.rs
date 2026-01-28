@@ -4,8 +4,12 @@
 //! using MDBX as the backing storage engine for block persistence.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
+use cipherbft_metrics::storage::{
+    STORAGE_BATCH_COMMIT, STORAGE_READ_LATENCY, STORAGE_WRITE_LATENCY,
+};
 use reth_db::Database;
 use reth_db_api::cursor::DbCursorRO;
 use reth_db_api::transaction::{DbTx, DbTxMut};
@@ -115,6 +119,7 @@ impl MdbxBlockStore {
 #[async_trait]
 impl BlockStore for MdbxBlockStore {
     async fn put_block(&self, block: &Block) -> BlockStoreResult<()> {
+        let start = Instant::now();
         let stored = Self::block_to_stored(block);
         let number_key = BlockNumberKey::new(block.number);
         let hash_key = HashKey(block.hash);
@@ -129,15 +134,28 @@ impl BlockStore for MdbxBlockStore {
         tx.put::<BlocksByHash>(hash_key, number_key)
             .map_err(|e| db_err(e.to_string()))?;
 
+        let commit_start = Instant::now();
         tx.commit().map_err(|e| db_err(e.to_string()))?;
+        STORAGE_BATCH_COMMIT
+            .with_label_values(&[])
+            .observe(commit_start.elapsed().as_secs_f64());
+
+        STORAGE_WRITE_LATENCY
+            .with_label_values(&["blocks"])
+            .observe(start.elapsed().as_secs_f64());
         Ok(())
     }
 
     async fn get_block_by_number(&self, number: u64) -> BlockStoreResult<Option<Block>> {
+        let start = Instant::now();
         let key = BlockNumberKey::new(number);
 
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
         let result = tx.get::<Blocks>(key).map_err(|e| db_err(e.to_string()))?;
+
+        STORAGE_READ_LATENCY
+            .with_label_values(&["blocks"])
+            .observe(start.elapsed().as_secs_f64());
 
         match result {
             Some(bincode_value) => {
@@ -149,6 +167,7 @@ impl BlockStore for MdbxBlockStore {
     }
 
     async fn get_block_by_hash(&self, hash: &[u8; 32]) -> BlockStoreResult<Option<Block>> {
+        let start = Instant::now();
         let hash_key = HashKey(*hash);
 
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
@@ -158,7 +177,7 @@ impl BlockStore for MdbxBlockStore {
             .get::<BlocksByHash>(hash_key)
             .map_err(|e| db_err(e.to_string()))?;
 
-        match number_key {
+        let result = match number_key {
             Some(key) => {
                 // Then, get the block by number
                 let result = tx.get::<Blocks>(key).map_err(|e| db_err(e.to_string()))?;
@@ -171,10 +190,17 @@ impl BlockStore for MdbxBlockStore {
                 }
             }
             None => Ok(None),
-        }
+        };
+
+        STORAGE_READ_LATENCY
+            .with_label_values(&["blocks"])
+            .observe(start.elapsed().as_secs_f64());
+
+        result
     }
 
     async fn get_block_number_by_hash(&self, hash: &[u8; 32]) -> BlockStoreResult<Option<u64>> {
+        let start = Instant::now();
         let hash_key = HashKey(*hash);
 
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
@@ -182,45 +208,69 @@ impl BlockStore for MdbxBlockStore {
             .get::<BlocksByHash>(hash_key)
             .map_err(|e| db_err(e.to_string()))?;
 
+        STORAGE_READ_LATENCY
+            .with_label_values(&["blocks_by_hash"])
+            .observe(start.elapsed().as_secs_f64());
+
         Ok(result.map(|key| key.0))
     }
 
     async fn get_latest_block_number(&self) -> BlockStoreResult<Option<u64>> {
+        let start = Instant::now();
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
         let mut cursor = tx
             .cursor_read::<Blocks>()
             .map_err(|e| db_err(e.to_string()))?;
 
         // Seek to the last entry
-        match cursor.last().map_err(|e| db_err(e.to_string()))? {
+        let result = match cursor.last().map_err(|e| db_err(e.to_string()))? {
             Some((key, _)) => Ok(Some(key.0)),
             None => Ok(None),
-        }
+        };
+
+        STORAGE_READ_LATENCY
+            .with_label_values(&["blocks"])
+            .observe(start.elapsed().as_secs_f64());
+
+        result
     }
 
     async fn get_earliest_block_number(&self) -> BlockStoreResult<Option<u64>> {
+        let start = Instant::now();
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
         let mut cursor = tx
             .cursor_read::<Blocks>()
             .map_err(|e| db_err(e.to_string()))?;
 
         // Seek to the first entry
-        match cursor.first().map_err(|e| db_err(e.to_string()))? {
+        let result = match cursor.first().map_err(|e| db_err(e.to_string()))? {
             Some((key, _)) => Ok(Some(key.0)),
             None => Ok(None),
-        }
+        };
+
+        STORAGE_READ_LATENCY
+            .with_label_values(&["blocks"])
+            .observe(start.elapsed().as_secs_f64());
+
+        result
     }
 
     async fn has_block(&self, number: u64) -> BlockStoreResult<bool> {
+        let start = Instant::now();
         let key = BlockNumberKey::new(number);
 
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
         let result = tx.get::<Blocks>(key).map_err(|e| db_err(e.to_string()))?;
 
+        STORAGE_READ_LATENCY
+            .with_label_values(&["blocks"])
+            .observe(start.elapsed().as_secs_f64());
+
         Ok(result.is_some())
     }
 
     async fn delete_block(&self, number: u64) -> BlockStoreResult<()> {
+        let start = Instant::now();
         let number_key = BlockNumberKey::new(number);
 
         let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
@@ -241,7 +291,15 @@ impl BlockStore for MdbxBlockStore {
         tx.delete::<Blocks>(number_key, None)
             .map_err(|e| db_err(e.to_string()))?;
 
+        let commit_start = Instant::now();
         tx.commit().map_err(|e| db_err(e.to_string()))?;
+        STORAGE_BATCH_COMMIT
+            .with_label_values(&[])
+            .observe(commit_start.elapsed().as_secs_f64());
+
+        STORAGE_WRITE_LATENCY
+            .with_label_values(&["blocks"])
+            .observe(start.elapsed().as_secs_f64());
         Ok(())
     }
 }

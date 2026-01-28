@@ -34,6 +34,10 @@ use cipherbft_data_chain::{
     error::MAX_MESSAGE_SIZE, primary::runner::PrimaryNetwork, worker::core::WorkerNetwork,
     Attestation, Car, DclMessage, WorkerMessage,
 };
+use cipherbft_metrics::network::{
+    P2P_BYTES_RECEIVED, P2P_BYTES_SENT, P2P_CONNECTION_ERRORS, P2P_MESSAGES_RECEIVED,
+    P2P_MESSAGES_SENT, P2P_PEERS_CONNECTED, P2P_PEERS_INBOUND, P2P_PEERS_OUTBOUND,
+};
 use cipherbft_types::ValidatorId;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -116,15 +120,21 @@ impl TcpPrimaryNetwork {
                 match listener.accept().await {
                     Ok((stream, addr)) => {
                         debug!("Accepted connection from {}", addr);
+                        P2P_PEERS_INBOUND.inc();
+                        P2P_PEERS_CONNECTED.inc();
                         let self_clone = Arc::clone(&self);
                         tokio::spawn(async move {
                             if let Err(e) = self_clone.handle_connection(stream).await {
                                 error!("Connection error from {}: {}", addr, e);
                             }
+                            // Connection ended - decrement metrics
+                            P2P_PEERS_INBOUND.dec();
+                            P2P_PEERS_CONNECTED.dec();
                         });
                     }
                     Err(e) => {
                         error!("Accept error: {}", e);
+                        P2P_CONNECTION_ERRORS.inc();
                     }
                 }
             }
@@ -161,8 +171,18 @@ impl TcpPrimaryNetwork {
                 buf.advance(HEADER_SIZE);
                 let msg_bytes = buf.split_to(len);
 
+                // Track bytes received
+                P2P_BYTES_RECEIVED.inc_by(msg_bytes.len() as f64);
+
                 match bincode::deserialize::<NetworkMessage>(&msg_bytes) {
                     Ok(NetworkMessage::Dcl(dcl_msg)) => {
+                        let msg_type = match dcl_msg.as_ref() {
+                            DclMessage::Car(_) => "car",
+                            DclMessage::Attestation(_) => "attestation",
+                            _ => "other",
+                        };
+                        P2P_MESSAGES_RECEIVED.with_label_values(&[msg_type]).inc();
+
                         let from = match dcl_msg.as_ref() {
                             DclMessage::Car(car) => car.proposer,
                             DclMessage::Attestation(att) => att.attester,
@@ -208,7 +228,13 @@ impl TcpPrimaryNetwork {
 
         debug!("Connecting to peer {:?} at {}", validator_id, addr);
 
-        let stream = TcpStream::connect(addr).await?;
+        let stream = match TcpStream::connect(addr).await {
+            Ok(s) => s,
+            Err(e) => {
+                P2P_CONNECTION_ERRORS.inc();
+                return Err(e.into());
+            }
+        };
         let (reader, writer) = tokio::io::split(stream);
 
         self.peers.write().await.insert(
@@ -218,6 +244,10 @@ impl TcpPrimaryNetwork {
             },
         );
 
+        // Track outbound connection
+        P2P_PEERS_OUTBOUND.inc();
+        P2P_PEERS_CONNECTED.inc();
+
         // Spawn a reader task to handle incoming messages on this outgoing connection.
         // This is critical: without this, responses (e.g., attestations) sent back on
         // this connection would never be read, causing attestation timeouts.
@@ -226,6 +256,9 @@ impl TcpPrimaryNetwork {
             if let Err(e) = Self::handle_outgoing_connection_reader(reader, incoming_tx).await {
                 debug!("Outgoing connection reader ended: {}", e);
             }
+            // Connection ended - decrement metrics
+            P2P_PEERS_OUTBOUND.dec();
+            P2P_PEERS_CONNECTED.dec();
         });
 
         info!("Connected to peer {:?}", validator_id);
@@ -335,11 +368,25 @@ impl TcpPrimaryNetwork {
             }
         }; // Read lock released here
 
+        // Track message type for metrics
+        let msg_type = match msg {
+            NetworkMessage::Dcl(dcl_msg) => match dcl_msg.as_ref() {
+                DclMessage::Car(_) => "car",
+                DclMessage::Attestation(_) => "attestation",
+                _ => "other",
+            },
+            NetworkMessage::Worker(_) => "worker",
+        };
+
         // Serialize message AFTER releasing peers lock
         let data = bincode::serialize(msg)?;
         let mut frame = BytesMut::with_capacity(HEADER_SIZE + data.len());
         frame.put_u32(data.len() as u32);
         frame.extend_from_slice(&data);
+
+        // Track bytes and messages sent
+        P2P_BYTES_SENT.inc_by(frame.len() as f64);
+        P2P_MESSAGES_SENT.with_label_values(&[msg_type]).inc();
 
         // Now perform I/O with only the writer lock held (not peers lock)
         let mut guard = writer.lock().await;
@@ -452,15 +499,21 @@ impl TcpWorkerNetwork {
                             "Worker {} accepted connection from {}",
                             self.worker_id, addr
                         );
+                        P2P_PEERS_INBOUND.inc();
+                        P2P_PEERS_CONNECTED.inc();
                         let self_clone = Arc::clone(&self);
                         tokio::spawn(async move {
                             if let Err(e) = self_clone.handle_connection(stream).await {
                                 error!("Worker connection error from {}: {}", addr, e);
                             }
+                            // Connection ended - decrement metrics
+                            P2P_PEERS_INBOUND.dec();
+                            P2P_PEERS_CONNECTED.dec();
                         });
                     }
                     Err(e) => {
                         error!("Worker accept error: {}", e);
+                        P2P_CONNECTION_ERRORS.inc();
                     }
                 }
             }
@@ -497,8 +550,18 @@ impl TcpWorkerNetwork {
                 buf.advance(HEADER_SIZE);
                 let msg_bytes = buf.split_to(len);
 
+                // Track bytes received
+                P2P_BYTES_RECEIVED.inc_by(msg_bytes.len() as f64);
+
                 match bincode::deserialize::<NetworkMessage>(&msg_bytes) {
                     Ok(NetworkMessage::Worker(worker_msg)) => {
+                        let msg_type = match &worker_msg {
+                            WorkerMessage::Batch(_) => "batch",
+                            WorkerMessage::BatchRequest { .. } => "batch_request",
+                            WorkerMessage::BatchResponse { .. } => "batch_response",
+                        };
+                        P2P_MESSAGES_RECEIVED.with_label_values(&[msg_type]).inc();
+
                         // Extract sender from message where available
                         // BatchRequest has requestor field, others use ZERO (not needed for response routing)
                         let from = match &worker_msg {
@@ -555,7 +618,13 @@ impl TcpWorkerNetwork {
             .get(&validator_id)
             .ok_or_else(|| anyhow::anyhow!("Unknown peer: {:?}", validator_id))?;
 
-        let stream = TcpStream::connect(addr).await?;
+        let stream = match TcpStream::connect(addr).await {
+            Ok(s) => s,
+            Err(e) => {
+                P2P_CONNECTION_ERRORS.inc();
+                return Err(e.into());
+            }
+        };
         let (_, writer) = tokio::io::split(stream);
 
         self.peers.write().await.insert(
@@ -564,6 +633,10 @@ impl TcpWorkerNetwork {
                 writer: Arc::new(Mutex::new(writer)),
             },
         );
+
+        // Track outbound connection
+        P2P_PEERS_OUTBOUND.inc();
+        P2P_PEERS_CONNECTED.inc();
 
         Ok(())
     }
@@ -596,12 +669,23 @@ impl TcpWorkerNetwork {
             }
         }; // Read lock released here
 
+        // Track message type for metrics
+        let msg_type = match msg {
+            WorkerMessage::Batch(_) => "batch",
+            WorkerMessage::BatchRequest { .. } => "batch_request",
+            WorkerMessage::BatchResponse { .. } => "batch_response",
+        };
+
         // Serialize message AFTER releasing peers lock
         let net_msg = NetworkMessage::Worker(msg.clone());
         let data = bincode::serialize(&net_msg)?;
         let mut frame = BytesMut::with_capacity(HEADER_SIZE + data.len());
         frame.put_u32(data.len() as u32);
         frame.extend_from_slice(&data);
+
+        // Track bytes and messages sent
+        P2P_BYTES_SENT.inc_by(frame.len() as f64);
+        P2P_MESSAGES_SENT.with_label_values(&[msg_type]).inc();
 
         // Perform I/O with only the writer lock held
         let mut guard = writer.lock().await;

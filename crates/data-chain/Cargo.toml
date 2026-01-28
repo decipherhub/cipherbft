@@ -10,6 +10,7 @@ description = "Data Chain Layer (DCL) with Primary-Worker Architecture for Ciphe
 # Internal dependencies
 cipherbft-types = { path = "../types" }
 cipherbft-crypto = { path = "../crypto" }
+cipherbft-metrics = { path = "../metrics" }
 
 # Async runtime
 tokio = { workspace = true }

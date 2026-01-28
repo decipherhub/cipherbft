@@ -4,7 +4,11 @@
 //! using MDBX as the backing storage engine.
 
 use std::sync::Arc;
+use std::time::Instant;
 
+use cipherbft_metrics::storage::{
+    STORAGE_BATCH_COMMIT, STORAGE_READ_LATENCY, STORAGE_WRITE_LATENCY,
+};
 use reth_db::Database;
 use reth_db_api::cursor::DbCursorRO;
 use reth_db_api::transaction::{DbTx, DbTxMut};
@@ -119,12 +123,17 @@ impl MdbxEvmStore {
 
 impl EvmStore for MdbxEvmStore {
     fn get_account(&self, address: &[u8; 20]) -> EvmStoreResult<Option<EvmAccount>> {
+        let start = Instant::now();
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
 
         let key = AddressKey(*address);
         let result = tx
             .get::<EvmAccounts>(key)
             .map_err(|e| db_err(e.to_string()))?;
+
+        STORAGE_READ_LATENCY
+            .with_label_values(&["evm_accounts"])
+            .observe(start.elapsed().as_secs_f64());
 
         match result {
             Some(stored) => {
@@ -141,6 +150,7 @@ impl EvmStore for MdbxEvmStore {
     }
 
     fn set_account(&self, address: &[u8; 20], account: EvmAccount) -> EvmStoreResult<()> {
+        let start = Instant::now();
         let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         let key = AddressKey(*address);
@@ -154,28 +164,50 @@ impl EvmStore for MdbxEvmStore {
         tx.put::<EvmAccounts>(key, stored.into())
             .map_err(|e| db_err(e.to_string()))?;
 
+        let commit_start = Instant::now();
         tx.commit().map_err(|e| db_err(e.to_string()))?;
+        STORAGE_BATCH_COMMIT
+            .with_label_values(&[])
+            .observe(commit_start.elapsed().as_secs_f64());
+
+        STORAGE_WRITE_LATENCY
+            .with_label_values(&["evm_accounts"])
+            .observe(start.elapsed().as_secs_f64());
 
         Ok(())
     }
 
     fn delete_account(&self, address: &[u8; 20]) -> EvmStoreResult<()> {
+        let start = Instant::now();
         let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         let key = AddressKey(*address);
         tx.delete::<EvmAccounts>(key, None)
             .map_err(|e| db_err(e.to_string()))?;
 
+        let commit_start = Instant::now();
         tx.commit().map_err(|e| db_err(e.to_string()))?;
+        STORAGE_BATCH_COMMIT
+            .with_label_values(&[])
+            .observe(commit_start.elapsed().as_secs_f64());
+
+        STORAGE_WRITE_LATENCY
+            .with_label_values(&["evm_accounts"])
+            .observe(start.elapsed().as_secs_f64());
 
         Ok(())
     }
 
     fn get_code(&self, code_hash: &[u8; 32]) -> EvmStoreResult<Option<EvmBytecode>> {
+        let start = Instant::now();
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
 
         let key = HashKey(*code_hash);
         let result = tx.get::<EvmCode>(key).map_err(|e| db_err(e.to_string()))?;
+
+        STORAGE_READ_LATENCY
+            .with_label_values(&["evm_code"])
+            .observe(start.elapsed().as_secs_f64());
 
         match result {
             Some(stored) => Ok(Some(EvmBytecode::new(stored.0.code))),
@@ -184,6 +216,7 @@ impl EvmStore for MdbxEvmStore {
     }
 
     fn set_code(&self, code_hash: &[u8; 32], bytecode: EvmBytecode) -> EvmStoreResult<()> {
+        let start = Instant::now();
         let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         let key = HashKey(*code_hash);
@@ -194,12 +227,21 @@ impl EvmStore for MdbxEvmStore {
         tx.put::<EvmCode>(key, stored.into())
             .map_err(|e| db_err(e.to_string()))?;
 
+        let commit_start = Instant::now();
         tx.commit().map_err(|e| db_err(e.to_string()))?;
+        STORAGE_BATCH_COMMIT
+            .with_label_values(&[])
+            .observe(commit_start.elapsed().as_secs_f64());
+
+        STORAGE_WRITE_LATENCY
+            .with_label_values(&["evm_code"])
+            .observe(start.elapsed().as_secs_f64());
 
         Ok(())
     }
 
     fn get_storage(&self, address: &[u8; 20], slot: &[u8; 32]) -> EvmStoreResult<[u8; 32]> {
+        let start = Instant::now();
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
 
         let key = StorageSlotKey {
@@ -209,6 +251,10 @@ impl EvmStore for MdbxEvmStore {
         let result = tx
             .get::<EvmStorage>(key)
             .map_err(|e| db_err(e.to_string()))?;
+
+        STORAGE_READ_LATENCY
+            .with_label_values(&["evm_storage"])
+            .observe(start.elapsed().as_secs_f64());
 
         match result {
             Some(stored) => Ok(stored.0.value),
@@ -222,6 +268,7 @@ impl EvmStore for MdbxEvmStore {
         slot: &[u8; 32],
         value: [u8; 32],
     ) -> EvmStoreResult<()> {
+        let start = Instant::now();
         let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         let key = StorageSlotKey {
@@ -239,18 +286,31 @@ impl EvmStore for MdbxEvmStore {
                 .map_err(|e| db_err(e.to_string()))?;
         }
 
+        let commit_start = Instant::now();
         tx.commit().map_err(|e| db_err(e.to_string()))?;
+        STORAGE_BATCH_COMMIT
+            .with_label_values(&[])
+            .observe(commit_start.elapsed().as_secs_f64());
+
+        STORAGE_WRITE_LATENCY
+            .with_label_values(&["evm_storage"])
+            .observe(start.elapsed().as_secs_f64());
 
         Ok(())
     }
 
     fn get_block_hash(&self, number: u64) -> EvmStoreResult<Option<[u8; 32]>> {
+        let start = Instant::now();
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
 
         let key = BlockNumberKey(number);
         let result = tx
             .get::<EvmBlockHashes>(key)
             .map_err(|e| db_err(e.to_string()))?;
+
+        STORAGE_READ_LATENCY
+            .with_label_values(&["evm_block_hashes"])
+            .observe(start.elapsed().as_secs_f64());
 
         match result {
             Some(hash_key) => Ok(Some(hash_key.0)),
@@ -259,6 +319,7 @@ impl EvmStore for MdbxEvmStore {
     }
 
     fn set_block_hash(&self, number: u64, hash: [u8; 32]) -> EvmStoreResult<()> {
+        let start = Instant::now();
         let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         let key = BlockNumberKey(number);
@@ -267,7 +328,15 @@ impl EvmStore for MdbxEvmStore {
         tx.put::<EvmBlockHashes>(key, value)
             .map_err(|e| db_err(e.to_string()))?;
 
+        let commit_start = Instant::now();
         tx.commit().map_err(|e| db_err(e.to_string()))?;
+        STORAGE_BATCH_COMMIT
+            .with_label_values(&[])
+            .observe(commit_start.elapsed().as_secs_f64());
+
+        STORAGE_WRITE_LATENCY
+            .with_label_values(&["evm_block_hashes"])
+            .observe(start.elapsed().as_secs_f64());
 
         Ok(())
     }
