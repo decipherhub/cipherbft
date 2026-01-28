@@ -157,6 +157,12 @@ pub trait DecisionHandler: Send + Sync + 'static {
 
     /// Get the minimum height available in history.
     async fn get_history_min_height(&self) -> Result<ConsensusHeight, ConsensusError>;
+
+    /// Get the latest finalized height from storage.
+    ///
+    /// This is used during startup to determine where consensus should resume.
+    /// Returns `None` if no finalized heights exist (fresh start).
+    async fn get_latest_finalized_height(&self) -> Result<Option<ConsensusHeight>, ConsensusError>;
 }
 
 /// The CipherBFT Host actor implementation.
@@ -315,10 +321,36 @@ impl Actor for CipherBftHost {
     ) -> Result<(), ActorProcessingErr> {
         match msg {
             HostMsg::ConsensusReady { reply_to } => {
-                info!(parent: &self.span, "Consensus ready, returning initial height and validator set");
+                // Determine initial height from storage (for restart recovery)
+                // If we have finalized data in storage, resume from latest_finalized_height + 1
+                let height = match self.decision_handler.get_latest_finalized_height().await {
+                    Ok(Some(latest_height)) => {
+                        let resume_height = ConsensusHeight(latest_height.0 + 1);
+                        info!(
+                            parent: &self.span,
+                            "Consensus ready, resuming from height {} (latest finalized: {})",
+                            resume_height.0,
+                            latest_height.0
+                        );
+                        resume_height
+                    }
+                    Ok(None) => {
+                        info!(
+                            parent: &self.span,
+                            "Consensus ready, starting from height 1 (no finalized data)"
+                        );
+                        ConsensusHeight(1)
+                    }
+                    Err(e) => {
+                        warn!(
+                            parent: &self.span,
+                            error = %e,
+                            "Failed to get latest finalized height, starting from height 1"
+                        );
+                        ConsensusHeight(1)
+                    }
+                };
 
-                // Get the validator set for height 1 (genesis)
-                let height = ConsensusHeight(1);
                 match self.get_validator_set(height) {
                     Ok(validator_set) => {
                         if reply_to.send((height, validator_set)).is_err() {
@@ -326,7 +358,7 @@ impl Actor for CipherBftHost {
                         }
                     }
                     Err(e) => {
-                        error!(parent: &self.span, error = %e, "Failed to get initial validator set");
+                        error!(parent: &self.span, error = %e, "Failed to get validator set for height {}", height.0);
                     }
                 }
             }
@@ -1469,6 +1501,27 @@ impl DecisionHandler for ChannelDecisionHandler {
         // Fall back to in-memory cache minimum
         let decided = self.decided_cuts.read().await;
         Ok(decided.keys().min().cloned().unwrap_or(ConsensusHeight(1)))
+    }
+
+    async fn get_latest_finalized_height(&self) -> Result<Option<ConsensusHeight>, ConsensusError> {
+        // Check persistent storage first for the latest finalized height
+        if let Some(store) = &self.dcl_store {
+            match store.get_latest_finalized_cut().await {
+                Ok(Some(cut)) => {
+                    return Ok(Some(ConsensusHeight(cut.height)));
+                }
+                Ok(None) => {
+                    // No finalized cuts in storage
+                }
+                Err(e) => {
+                    warn!("Failed to get latest finalized cut from storage: {}", e);
+                }
+            }
+        }
+
+        // Fall back to in-memory cache maximum
+        let decided = self.decided_cuts.read().await;
+        Ok(decided.keys().max().cloned())
     }
 }
 

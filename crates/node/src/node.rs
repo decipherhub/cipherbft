@@ -719,7 +719,36 @@ impl Node {
                 ));
             }
         }
-        let ctx = create_context(chain_id, consensus_validators, None)?;
+        // Determine initial height from storage (for restart recovery)
+        // If we have persistent storage and there's a finalized cut, resume from that height + 1
+        let initial_height = if let Some(store) = &self.dcl_store {
+            match store.get_latest_finalized_cut().await {
+                Ok(Some(cut)) => {
+                    let resume_height = cut.height + 1;
+                    info!(
+                        "Resuming consensus from height {} (latest finalized: {})",
+                        resume_height, cut.height
+                    );
+                    Some(ConsensusHeight(resume_height))
+                }
+                Ok(None) => {
+                    info!("No finalized cuts in storage, starting from height 1");
+                    None
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to read latest finalized cut: {}, starting from height 1",
+                        e
+                    );
+                    None
+                }
+            }
+        } else {
+            info!("No persistent DCL storage, starting consensus from height 1");
+            None
+        };
+
+        let ctx = create_context(chain_id, consensus_validators, initial_height)?;
         // Find our own address in the sorted validator set by matching our validator ID.
         // Note: The validator set is sorted by voting power (desc), then address (asc),
         // so we cannot assume our position - we must search for ourselves.
