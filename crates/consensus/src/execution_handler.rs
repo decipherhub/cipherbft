@@ -311,6 +311,13 @@ impl<E: ExecutionCallback, R: ReceiptStore> DecisionHandler for ExecutingDecisio
         let decided = self.decided_cuts.read().await;
         Ok(decided.keys().min().cloned().unwrap_or(ConsensusHeight(1)))
     }
+
+    async fn get_latest_finalized_height(&self) -> Result<Option<ConsensusHeight>, ConsensusError> {
+        // ExecutionDecisionHandler uses in-memory storage only
+        // Return the max height from the decided cuts cache
+        let decided = self.decided_cuts.read().await;
+        Ok(decided.keys().max().cloned())
+    }
 }
 
 #[cfg(test)]
