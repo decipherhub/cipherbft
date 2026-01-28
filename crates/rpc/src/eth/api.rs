@@ -862,6 +862,9 @@ where
         } else {
             None
         };
+        // Track last block's gas values for EIP-1559 integer base fee estimation
+        let mut last_block_gas_used: u64 = 0;
+        let mut last_block_gas_limit: u64 = 1;
 
         for block_num in oldest_block..=newest_block_number {
             // Get block data
@@ -888,6 +891,10 @@ where
                     };
                     gas_used_ratio.push(ratio);
 
+                    // Track for next base fee estimation
+                    last_block_gas_used = gas_used;
+                    last_block_gas_limit = gas_limit;
+
                     // Calculate reward percentiles if requested
                     if let Some(ref percentiles) = reward_percentiles {
                         // For simplicity, return zeros for now
@@ -911,20 +918,25 @@ where
             }
         }
 
-        // Add the next block's base fee estimate (simple calculation)
-        // In reality, this would use the EIP-1559 base fee adjustment formula
+        // Add the next block's base fee estimate using EIP-1559 integer arithmetic
         let last_base_fee = base_fee_per_gas.last().copied().unwrap_or(0);
-        let last_ratio = gas_used_ratio.last().copied().unwrap_or(0.5);
+        let last_gas_used = last_block_gas_used;
+        let last_gas_limit = last_block_gas_limit;
+        let gas_target = last_gas_limit / 2;
 
-        // Simple base fee estimation: increase if block was >50% full, decrease otherwise
-        let next_base_fee = if last_ratio > 0.5 {
+        let next_base_fee = if gas_target == 0 {
+            last_base_fee
+        } else if last_gas_used > gas_target {
             // Block was more than 50% full, increase base fee
-            let increase = (last_base_fee as f64 * 0.125 * (last_ratio - 0.5) * 2.0) as u128;
-            last_base_fee.saturating_add(increase)
+            // EIP-1559: change = base_fee * (gas_used - target) / target / 8
+            let delta = (last_gas_used - gas_target) as u128;
+            let change = last_base_fee * delta / gas_target as u128 / 8;
+            last_base_fee.saturating_add(change)
         } else {
             // Block was less than 50% full, decrease base fee
-            let decrease = (last_base_fee as f64 * 0.125 * (0.5 - last_ratio) * 2.0) as u128;
-            last_base_fee.saturating_sub(decrease)
+            let delta = (gas_target - last_gas_used) as u128;
+            let change = last_base_fee * delta / gas_target as u128 / 8;
+            last_base_fee.saturating_sub(change)
         };
         base_fee_per_gas.push(next_base_fee);
 
