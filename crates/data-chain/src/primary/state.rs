@@ -173,6 +173,66 @@ impl PrimaryState {
         }
     }
 
+    /// Create state initialized from the last finalized Cut
+    ///
+    /// This is critical for restart recovery. When a validator restarts, it must
+    /// restore position tracking from the last finalized cut so that:
+    /// 1. Other validators accept our CARs (they expect the correct position)
+    /// 2. We correctly validate incoming CARs from other validators
+    ///
+    /// Without this, restarted validators would create CARs at position 0, but
+    /// other validators expect continuity from the last finalized position,
+    /// causing all CARs to be rejected with PositionGap errors.
+    ///
+    /// # Arguments
+    /// * `our_id` - Our validator identity
+    /// * `equivocation_retention` - Number of heights to retain equivocation data
+    /// * `cut` - The last finalized Cut to restore state from
+    ///
+    /// # State Restored
+    /// * `our_position` - Set to our last finalized position + 1 (next position to create)
+    /// * `last_car_hash` - Set to our last finalized CAR hash (for parent_ref)
+    /// * `last_seen_positions` - Populated from all CARs in the cut
+    /// * `last_seen_car_hashes` - Populated from all CARs in the cut
+    /// * `current_height` - Set to cut.height + 1 (next height to produce)
+    /// * `last_finalized_height` - Set to cut.height
+    pub fn from_cut(our_id: ValidatorId, equivocation_retention: u64, cut: &Cut) -> Self {
+        let mut state = Self::new(our_id, equivocation_retention);
+
+        // Set height state from the cut
+        state.last_finalized_height = cut.height;
+        state.current_height = cut.height + 1;
+
+        // Restore position tracking from all CARs in the cut
+        for (validator, car) in &cut.cars {
+            state.last_seen_positions.insert(*validator, car.position);
+            state.last_seen_car_hashes.insert(*validator, car.hash());
+
+            // If this is our own CAR, restore our position state
+            if *validator == our_id {
+                state.our_position = car.position + 1; // Next position to create
+                state.last_car_hash = Some(car.hash());
+            }
+        }
+        // Note: If our validator is not in the restored cut, we start at position 0.
+        // This is correct because:
+        // 1. If we were never active, position 0 is the correct starting point
+        // 2. If we were offline and missed being included in recent cuts, other
+        //    validators track expected positions per-validator based on finalized
+        //    cuts. They will have "forgotten" our old position and expect us to
+        //    start fresh, which prevents permanent PositionGap deadlock.
+
+        tracing::info!(
+            validator = %our_id,
+            restored_height = cut.height,
+            our_position = state.our_position,
+            tracked_validators = state.last_seen_positions.len(),
+            "Primary state restored from finalized cut"
+        );
+
+        state
+    }
+
     /// Add batch digest from Worker
     pub fn add_batch_digest(&mut self, digest: BatchDigest) {
         // Track as available for batch availability checking
@@ -1393,5 +1453,124 @@ mod tests {
         assert!(!state.is_awaiting_gap_sync(&validator, 10));
         assert!(!state.is_awaiting_gap_sync(&validator, 11));
         assert!(!state.is_awaiting_gap_sync(&validator, 12));
+    }
+
+    // =========================================================
+    // State Restoration from Cut Tests (Restart Recovery)
+    // =========================================================
+
+    /// Test that from_cut correctly restores state for restart recovery.
+    ///
+    /// This is the fix for the PositionGap errors on validator restart:
+    /// Without state restoration, a restarted validator creates CARs at position 0,
+    /// but other validators expect continuity from the last finalized position.
+    #[test]
+    fn test_from_cut_restores_position_state() {
+        use crate::car::Car;
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let validator_b = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
+        let validator_c = ValidatorId::from_bytes([3u8; VALIDATOR_ID_SIZE]);
+
+        // Create a finalized cut at height 100 with:
+        // - Our validator at position 50
+        // - Validator B at position 42
+        // - Validator C at position 37
+        let mut cut = Cut::new(100);
+
+        let car_ours = Car::new(our_id, 50, vec![], Some(Hash::compute(b"our_car49")));
+        let car_b = Car::new(validator_b, 42, vec![], Some(Hash::compute(b"b_car41")));
+        let car_c = Car::new(validator_c, 37, vec![], Some(Hash::compute(b"c_car36")));
+
+        cut.cars.insert(our_id, car_ours.clone());
+        cut.cars.insert(validator_b, car_b.clone());
+        cut.cars.insert(validator_c, car_c.clone());
+
+        // Create state from the cut
+        let state = PrimaryState::from_cut(our_id, 1000, &cut);
+
+        // Verify height state is restored
+        assert_eq!(state.last_finalized_height, 100);
+        assert_eq!(state.current_height, 101); // next height to produce
+
+        // Verify invariant: current_height = last_finalized_height + 1
+        assert_eq!(
+            state.current_height,
+            state.last_finalized_height + 1,
+            "Invariant: current_height = last_finalized_height + 1"
+        );
+
+        // Verify our own position is restored correctly
+        // our_position should be 51 (next position to create after 50)
+        assert_eq!(state.our_position, 51);
+        assert_eq!(state.last_car_hash, Some(car_ours.hash()));
+
+        // Verify expected positions for other validators
+        assert_eq!(state.expected_position(&validator_b), 43); // 42 + 1
+        assert_eq!(state.expected_position(&validator_c), 38); // 37 + 1
+
+        // Verify last_seen_car_hashes are set
+        assert_eq!(state.last_seen_car_hash(&our_id), Some(&car_ours.hash()));
+        assert_eq!(state.last_seen_car_hash(&validator_b), Some(&car_b.hash()));
+        assert_eq!(state.last_seen_car_hash(&validator_c), Some(&car_c.hash()));
+
+        // Verify we're in collecting stage (ready to start producing)
+        assert_eq!(state.pipeline_stage, PipelineStage::Collecting);
+    }
+
+    /// Test from_cut with an empty cut (first start, not restart)
+    #[test]
+    fn test_from_cut_empty_cut() {
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+
+        // Empty cut at height 0 (genesis scenario)
+        let cut = Cut::new(0);
+
+        let state = PrimaryState::from_cut(our_id, 1000, &cut);
+
+        // Height should be set from cut
+        assert_eq!(state.last_finalized_height, 0);
+        assert_eq!(state.current_height, 1);
+
+        // Our position should start at 0 (not in the cut)
+        assert_eq!(state.our_position, 0);
+        assert_eq!(state.last_car_hash, None);
+
+        // No position tracking for validators not in cut
+        let other_validator = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
+        assert_eq!(state.expected_position(&other_validator), 0);
+    }
+
+    /// Test that from_cut handles case where our validator is not in the cut
+    /// (e.g., we were offline and didn't contribute to this cut)
+    #[test]
+    fn test_from_cut_our_validator_not_in_cut() {
+        use crate::car::Car;
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let validator_b = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
+
+        // Create a cut without our validator
+        let mut cut = Cut::new(50);
+        let car_b = Car::new(validator_b, 25, vec![], None);
+        cut.cars.insert(validator_b, car_b.clone());
+
+        let state = PrimaryState::from_cut(our_id, 1000, &cut);
+
+        // Height is still restored
+        assert_eq!(state.last_finalized_height, 50);
+        assert_eq!(state.current_height, 51);
+
+        // But our position starts at 0 since we weren't in the cut
+        // This is correct - we need to start fresh since we have no record
+        assert_eq!(state.our_position, 0);
+        assert_eq!(state.last_car_hash, None);
+
+        // Other validator's position is tracked
+        assert_eq!(state.expected_position(&validator_b), 26);
     }
 }

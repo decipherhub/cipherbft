@@ -499,14 +499,47 @@ impl Node {
                 .map(|(id, info)| (*id, info.bls_public_key.clone()))
                 .collect();
 
-            // Spawn Primary task
-            let (primary_handle, worker_rxs) = Primary::spawn(
+            // Load the last finalized cut for Primary state restoration on restart
+            // This is CRITICAL for validator restart: without it, a restarted validator
+            // would create CARs at position 0, but other validators expect continuity
+            // from the last finalized position, causing PositionGap errors.
+            let initial_cut = if let Some(ref store) = self.dcl_store {
+                match store.get_latest_finalized_cut().await {
+                    Ok(Some(cut)) => {
+                        info!(
+                            "Restoring Primary state from finalized cut at height {} with {} validators",
+                            cut.height,
+                            cut.cars.len()
+                        );
+                        Some(cut)
+                    }
+                    Ok(None) => {
+                        info!("No finalized cut in storage, Primary starting fresh");
+                        None
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to load finalized cut for Primary restart: {}, starting fresh",
+                            e
+                        );
+                        None
+                    }
+                }
+            } else {
+                debug!("No DCL store available, Primary starting without state restoration");
+                None
+            };
+
+            // Spawn Primary task with optional initial cut for restart recovery
+            let (primary_handle, worker_rxs) = Primary::spawn_with_initial_cut(
                 primary_config,
                 bls_pubkeys,
                 Box::new(TcpPrimaryNetworkAdapter {
                     network: primary_network,
                 }),
                 self.config.num_workers as u8,
+                None, // storage - not used for now
+                initial_cut,
             );
 
             // Spawn Workers and wire up channels
