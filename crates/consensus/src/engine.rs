@@ -100,6 +100,13 @@ pub fn default_consensus_params(
     }
 }
 
+/// Default queue capacity for buffering consensus inputs for future heights.
+///
+/// This allows the engine to buffer votes, proposals, and sync responses
+/// that arrive for heights we haven't reached yet. Without this, such
+/// messages are silently dropped, causing validators to get stuck during sync.
+const DEFAULT_QUEUE_CAPACITY: usize = 10;
+
 /// Engine config tuned for ProposalAndParts mode.
 ///
 /// This mode sends both full proposal messages and proposal parts, enabling
@@ -107,6 +114,7 @@ pub fn default_consensus_params(
 pub fn default_engine_config_single_part() -> EngineConsensusConfig {
     EngineConsensusConfig {
         value_payload: EngineValuePayload::ProposalAndParts,
+        queue_capacity: DEFAULT_QUEUE_CAPACITY,
         ..Default::default()
     }
 }
@@ -126,6 +134,7 @@ pub fn create_engine_config(config: &ConsensusConfig) -> EngineConsensusConfig {
     EngineConsensusConfig {
         value_payload: EngineValuePayload::ProposalAndParts,
         timeouts: timeout_config,
+        queue_capacity: DEFAULT_QUEUE_CAPACITY,
         ..Default::default()
     }
 }
