@@ -3,6 +3,8 @@
 //! This module provides the spawn_sync function to create a Malachite Sync actor
 //! that handles state synchronization between consensus peers.
 
+use std::time::Duration;
+
 use crate::context::CipherBftContext;
 use anyhow::Result;
 use informalsystems_malachitebft_engine::host::HostRef;
@@ -34,8 +36,13 @@ pub async fn spawn_sync(
 ) -> Result<SyncRef<CipherBftContext>> {
     info!("Spawning sync actor for state synchronization");
 
-    // Use default params for status update interval and request timeout
-    let params = SyncParams::default();
+    // Configure sync params for fast block production (~60ms/block)
+    // - status_update_interval: Check peer status frequently to detect sync needs early
+    // - request_timeout: Allow time for sync responses under load
+    let params = SyncParams {
+        status_update_interval: Duration::from_millis(500), // Check every 500ms instead of 5s
+        request_timeout: Duration::from_secs(30),
+    };
 
     // Create metrics for sync operations
     let metrics = SyncMetrics::default();
