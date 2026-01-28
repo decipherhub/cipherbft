@@ -1391,7 +1391,7 @@ impl DecisionHandler for ChannelDecisionHandler {
                 ConsensusError::Other(format!("Failed to serialize commit certificate: {}", e))
             })?;
 
-            // Store the certificate (Cut is stored separately by finalize_cut)
+            // Store the certificate
             if let Err(e) = store.put_commit_certificate(height.0, &cert_bytes).await {
                 error!(
                     "Failed to persist commit certificate at height {}: {}",
@@ -1404,6 +1404,17 @@ impl DecisionHandler for ChannelDecisionHandler {
                     height.0,
                     cert_bytes.len()
                 );
+            }
+
+            // Store the finalized cut (required for sync - get_decided_value needs both)
+            if let Err(e) = store.put_finalized_cut(cut.clone()).await {
+                error!(
+                    "Failed to persist finalized cut at height {}: {}",
+                    height.0, e
+                );
+                // Continue - the in-memory cache will still work for the session
+            } else {
+                debug!("Persisted finalized cut at height {}", height.0);
             }
         }
 
@@ -1832,12 +1843,8 @@ mod tests {
         let value4 = ConsensusValue(make_test_cut(4));
         let cert4 = make_test_certificate(4);
 
-        // Also store the finalized cuts directly in storage
-        // (In production, this is done by the DCL layer via finalize_cut)
-        store.put_finalized_cut(make_test_cut(1)).await.unwrap();
-        store.put_finalized_cut(make_test_cut(2)).await.unwrap();
-        store.put_finalized_cut(make_test_cut(3)).await.unwrap();
-        store.put_finalized_cut(make_test_cut(4)).await.unwrap();
+        // Note: on_decided now automatically persists finalized cuts to storage,
+        // so we don't need to manually call put_finalized_cut here.
 
         // Store 4 decisions via the handler (triggers pruning of height 1 from memory)
         handler
@@ -1885,5 +1892,89 @@ mod tests {
         // Min height should be 1 (from storage, not in-memory)
         let min_height = handler.get_history_min_height().await.unwrap();
         assert_eq!(min_height.0, 1);
+    }
+
+    /// Test that on_decided persists finalized cuts to storage automatically.
+    /// This is critical for sync: without persisted cuts, peers cannot retrieve
+    /// decided values for heights that were pruned from the in-memory cache.
+    #[tokio::test]
+    async fn test_on_decided_persists_finalized_cut_to_storage() {
+        use cipherbft_storage::InMemoryStore;
+
+        // Create storage and handler with small retention (window of 2)
+        let store: Arc<dyn cipherbft_storage::DclStore> = Arc::new(InMemoryStore::new());
+        let handler = ChannelDecisionHandler::new(None, 2).with_storage(Arc::clone(&store));
+
+        let value1 = ConsensusValue(make_test_cut(1));
+        let cert1 = make_test_certificate(1);
+        let value2 = ConsensusValue(make_test_cut(2));
+        let cert2 = make_test_certificate(2);
+        let value3 = ConsensusValue(make_test_cut(3));
+        let cert3 = make_test_certificate(3);
+        let value4 = ConsensusValue(make_test_cut(4));
+        let cert4 = make_test_certificate(4);
+
+        // Store 4 decisions via on_decided ONLY - do NOT manually add cuts to storage.
+        // This simulates the actual production flow where on_decided is the only
+        // entry point for consensus decisions.
+        handler
+            .on_decided(ConsensusHeight(1), Round::new(0), value1, cert1)
+            .await
+            .unwrap();
+        handler
+            .on_decided(ConsensusHeight(2), Round::new(0), value2, cert2)
+            .await
+            .unwrap();
+        handler
+            .on_decided(ConsensusHeight(3), Round::new(0), value3, cert3)
+            .await
+            .unwrap();
+        handler
+            .on_decided(ConsensusHeight(4), Round::new(0), value4, cert4)
+            .await
+            .unwrap();
+
+        // Height 1 was pruned from memory (cutoff = 4 - 2 = 2).
+        // But it MUST still be retrievable from storage because on_decided should
+        // have persisted the finalized cut. This is critical for sync to work.
+        let result = handler.get_decided_value(ConsensusHeight(1)).await.unwrap();
+        assert!(
+            result.is_some(),
+            "on_decided must persist finalized cuts to storage for sync support. \
+             Height 1 was pruned from memory but should be retrievable from storage."
+        );
+
+        // Verify all heights are retrievable
+        assert!(
+            handler
+                .get_decided_value(ConsensusHeight(2))
+                .await
+                .unwrap()
+                .is_some(),
+            "Height 2 should be available"
+        );
+        assert!(
+            handler
+                .get_decided_value(ConsensusHeight(3))
+                .await
+                .unwrap()
+                .is_some(),
+            "Height 3 should be available"
+        );
+        assert!(
+            handler
+                .get_decided_value(ConsensusHeight(4))
+                .await
+                .unwrap()
+                .is_some(),
+            "Height 4 should be available"
+        );
+
+        // Verify the cut was actually stored in storage (not just certificate)
+        let stored_cut = store.get_finalized_cut(1).await.unwrap();
+        assert!(
+            stored_cut.is_some(),
+            "on_decided must call put_finalized_cut to persist the cut to storage"
+        );
     }
 }
