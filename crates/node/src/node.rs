@@ -91,6 +91,9 @@ impl ValidatorInfo {
     }
 }
 
+/// Default gas limit for blocks (30 million)
+const DEFAULT_GAS_LIMIT: u64 = 30_000_000;
+
 /// A running CipherBFT node
 pub struct Node {
     /// Configuration
@@ -158,8 +161,8 @@ impl Node {
             dcl_store: None,
             dcl_enabled: true, // Default to enabled, overridden by genesis
             epoch_block_reward: U256::from(2_000_000_000_000_000_000u128), // Default: 2 CPH
+            gas_limit: DEFAULT_GAS_LIMIT, // Default, overridden by genesis
             beneficiary: [0u8; 20], // Default zero, overridden by genesis
-            gas_limit: 30_000_000, // Default 30M, overridden by genesis
         })
     }
 
@@ -310,7 +313,7 @@ impl Node {
         }
 
         // Set gas limit from genesis
-        self.gas_limit = genesis.gas_limit.try_into().unwrap_or(30_000_000);
+        self.gas_limit = genesis.gas_limit.try_into().unwrap_or(DEFAULT_GAS_LIMIT);
         info!("Block gas limit set from genesis: {}", self.gas_limit);
 
         Ok(())
@@ -894,7 +897,8 @@ impl Node {
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs();
-                    let genesis_block = Self::create_genesis_block(genesis_timestamp);
+                    let genesis_block =
+                        Self::create_genesis_block(genesis_timestamp, self.gas_limit);
                     if let Err(e) = storage.block_store().put_block(&genesis_block).await {
                         error!("Failed to store genesis block: {}", e);
                     } else {
@@ -1426,7 +1430,7 @@ impl Node {
             receipts_root: exec.receipts_root.0,
             logs_bloom: exec.logs_bloom.0.to_vec(),
             difficulty: [0u8; 32], // Always zero in PoS
-            gas_limit,             // From genesis configuration
+            gas_limit,
             gas_used: exec.gas_used,
             timestamp: result.timestamp,
             extra_data: Vec::new(),
@@ -1607,7 +1611,7 @@ impl Node {
     ///
     /// # Returns
     /// A Block struct representing the genesis block (block 0).
-    fn create_genesis_block(timestamp: u64) -> Block {
+    fn create_genesis_block(timestamp: u64, gas_limit: u64) -> Block {
         // Empty trie root: keccak256(RLP([]))
         // This is the standard Ethereum empty trie root
         let empty_trie_root: [u8; 32] = [
@@ -1643,8 +1647,8 @@ impl Node {
             receipts_root: empty_trie_root,
             logs_bloom: vec![0u8; 256], // Empty bloom filter
             difficulty: [0u8; 32],      // Zero in PoS
-            gas_limit: 30_000_000,      // Standard gas limit
-            gas_used: 0,                // No transactions in genesis
+            gas_limit,
+            gas_used: 0, // No transactions in genesis
             timestamp,
             extra_data: b"CipherBFT Genesis".to_vec(),
             mix_hash: [0u8; 32],                   // Zero in PoS
