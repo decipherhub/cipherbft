@@ -22,6 +22,7 @@ malachite = [
     "informalsystems-malachitebft-codec",
     "informalsystems-malachitebft-metrics",
     "ractor",
+    "cipherbft-storage",
 ]
 
 [dependencies]
@@ -41,6 +42,7 @@ ractor = { workspace = true, optional = true }
 cipherbft-types = { path = "../types" }
 cipherbft-crypto = { path = "../crypto" }
 cipherbft-data-chain = { path = "../data-chain" }
+cipherbft-storage = { path = "../storage", optional = true }
 
 # Malachite BFT (all optional; enable via the `malachite` feature)
 informalsystems-malachitebft-app = { workspace = true, optional = true }

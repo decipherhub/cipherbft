@@ -244,6 +244,49 @@ pub trait DclStore: Send + Sync {
     /// Vector of Cuts in the range, ordered by height
     async fn get_finalized_cuts_range(&self, range: CutRange) -> Result<Vec<Cut>>;
 
+    /// Get the earliest finalized Cut height
+    ///
+    /// This is used by the sync mechanism to report the minimum available height.
+    ///
+    /// # Returns
+    /// * `Ok(Some(height))` if any finalized Cuts exist
+    /// * `Ok(None)` if no finalized Cuts exist
+    async fn get_earliest_finalized_height(&self) -> Result<Option<u64>>;
+
+    // ============================================================
+    // Commit Certificate Operations (for Consensus Sync)
+    // ============================================================
+
+    /// Store a commit certificate for a finalized height
+    ///
+    /// The certificate is stored as opaque bytes - the consensus layer handles
+    /// serialization/deserialization of the actual CommitCertificate type.
+    ///
+    /// # Arguments
+    /// * `height` - Consensus height
+    /// * `certificate` - Serialized commit certificate bytes
+    async fn put_commit_certificate(&self, height: u64, certificate: &[u8]) -> Result<()>;
+
+    /// Get a commit certificate by height
+    ///
+    /// # Arguments
+    /// * `height` - Consensus height
+    ///
+    /// # Returns
+    /// * `Ok(Some(bytes))` if the certificate exists
+    /// * `Ok(None)` if not found
+    async fn get_commit_certificate(&self, height: u64) -> Result<Option<Vec<u8>>>;
+
+    /// Delete a commit certificate
+    ///
+    /// # Arguments
+    /// * `height` - Consensus height
+    ///
+    /// # Returns
+    /// * `Ok(true)` if deleted
+    /// * `Ok(false)` if not found
+    async fn delete_commit_certificate(&self, height: u64) -> Result<bool>;
+
     // ============================================================
     // Garbage Collection (T055)
     // ============================================================

@@ -1289,13 +1289,17 @@ type DecidedCutsMap =
 /// Channel-based decision handler for backward compatibility.
 ///
 /// This adapter implements `DecisionHandler` by sending decisions to a channel.
+/// When a `DclStore` is provided, decisions are persisted to storage for durability
+/// and sync support across node restarts.
 pub struct ChannelDecisionHandler {
     /// Channel to send decided events
     decided_tx: Option<mpsc::Sender<(ConsensusHeight, Cut)>>,
-    /// Decided cuts by height (for history queries)
+    /// Decided cuts by height (for history queries - in-memory cache)
     decided_cuts: DecidedCutsMap,
-    /// Number of decisions to retain for history queries
+    /// Number of decisions to retain in memory
     decided_retention: usize,
+    /// Optional persistent storage for decisions (enables sync support)
+    dcl_store: Option<Arc<dyn cipherbft_storage::DclStore>>,
 }
 
 impl Default for ChannelDecisionHandler {
@@ -1309,7 +1313,7 @@ impl ChannelDecisionHandler {
     ///
     /// # Arguments
     /// * `decided_tx` - Optional channel to send decided events
-    /// * `decided_retention` - Number of decisions to retain for history queries
+    /// * `decided_retention` - Number of decisions to retain in memory
     pub fn new(
         decided_tx: Option<mpsc::Sender<(ConsensusHeight, Cut)>>,
         decided_retention: usize,
@@ -1318,7 +1322,21 @@ impl ChannelDecisionHandler {
             decided_tx,
             decided_cuts: Arc::new(RwLock::new(HashMap::new())),
             decided_retention,
+            dcl_store: None,
         }
+    }
+
+    /// Add persistent storage for decisions.
+    ///
+    /// When storage is provided, decisions are persisted to disk, enabling:
+    /// - Sync support: peers can request any finalized height
+    /// - Crash recovery: decisions survive node restarts
+    ///
+    /// Without storage, decisions are only kept in memory with retention pruning,
+    /// which causes sync failures when peers request old heights.
+    pub fn with_storage(mut self, store: Arc<dyn cipherbft_storage::DclStore>) -> Self {
+        self.dcl_store = Some(store);
+        self
     }
 }
 
@@ -1333,12 +1351,37 @@ impl DecisionHandler for ChannelDecisionHandler {
     ) -> Result<(), ConsensusError> {
         let cut = value.into_cut();
 
-        // Store for history queries
+        // Store to persistent storage if available (enables sync support)
+        if let Some(store) = &self.dcl_store {
+            // Serialize the certificate for storage using borsh
+            // (Malachite types derive BorshSerialize/BorshDeserialize)
+            let cert_bytes = borsh::to_vec(&certificate).map_err(|e| {
+                ConsensusError::Other(format!("Failed to serialize commit certificate: {}", e))
+            })?;
+
+            // Store the certificate (Cut is stored separately by finalize_cut)
+            if let Err(e) = store.put_commit_certificate(height.0, &cert_bytes).await {
+                error!(
+                    "Failed to persist commit certificate at height {}: {}",
+                    height.0, e
+                );
+                // Continue - the in-memory cache will still work for the session
+            } else {
+                debug!(
+                    "Persisted commit certificate at height {} ({} bytes)",
+                    height.0,
+                    cert_bytes.len()
+                );
+            }
+        }
+
+        // Store in memory cache for fast lookups during this session
         {
             let mut decided = self.decided_cuts.write().await;
             decided.insert(height, (cut.clone(), certificate));
 
-            // Clean up old decisions (keep only configured retention)
+            // Clean up old decisions from memory (keep only configured retention)
+            // Note: Storage retains all decisions permanently for sync
             let retention = self.decided_retention;
             if decided.len() > retention {
                 let heights: Vec<_> = decided.keys().cloned().collect();
@@ -1362,18 +1405,68 @@ impl DecisionHandler for ChannelDecisionHandler {
         &self,
         height: ConsensusHeight,
     ) -> Result<Option<RawDecidedValue<CipherBftContext>>, ConsensusError> {
-        let decided = self.decided_cuts.read().await;
-        Ok(decided.get(&height).map(|(cut, cert)| {
-            // Encode cut to bytes using bincode
-            let value_bytes = bincode::serialize(cut).unwrap_or_default().into();
-            RawDecidedValue {
-                certificate: cert.clone(),
-                value_bytes,
+        // First check in-memory cache for recent decisions
+        {
+            let decided = self.decided_cuts.read().await;
+            if let Some((cut, cert)) = decided.get(&height) {
+                // Encode cut to bytes using bincode
+                let value_bytes = bincode::serialize(cut).unwrap_or_default().into();
+                return Ok(Some(RawDecidedValue {
+                    certificate: cert.clone(),
+                    value_bytes,
+                }));
             }
-        }))
+        }
+
+        // Fall back to persistent storage for older decisions
+        if let Some(store) = &self.dcl_store {
+            // Get the finalized cut and certificate from storage
+            let cut_opt = store.get_finalized_cut(height.0).await.map_err(|e| {
+                ConsensusError::Other(format!("Failed to get finalized cut: {}", e))
+            })?;
+
+            let cert_bytes_opt = store.get_commit_certificate(height.0).await.map_err(|e| {
+                ConsensusError::Other(format!("Failed to get commit certificate: {}", e))
+            })?;
+
+            // Both cut and certificate must exist
+            if let (Some(cut), Some(cert_bytes)) = (cut_opt, cert_bytes_opt) {
+                // Deserialize the certificate using borsh
+                let certificate: CommitCertificate<CipherBftContext> =
+                    borsh::from_slice(&cert_bytes).map_err(|e| {
+                        ConsensusError::Other(format!(
+                            "Failed to deserialize commit certificate: {}",
+                            e
+                        ))
+                    })?;
+
+                // Encode cut to bytes using bincode for RawDecidedValue
+                let value_bytes = bincode::serialize(&cut).unwrap_or_default().into();
+
+                debug!(
+                    "Retrieved decided value from storage at height {}",
+                    height.0
+                );
+
+                return Ok(Some(RawDecidedValue {
+                    certificate,
+                    value_bytes,
+                }));
+            }
+        }
+
+        Ok(None)
     }
 
     async fn get_history_min_height(&self) -> Result<ConsensusHeight, ConsensusError> {
+        // Check persistent storage first for the actual minimum available height
+        if let Some(store) = &self.dcl_store {
+            if let Ok(Some(height)) = store.get_earliest_finalized_height().await {
+                return Ok(ConsensusHeight(height));
+            }
+        }
+
+        // Fall back to in-memory cache minimum
         let decided = self.decided_cuts.read().await;
         Ok(decided.keys().min().cloned().unwrap_or(ConsensusHeight(1)))
     }
@@ -1391,6 +1484,7 @@ impl DecisionHandler for ChannelDecisionHandler {
 /// * `cut_rx` - Channel to receive cuts from DCL
 /// * `decided_tx` - Channel to send decided events
 /// * `network` - Optional network reference for publishing proposal parts
+/// * `dcl_store` - Optional persistent storage for decisions (enables sync support)
 ///
 /// # Returns
 ///
@@ -1402,12 +1496,23 @@ impl DecisionHandler for ChannelDecisionHandler {
 /// network when building values. This enables `ProposalAndParts` mode where
 /// non-proposer nodes can receive and store the proposal values via the
 /// `ReceivedProposalPart` handler.
+///
+/// # Persistent Storage
+///
+/// When `dcl_store` is provided, decisions (cuts + certificates) are persisted
+/// to storage. This enables:
+/// - Sync support: peers can request historical heights for catch-up
+/// - Crash recovery: decisions survive node restarts
+///
+/// Without storage, decisions are only kept in memory with retention pruning,
+/// which causes sync failures when peers request old heights.
 pub async fn spawn_host(
     our_id: ValidatorId,
     ctx: CipherBftContext,
     mut cut_rx: mpsc::Receiver<Cut>,
     decided_tx: Option<mpsc::Sender<(ConsensusHeight, Cut)>>,
     network: Option<NetworkRef<CipherBftContext>>,
+    dcl_store: Option<Arc<dyn cipherbft_storage::DclStore>>,
 ) -> anyhow::Result<HostRef<CipherBftContext>> {
     // Extract validators from context
     let validators: Vec<_> = ctx.validator_set.as_slice().to_vec();
@@ -1439,10 +1544,14 @@ pub async fn spawn_host(
         Arc::new(ChannelValueBuilder::new(config.pending_cuts_retention))
     };
 
-    let decision_handler = Arc::new(ChannelDecisionHandler::new(
-        decided_tx,
-        config.decided_retention,
-    ));
+    let decision_handler = {
+        let handler = ChannelDecisionHandler::new(decided_tx, config.decided_retention);
+        if let Some(store) = dcl_store {
+            Arc::new(handler.with_storage(store))
+        } else {
+            Arc::new(handler)
+        }
+    };
 
     // Spawn background task to process DCL cuts
     let value_builder_for_cuts = Arc::clone(&value_builder);
@@ -1567,5 +1676,161 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(set.len(), 4);
+    }
+
+    /// Helper to create a test Cut
+    fn make_test_cut(height: u64) -> Cut {
+        Cut::new(height)
+    }
+
+    /// Helper to create a minimal test CommitCertificate
+    fn make_test_certificate(height: u64) -> CommitCertificate<CipherBftContext> {
+        use informalsystems_malachitebft_core_types::Value;
+
+        let value = ConsensusValue(make_test_cut(height));
+        let value_id = Value::id(&value);
+
+        // Create a minimal certificate with no signatures (for testing purposes)
+        CommitCertificate::<CipherBftContext> {
+            height: ConsensusHeight(height),
+            round: Round::new(0),
+            value_id,
+            commit_signatures: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn test_decision_handler_without_storage_prunes_old_decisions() {
+        // Create handler with small retention (window of 2)
+        // Pruning uses: cutoff = max_height - retention, keeps heights >= cutoff
+        // With retention=2 and max_height=4: cutoff=2, keeps heights 2,3,4
+        let handler = ChannelDecisionHandler::new(None, 2);
+        let value1 = ConsensusValue(make_test_cut(1));
+        let cert1 = make_test_certificate(1);
+        let value2 = ConsensusValue(make_test_cut(2));
+        let cert2 = make_test_certificate(2);
+        let value3 = ConsensusValue(make_test_cut(3));
+        let cert3 = make_test_certificate(3);
+        let value4 = ConsensusValue(make_test_cut(4));
+        let cert4 = make_test_certificate(4);
+
+        // Store 4 decisions - this triggers pruning of height 1
+        handler
+            .on_decided(ConsensusHeight(1), Round::new(0), value1, cert1)
+            .await
+            .unwrap();
+        handler
+            .on_decided(ConsensusHeight(2), Round::new(0), value2, cert2)
+            .await
+            .unwrap();
+        handler
+            .on_decided(ConsensusHeight(3), Round::new(0), value3, cert3)
+            .await
+            .unwrap();
+        handler
+            .on_decided(ConsensusHeight(4), Round::new(0), value4, cert4)
+            .await
+            .unwrap();
+
+        // Height 1 should be pruned (cutoff = 4 - 2 = 2)
+        let result = handler.get_decided_value(ConsensusHeight(1)).await.unwrap();
+        assert!(
+            result.is_none(),
+            "Without storage, old decisions should be pruned"
+        );
+
+        // Heights 2, 3, 4 should still be available (>= cutoff of 2)
+        assert!(handler
+            .get_decided_value(ConsensusHeight(2))
+            .await
+            .unwrap()
+            .is_some());
+        assert!(handler
+            .get_decided_value(ConsensusHeight(3))
+            .await
+            .unwrap()
+            .is_some());
+        assert!(handler
+            .get_decided_value(ConsensusHeight(4))
+            .await
+            .unwrap()
+            .is_some());
+
+        // Min height should be 2 (height 1 was pruned)
+        let min_height = handler.get_history_min_height().await.unwrap();
+        assert_eq!(min_height.0, 2);
+    }
+
+    #[tokio::test]
+    async fn test_decision_handler_with_storage_retrieves_pruned_decisions() {
+        use cipherbft_storage::InMemoryStore;
+
+        // Create storage and handler with small retention (window of 2)
+        // With retention=2 and max_height=4: cutoff=2, keeps heights 2,3,4 in memory
+        let store: Arc<dyn cipherbft_storage::DclStore> = Arc::new(InMemoryStore::new());
+        let handler = ChannelDecisionHandler::new(None, 2).with_storage(Arc::clone(&store));
+
+        let value1 = ConsensusValue(make_test_cut(1));
+        let cert1 = make_test_certificate(1);
+        let value2 = ConsensusValue(make_test_cut(2));
+        let cert2 = make_test_certificate(2);
+        let value3 = ConsensusValue(make_test_cut(3));
+        let cert3 = make_test_certificate(3);
+        let value4 = ConsensusValue(make_test_cut(4));
+        let cert4 = make_test_certificate(4);
+
+        // Also store the finalized cuts directly in storage
+        // (In production, this is done by the DCL layer via finalize_cut)
+        store.put_finalized_cut(make_test_cut(1)).await.unwrap();
+        store.put_finalized_cut(make_test_cut(2)).await.unwrap();
+        store.put_finalized_cut(make_test_cut(3)).await.unwrap();
+        store.put_finalized_cut(make_test_cut(4)).await.unwrap();
+
+        // Store 4 decisions via the handler (triggers pruning of height 1 from memory)
+        handler
+            .on_decided(ConsensusHeight(1), Round::new(0), value1, cert1)
+            .await
+            .unwrap();
+        handler
+            .on_decided(ConsensusHeight(2), Round::new(0), value2, cert2)
+            .await
+            .unwrap();
+        handler
+            .on_decided(ConsensusHeight(3), Round::new(0), value3, cert3)
+            .await
+            .unwrap();
+        handler
+            .on_decided(ConsensusHeight(4), Round::new(0), value4, cert4)
+            .await
+            .unwrap();
+
+        // Height 1 should still be retrievable from storage even though
+        // it was pruned from memory (cutoff = 4 - 2 = 2)
+        let result = handler.get_decided_value(ConsensusHeight(1)).await.unwrap();
+        assert!(
+            result.is_some(),
+            "With storage, old decisions should be retrievable"
+        );
+
+        // All heights should be available
+        assert!(handler
+            .get_decided_value(ConsensusHeight(2))
+            .await
+            .unwrap()
+            .is_some());
+        assert!(handler
+            .get_decided_value(ConsensusHeight(3))
+            .await
+            .unwrap()
+            .is_some());
+        assert!(handler
+            .get_decided_value(ConsensusHeight(4))
+            .await
+            .unwrap()
+            .is_some());
+
+        // Min height should be 1 (from storage, not in-memory)
+        let min_height = handler.get_history_min_height().await.unwrap();
+        assert_eq!(min_height.0, 1);
     }
 }
