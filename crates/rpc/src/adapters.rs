@@ -25,9 +25,11 @@ use async_trait::async_trait;
 use cipherbft_execution::database::Provider;
 use cipherbft_mempool::pool::RecoveredTx;
 use cipherbft_mempool::CipherBftPool;
-use cipherbft_storage::mdbx::{MdbxBlockStore, MdbxLogStore, MdbxReceiptStore};
+use cipherbft_storage::mdbx::{
+    MdbxBlockStore, MdbxLogStore, MdbxReceiptStore, MdbxTransactionStore,
+};
 use cipherbft_storage::{
-    BlockStore, LogFilter as StorageLogFilter, LogStore, ReceiptStore, StoredLog,
+    BlockStore, LogFilter as StorageLogFilter, LogStore, ReceiptStore, StoredLog, TransactionStore,
 };
 use parking_lot::RwLock;
 use reth_primitives::TransactionSigned;
@@ -42,7 +44,7 @@ use crate::error::{RpcError, RpcResult};
 use crate::traits::{
     BlockNumberOrTag, ExecutionApi, MempoolApi, NetworkApi, RpcProofStorage, RpcStorage, SyncStatus,
 };
-use crate::types::RpcBlock;
+use crate::types::{RpcBlock, RpcTransaction};
 
 /// Provider-based RPC storage adapter.
 ///
@@ -381,17 +383,18 @@ impl<P: Provider + 'static> RpcProofStorage for ProviderBasedRpcStorage<P> {
 // MDBX-backed RPC Storage Implementation
 // ============================================================================
 
-/// MDBX-backed RPC storage that uses real block and receipt stores.
+/// MDBX-backed RPC storage that uses real block, receipt, and transaction stores.
 ///
 /// This adapter combines the execution layer's `Provider` trait for state queries
-/// with MDBX-backed block and receipt stores for historical data. It bridges the
-/// gap between the RPC interface and the persistent storage layer.
+/// with MDBX-backed block, receipt, and transaction stores for historical data.
+/// It bridges the gap between the RPC interface and the persistent storage layer.
 ///
 /// # Architecture
 ///
 /// - State queries (balance, code, storage, nonce): Delegated to the `Provider`
 /// - Block queries: Use `MdbxBlockStore`
 /// - Receipt queries: Use `MdbxReceiptStore`
+/// - Transaction queries: Use `MdbxTransactionStore` (for full transaction bodies)
 /// - Latest block tracking: Managed internally via `AtomicU64`
 ///
 /// # Thread Safety
@@ -405,6 +408,8 @@ pub struct MdbxRpcStorage<P: Provider> {
     block_store: Arc<MdbxBlockStore>,
     /// Receipt storage.
     receipt_store: Arc<MdbxReceiptStore>,
+    /// Transaction storage for full transaction bodies.
+    transaction_store: Option<Arc<MdbxTransactionStore>>,
     /// Log storage for eth_getLogs queries.
     log_store: Option<Arc<MdbxLogStore>>,
     /// Chain ID.
@@ -434,6 +439,7 @@ impl<P: Provider> MdbxRpcStorage<P> {
             provider,
             block_store,
             receipt_store,
+            transaction_store: None,
             log_store: None,
             chain_id,
             latest_block: AtomicU64::new(0),
@@ -461,7 +467,41 @@ impl<P: Provider> MdbxRpcStorage<P> {
             provider,
             block_store,
             receipt_store,
+            transaction_store: None,
             log_store: Some(log_store),
+            chain_id,
+            latest_block: AtomicU64::new(0),
+            sync_state: RwLock::new(SyncStateTracker::default()),
+        }
+    }
+
+    /// Create new MDBX-backed RPC storage with transaction and log stores.
+    ///
+    /// This constructor enables full transaction body support for
+    /// `eth_getBlockByNumber` and `eth_getBlockByHash` with `full_transactions=true`.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider` - Provider for state queries
+    /// * `block_store` - MDBX-backed block store
+    /// * `receipt_store` - MDBX-backed receipt store
+    /// * `transaction_store` - MDBX-backed transaction store for full tx bodies
+    /// * `log_store` - MDBX-backed log store for eth_getLogs
+    /// * `chain_id` - Chain ID for this network
+    pub fn with_transaction_store(
+        provider: Arc<P>,
+        block_store: Arc<MdbxBlockStore>,
+        receipt_store: Arc<MdbxReceiptStore>,
+        transaction_store: Arc<MdbxTransactionStore>,
+        log_store: Option<Arc<MdbxLogStore>>,
+        chain_id: u64,
+    ) -> Self {
+        Self {
+            provider,
+            block_store,
+            receipt_store,
+            transaction_store: Some(transaction_store),
+            log_store,
             chain_id,
             latest_block: AtomicU64::new(0),
             sync_state: RwLock::new(SyncStateTracker::default()),
@@ -493,6 +533,11 @@ impl<P: Provider> MdbxRpcStorage<P> {
     /// Get reference to log store (if configured).
     pub fn log_store(&self) -> Option<&Arc<MdbxLogStore>> {
         self.log_store.as_ref()
+    }
+
+    /// Get reference to transaction store (if configured).
+    pub fn transaction_store(&self) -> Option<&Arc<MdbxTransactionStore>> {
+        self.transaction_store.as_ref()
     }
 
     /// Get reference to provider.
@@ -671,6 +716,118 @@ impl<P: Provider> MdbxRpcStorage<P> {
             removed: stored.removed,
         }
     }
+
+    /// Convert a storage transaction to an RPC transaction.
+    ///
+    /// This converts the raw storage format (designed for MDBX efficiency) back to
+    /// the Ethereum JSON-RPC `Transaction` format with all required fields.
+    fn storage_transaction_to_rpc(
+        &self,
+        storage_tx: cipherbft_storage::transactions::Transaction,
+    ) -> Transaction {
+        use alloy_consensus::{Signed, TxEip1559, TxEip2930, TxEnvelope, TxLegacy};
+        use alloy_primitives::Signature;
+        use reth_primitives_traits::Recovered;
+
+        let hash = B256::from(storage_tx.hash);
+        let from = Address::from(storage_tx.from);
+        let to = storage_tx.to.map(Address::from);
+        let value = U256::from_be_bytes(storage_tx.value);
+        let input = Bytes::from(storage_tx.input);
+
+        // Reconstruct signature from stored components
+        // For typed transactions (EIP-2930, EIP-1559): v is parity (0 or 1)
+        // For legacy: v includes chain_id encoding, extract parity
+        let parity = if storage_tx.transaction_type == 0 {
+            // Legacy: v = 27 + parity or v = chain_id * 2 + 35 + parity
+            if storage_tx.v >= 35 {
+                // EIP-155: parity = (v - 35) % 2
+                !(storage_tx.v - 35).is_multiple_of(2)
+            } else {
+                // Pre-EIP-155: parity = v - 27
+                (storage_tx.v - 27) != 0
+            }
+        } else {
+            // Typed transactions: v is already parity
+            storage_tx.v != 0
+        };
+
+        let r = U256::from_be_bytes(storage_tx.r);
+        let s = U256::from_be_bytes(storage_tx.s);
+        let signature = Signature::new(r, s, parity);
+
+        // Build the transaction envelope based on type
+        let tx_envelope: TxEnvelope = match storage_tx.transaction_type {
+            0 => {
+                // Legacy transaction
+                let legacy = TxLegacy {
+                    chain_id: storage_tx.chain_id,
+                    nonce: storage_tx.nonce,
+                    gas_price: storage_tx.gas_price.unwrap_or(0) as u128,
+                    gas_limit: storage_tx.gas,
+                    to: to.into(),
+                    value,
+                    input,
+                };
+                TxEnvelope::Legacy(Signed::new_unchecked(legacy, signature, hash))
+            }
+            1 => {
+                // EIP-2930 transaction
+                let eip2930 = TxEip2930 {
+                    chain_id: storage_tx.chain_id.unwrap_or(1),
+                    nonce: storage_tx.nonce,
+                    gas_price: storage_tx.gas_price.unwrap_or(0) as u128,
+                    gas_limit: storage_tx.gas,
+                    to: to.into(),
+                    value,
+                    input,
+                    access_list: Default::default(), // Access list not stored
+                };
+                TxEnvelope::Eip2930(Signed::new_unchecked(eip2930, signature, hash))
+            }
+            2 => {
+                // EIP-1559 transaction
+                let eip1559 = TxEip1559 {
+                    chain_id: storage_tx.chain_id.unwrap_or(1),
+                    nonce: storage_tx.nonce,
+                    max_fee_per_gas: storage_tx.max_fee_per_gas.unwrap_or(0) as u128,
+                    max_priority_fee_per_gas: storage_tx.max_priority_fee_per_gas.unwrap_or(0)
+                        as u128,
+                    gas_limit: storage_tx.gas,
+                    to: to.into(),
+                    value,
+                    input,
+                    access_list: Default::default(), // Access list not stored
+                };
+                TxEnvelope::Eip1559(Signed::new_unchecked(eip1559, signature, hash))
+            }
+            _ => {
+                // Default to legacy for unknown types
+                let legacy = TxLegacy {
+                    chain_id: storage_tx.chain_id,
+                    nonce: storage_tx.nonce,
+                    gas_price: storage_tx.gas_price.unwrap_or(0) as u128,
+                    gas_limit: storage_tx.gas,
+                    to: to.into(),
+                    value,
+                    input,
+                };
+                TxEnvelope::Legacy(Signed::new_unchecked(legacy, signature, hash))
+            }
+        };
+
+        // Wrap in Recovered to include sender
+        let recovered = Recovered::new_unchecked(tx_envelope, from);
+
+        // Build the RPC transaction with block context
+        Transaction {
+            inner: recovered,
+            block_hash: Some(B256::from(storage_tx.block_hash)),
+            block_number: Some(storage_tx.block_number),
+            transaction_index: Some(storage_tx.transaction_index as u64),
+            effective_gas_price: storage_tx.gas_price.map(|p| p as u128),
+        }
+    }
 }
 
 #[async_trait]
@@ -682,9 +839,10 @@ impl<P: Provider + 'static> RpcStorage for MdbxRpcStorage<P> {
     ) -> RpcResult<Option<RpcBlock>> {
         let resolved = self.resolve_block_number(number);
         trace!(
-            "MdbxRpcStorage::get_block_by_number({:?} -> {})",
+            "MdbxRpcStorage::get_block_by_number({:?} -> {}, full={})",
             number,
-            resolved
+            resolved,
+            full_transactions
         );
 
         // Query the block store
@@ -694,10 +852,43 @@ impl<P: Provider + 'static> RpcStorage for MdbxRpcStorage<P> {
                     "Found block {} with hash {:?}",
                     resolved, storage_block.hash
                 );
-                // Convert directly to RpcBlock for proper hex serialization
-                // Note: full_transactions is currently ignored (always returns hashes)
-                let _ = full_transactions; // TODO: Support full transaction bodies
-                Ok(Some(RpcBlock::from_storage(storage_block)))
+
+                // Handle full_transactions parameter
+                if full_transactions {
+                    // Fetch full transaction bodies if transaction store is available
+                    if let Some(tx_store) = &self.transaction_store {
+                        match tx_store.get_transactions_by_block(resolved).await {
+                            Ok(txs) => {
+                                let rpc_txs: Vec<RpcTransaction> =
+                                    txs.into_iter().map(RpcTransaction::from_storage).collect();
+                                debug!(
+                                    "Returning block {} with {} full transactions",
+                                    resolved,
+                                    rpc_txs.len()
+                                );
+                                Ok(Some(RpcBlock::from_storage_full(storage_block, rpc_txs)))
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to fetch transactions for block {}: {}, falling back to hashes",
+                                    resolved, e
+                                );
+                                // Fall back to returning hashes only
+                                Ok(Some(RpcBlock::from_storage(storage_block)))
+                            }
+                        }
+                    } else {
+                        // No transaction store configured, return hashes only
+                        debug!(
+                            "Transaction store not configured, returning block {} with hashes only",
+                            resolved
+                        );
+                        Ok(Some(RpcBlock::from_storage(storage_block)))
+                    }
+                } else {
+                    // Return hashes only
+                    Ok(Some(RpcBlock::from_storage(storage_block)))
+                }
             }
             Ok(None) => {
                 trace!("Block {} not found", resolved);
@@ -715,18 +906,56 @@ impl<P: Provider + 'static> RpcStorage for MdbxRpcStorage<P> {
         hash: B256,
         full_transactions: bool,
     ) -> RpcResult<Option<RpcBlock>> {
-        trace!("MdbxRpcStorage::get_block_by_hash({})", hash);
+        trace!(
+            "MdbxRpcStorage::get_block_by_hash({}, full={})",
+            hash,
+            full_transactions
+        );
 
         let hash_bytes: [u8; 32] = hash.into();
 
         // Query the block store
         match self.block_store.get_block_by_hash(&hash_bytes).await {
             Ok(Some(storage_block)) => {
-                debug!("Found block {} with hash {}", storage_block.number, hash);
-                // Convert directly to RpcBlock for proper hex serialization
-                // Note: full_transactions is currently ignored (always returns hashes)
-                let _ = full_transactions; // TODO: Support full transaction bodies
-                Ok(Some(RpcBlock::from_storage(storage_block)))
+                let block_number = storage_block.number;
+                debug!("Found block {} with hash {}", block_number, hash);
+
+                // Handle full_transactions parameter
+                if full_transactions {
+                    // Fetch full transaction bodies if transaction store is available
+                    if let Some(tx_store) = &self.transaction_store {
+                        match tx_store.get_transactions_by_block(block_number).await {
+                            Ok(txs) => {
+                                let rpc_txs: Vec<RpcTransaction> =
+                                    txs.into_iter().map(RpcTransaction::from_storage).collect();
+                                debug!(
+                                    "Returning block {} with {} full transactions",
+                                    block_number,
+                                    rpc_txs.len()
+                                );
+                                Ok(Some(RpcBlock::from_storage_full(storage_block, rpc_txs)))
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to fetch transactions for block {}: {}, falling back to hashes",
+                                    block_number, e
+                                );
+                                // Fall back to returning hashes only
+                                Ok(Some(RpcBlock::from_storage(storage_block)))
+                            }
+                        }
+                    } else {
+                        // No transaction store configured, return hashes only
+                        debug!(
+                            "Transaction store not configured, returning block {} with hashes only",
+                            block_number
+                        );
+                        Ok(Some(RpcBlock::from_storage(storage_block)))
+                    }
+                } else {
+                    // Return hashes only
+                    Ok(Some(RpcBlock::from_storage(storage_block)))
+                }
             }
             Ok(None) => {
                 trace!("Block with hash {} not found", hash);
@@ -741,9 +970,37 @@ impl<P: Provider + 'static> RpcStorage for MdbxRpcStorage<P> {
 
     async fn get_transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction>> {
         trace!("MdbxRpcStorage::get_transaction_by_hash({})", hash);
-        // Transaction indexing not yet implemented - return None
-        // TODO: Implement when transaction storage is added
-        Ok(None)
+
+        // Check if transaction store is configured
+        let tx_store = match &self.transaction_store {
+            Some(store) => store,
+            None => {
+                trace!("Transaction store not configured, returning None");
+                return Ok(None);
+            }
+        };
+
+        let hash_bytes: [u8; 32] = hash.into();
+
+        // Query the transaction store
+        match tx_store.get_transaction(&hash_bytes).await {
+            Ok(Some(storage_tx)) => {
+                debug!(
+                    "Found transaction {} in block {}",
+                    hash, storage_tx.block_number
+                );
+                let rpc_tx = self.storage_transaction_to_rpc(storage_tx);
+                Ok(Some(rpc_tx))
+            }
+            Ok(None) => {
+                trace!("Transaction {} not found", hash);
+                Ok(None)
+            }
+            Err(e) => {
+                warn!("Failed to query transaction {}: {}", hash, e);
+                Err(RpcError::Storage(e.to_string()))
+            }
+        }
     }
 
     async fn get_transaction_receipt(&self, hash: B256) -> RpcResult<Option<TransactionReceipt>> {

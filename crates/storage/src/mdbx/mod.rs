@@ -30,6 +30,7 @@ mod provider;
 mod receipts;
 mod staking;
 mod tables;
+mod transactions;
 mod wal;
 
 pub use batch::MdbxBatchStore;
@@ -100,6 +101,8 @@ pub use tables::{
     StoredReceipt,
     StoredStakingMetadata,
     StoredStorageValue,
+    // Transaction table types
+    StoredTransaction,
     StoredValidator,
     StoredValidatorInfo,
     StoredValidatorSet,
@@ -107,8 +110,11 @@ pub use tables::{
     StoredVotes,
     StoredWalEntry,
     Tables,
+    Transactions,
+    TransactionsByBlock,
     UnitKey,
     ValidatorSets,
     Votes,
 };
+pub use transactions::MdbxTransactionStore;
 pub use wal::MdbxWal;

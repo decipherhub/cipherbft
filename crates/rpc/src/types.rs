@@ -17,6 +17,156 @@ use alloy_rpc_types_eth::Block;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
+/// RPC transaction representation with proper hex serialization.
+///
+/// This struct represents a full transaction object as returned by
+/// `eth_getBlockByNumber` and `eth_getBlockByHash` when `full_transactions=true`.
+/// All numeric fields are serialized as hex strings per Ethereum JSON-RPC spec.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcTransaction {
+    /// Transaction hash
+    pub hash: B256,
+    /// Block hash containing this transaction
+    pub block_hash: Option<B256>,
+    /// Block number containing this transaction
+    #[serde(serialize_with = "alloy_serde::quantity::opt::serialize")]
+    pub block_number: Option<u64>,
+    /// Index of this transaction within the block
+    #[serde(serialize_with = "alloy_serde::quantity::opt::serialize")]
+    pub transaction_index: Option<u64>,
+    /// Sender address
+    pub from: Address,
+    /// Recipient address (None for contract creation)
+    pub to: Option<Address>,
+    /// Value transferred in wei
+    pub value: U256,
+    /// Input data (contract call data or deployment bytecode)
+    pub input: Bytes,
+    /// Transaction nonce
+    #[serde(serialize_with = "alloy_serde::quantity::serialize")]
+    pub nonce: u64,
+    /// Gas limit
+    #[serde(serialize_with = "alloy_serde::quantity::serialize")]
+    pub gas: u64,
+    /// Gas price (for legacy and EIP-2930 transactions)
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "alloy_serde::quantity::opt::serialize"
+    )]
+    pub gas_price: Option<u64>,
+    /// Max fee per gas (EIP-1559)
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "alloy_serde::quantity::opt::serialize"
+    )]
+    pub max_fee_per_gas: Option<u64>,
+    /// Max priority fee per gas (EIP-1559)
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "alloy_serde::quantity::opt::serialize"
+    )]
+    pub max_priority_fee_per_gas: Option<u64>,
+    /// Chain ID
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "alloy_serde::quantity::opt::serialize"
+    )]
+    pub chain_id: Option<u64>,
+    /// Transaction type (0 = legacy, 1 = EIP-2930, 2 = EIP-1559)
+    #[serde(rename = "type", serialize_with = "alloy_serde::quantity::serialize")]
+    pub transaction_type: u8,
+    /// ECDSA signature v value
+    #[serde(serialize_with = "alloy_serde::quantity::serialize")]
+    pub v: u64,
+    /// ECDSA signature r value
+    pub r: B256,
+    /// ECDSA signature s value
+    pub s: B256,
+}
+
+impl RpcTransaction {
+    /// Create an RpcTransaction from a storage Transaction.
+    ///
+    /// This conversion is used when `full_transactions=true` is requested
+    /// in `eth_getBlockByNumber` or `eth_getBlockByHash`.
+    pub fn from_storage(tx: cipherbft_storage::transactions::Transaction) -> Self {
+        Self {
+            hash: B256::from(tx.hash),
+            block_hash: Some(B256::from(tx.block_hash)),
+            block_number: Some(tx.block_number),
+            transaction_index: Some(tx.transaction_index as u64),
+            from: Address::from(tx.from),
+            to: tx.to.map(Address::from),
+            value: U256::from_be_bytes(tx.value),
+            input: Bytes::from(tx.input),
+            nonce: tx.nonce,
+            gas: tx.gas,
+            gas_price: tx.gas_price,
+            max_fee_per_gas: tx.max_fee_per_gas,
+            max_priority_fee_per_gas: tx.max_priority_fee_per_gas,
+            chain_id: tx.chain_id,
+            transaction_type: tx.transaction_type,
+            v: tx.v,
+            r: B256::from(tx.r),
+            s: B256::from(tx.s),
+        }
+    }
+}
+
+/// Block transactions - either hashes or full transaction objects.
+///
+/// Uses untagged serde to match Ethereum JSON-RPC format where the
+/// `transactions` field contains either an array of hashes (when
+/// `full_transactions=false`) or an array of full transaction objects
+/// (when `full_transactions=true`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum BlockTransactions {
+    /// Transaction hashes only (full_transactions=false)
+    Hashes(Vec<B256>),
+    /// Full transaction objects (full_transactions=true)
+    Full(Vec<RpcTransaction>),
+}
+
+impl BlockTransactions {
+    /// Get the transaction hash at the given index.
+    ///
+    /// For `Hashes` variant, returns the hash at the index.
+    /// For `Full` variant, returns the hash from the transaction at the index.
+    pub fn get_hash(&self, index: usize) -> Option<&B256> {
+        match self {
+            BlockTransactions::Hashes(hashes) => hashes.get(index),
+            BlockTransactions::Full(txs) => txs.get(index).map(|tx| &tx.hash),
+        }
+    }
+
+    /// Get the number of transactions.
+    pub fn len(&self) -> usize {
+        match self {
+            BlockTransactions::Hashes(hashes) => hashes.len(),
+            BlockTransactions::Full(txs) => txs.len(),
+        }
+    }
+
+    /// Check if there are no transactions.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Get all transaction hashes as a vector.
+    pub fn hashes(&self) -> Vec<&B256> {
+        match self {
+            BlockTransactions::Hashes(hashes) => hashes.iter().collect(),
+            BlockTransactions::Full(txs) => txs.iter().map(|tx| &tx.hash).collect(),
+        }
+    }
+}
+
 /// RPC Block representation with proper hex serialization.
 ///
 /// All numeric fields are serialized as hex strings following the Ethereum
@@ -104,14 +254,11 @@ pub struct RpcBlock {
     /// Parent beacon block root (EIP-4788)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_beacon_block_root: Option<B256>,
-    /// Block transactions (currently always returns hashes).
+    /// Block transactions.
     ///
-    /// # Limitations
-    /// The `full_transactions` parameter in `eth_getBlockByNumber` and
-    /// `eth_getBlockByHash` is currently ignored. This field always contains
-    /// transaction hashes. Full transaction bodies will be supported when
-    /// transaction indexing is implemented.
-    pub transactions: Vec<B256>,
+    /// Contains either transaction hashes (when `full_transactions=false`)
+    /// or full transaction objects (when `full_transactions=true`).
+    pub transactions: BlockTransactions,
     /// Uncle block hashes (always empty in PoS)
     pub uncles: Vec<B256>,
     /// Withdrawals (EIP-4895).
@@ -148,11 +295,37 @@ where
 }
 
 impl RpcBlock {
-    /// Create a new RpcBlock from storage block data.
+    /// Create a new RpcBlock from storage block data with transaction hashes only.
     ///
     /// This is the primary constructor for converting internal storage format
     /// to the RPC-compatible format with proper hex serialization.
+    /// Returns transaction hashes only (for `full_transactions=false`).
     pub fn from_storage(storage_block: cipherbft_storage::blocks::Block) -> Self {
+        let tx_hashes: Vec<B256> = storage_block
+            .transaction_hashes
+            .iter()
+            .map(|h| B256::from(*h))
+            .collect();
+
+        Self::from_storage_with_txs(storage_block, BlockTransactions::Hashes(tx_hashes))
+    }
+
+    /// Create a new RpcBlock from storage block data with full transaction objects.
+    ///
+    /// This constructor is used when `full_transactions=true` is requested.
+    /// The caller must provide the full transaction objects.
+    pub fn from_storage_full(
+        storage_block: cipherbft_storage::blocks::Block,
+        transactions: Vec<RpcTransaction>,
+    ) -> Self {
+        Self::from_storage_with_txs(storage_block, BlockTransactions::Full(transactions))
+    }
+
+    /// Internal constructor that accepts pre-built BlockTransactions.
+    fn from_storage_with_txs(
+        storage_block: cipherbft_storage::blocks::Block,
+        transactions: BlockTransactions,
+    ) -> Self {
         Self {
             hash: B256::from(storage_block.hash),
             parent_hash: B256::from(storage_block.parent_hash),
@@ -186,11 +359,7 @@ impl RpcBlock {
             blob_gas_used: None,
             excess_blob_gas: None,
             parent_beacon_block_root: None,
-            transactions: storage_block
-                .transaction_hashes
-                .iter()
-                .map(|h| B256::from(*h))
-                .collect(),
+            transactions,
             uncles: Vec::new(),
             withdrawals: None,
         }
@@ -202,6 +371,8 @@ impl RpcBlock {
 /// This conversion enables seamless transition from the standard Alloy Block type
 /// (which serializes numeric fields as integers) to our RpcBlock type (which
 /// serializes numeric fields as hex strings per Ethereum JSON-RPC spec).
+///
+/// Note: This conversion always returns transaction hashes only, not full objects.
 impl From<Block> for RpcBlock {
     fn from(block: Block) -> Self {
         let header = &block.header.inner;
@@ -230,7 +401,7 @@ impl From<Block> for RpcBlock {
             blob_gas_used: header.blob_gas_used,
             excess_blob_gas: header.excess_blob_gas,
             parent_beacon_block_root: header.parent_beacon_block_root,
-            transactions: block.transactions.hashes().collect(),
+            transactions: BlockTransactions::Hashes(block.transactions.hashes().collect()),
             uncles: block.uncles.clone(),
             withdrawals: block.withdrawals.clone().map(|w| w.into_inner()),
         }
@@ -267,7 +438,7 @@ mod tests {
             blob_gas_used: None,
             excess_blob_gas: None,
             parent_beacon_block_root: None,
-            transactions: Vec::new(),
+            transactions: BlockTransactions::Hashes(Vec::new()),
             uncles: Vec::new(),
             withdrawals: None,
         };
