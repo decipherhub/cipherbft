@@ -892,7 +892,10 @@ impl Node {
         .await?;
 
         // Spawn Sync actor for state synchronization
-        let sync_config = SyncConfig::new(true); // enabled by default
+        // Use higher parallelism to catch up faster when significantly behind
+        let sync_config = SyncConfig::new(true)
+            .with_parallel_requests(20) // Increased from default 5 for faster catch-up
+            .with_request_timeout(Duration::from_secs(30)); // Longer timeout for slower networks
         let sync = spawn_sync(ctx.clone(), network.clone(), host.clone(), sync_config).await?;
 
         // Build and spawn Consensus engine with sync support
