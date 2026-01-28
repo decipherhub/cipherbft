@@ -99,6 +99,7 @@ impl CutState {
 /// 2. `car_state`
 /// 3. `attestations`
 /// 4. `cut_state`
+/// 5. `certificates`
 ///
 /// This ordering is enforced by the API design - most operations only need
 /// a single lock.
@@ -116,6 +117,10 @@ pub struct InMemoryStore {
     /// Combined Cut state (pending and finalized) under single lock
     /// This enables atomic finalization transitions
     cut_state: RwLock<CutState>,
+
+    /// Commit certificates indexed by height (for consensus sync)
+    /// Stored as opaque bytes - the consensus layer handles serialization
+    certificates: RwLock<BTreeMap<u64, Vec<u8>>>,
 }
 
 impl InMemoryStore {
@@ -126,6 +131,7 @@ impl InMemoryStore {
             car_state: RwLock::new(CarState::new()),
             attestations: RwLock::new(HashMap::new()),
             cut_state: RwLock::new(CutState::new()),
+            certificates: RwLock::new(BTreeMap::new()),
         }
     }
 
@@ -135,16 +141,18 @@ impl InMemoryStore {
     ///
     /// Acquires write locks in the defined ordering to prevent deadlocks.
     pub fn clear(&self) {
-        // Acquire locks in defined order: batches → car_state → attestations → cut_state
+        // Acquire locks in defined order: batches → car_state → attestations → cut_state → certificates
         let mut batches = self.batches.write();
         let mut car_state = self.car_state.write();
         let mut attestations = self.attestations.write();
         let mut cut_state = self.cut_state.write();
+        let mut certificates = self.certificates.write();
 
         batches.clear();
         car_state.clear();
         attestations.clear();
         cut_state.clear();
+        certificates.clear();
     }
 }
 
@@ -380,6 +388,31 @@ impl DclStore for InMemoryStore {
             .map(|(_, cut)| cut.clone())
             .collect();
         Ok(result)
+    }
+
+    async fn get_earliest_finalized_height(&self) -> Result<Option<u64>> {
+        let state = self.cut_state.read();
+        Ok(state.finalized.keys().next().copied())
+    }
+
+    // ============================================================
+    // Commit Certificate Operations
+    // ============================================================
+
+    async fn put_commit_certificate(&self, height: u64, certificate: &[u8]) -> Result<()> {
+        let mut certificates = self.certificates.write();
+        certificates.insert(height, certificate.to_vec());
+        Ok(())
+    }
+
+    async fn get_commit_certificate(&self, height: u64) -> Result<Option<Vec<u8>>> {
+        let certificates = self.certificates.read();
+        Ok(certificates.get(&height).cloned())
+    }
+
+    async fn delete_commit_certificate(&self, height: u64) -> Result<bool> {
+        let mut certificates = self.certificates.write();
+        Ok(certificates.remove(&height).is_some())
     }
 
     // ============================================================

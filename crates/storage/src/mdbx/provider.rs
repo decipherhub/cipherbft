@@ -851,6 +851,89 @@ impl DclStore for MdbxDclStore {
         Ok(cuts)
     }
 
+    async fn get_earliest_finalized_height(&self) -> Result<Option<u64>> {
+        use super::tables::FinalizedCuts;
+        use reth_db_api::cursor::DbCursorRO;
+        use reth_db_api::transaction::DbTx;
+
+        let tx = self.db.tx()?;
+        let mut cursor = tx
+            .cursor_read::<FinalizedCuts>()
+            .map_err(|e| StorageError::Database(format!("Failed to create cursor: {e}")))?;
+
+        // Seek to the first entry
+        let first = cursor
+            .first()
+            .map_err(|e| StorageError::Database(format!("Cursor first failed: {e}")))?;
+
+        Ok(first.map(|(key, _)| key.0))
+    }
+
+    // ============================================================
+    // Commit Certificate Operations (for Consensus Sync)
+    // ============================================================
+
+    async fn put_commit_certificate(&self, height: u64, certificate: &[u8]) -> Result<()> {
+        use super::tables::{BincodeValue, CommitCertificates, HeightKey};
+        use reth_db_api::transaction::DbTxMut;
+
+        let key = HeightKey::new(height);
+        let value = BincodeValue(certificate.to_vec());
+
+        trace!(height, "Storing commit certificate");
+
+        let tx = self.db.tx_mut()?;
+        tx.put::<CommitCertificates>(key, value)
+            .map_err(|e| StorageError::Database(format!("Failed to put certificate: {e}")))?;
+        tx.commit()
+            .map_err(|e| StorageError::Database(format!("Failed to commit certificate: {e}")))?;
+
+        debug!(height, "Commit certificate stored");
+        Ok(())
+    }
+
+    async fn get_commit_certificate(&self, height: u64) -> Result<Option<Vec<u8>>> {
+        use super::tables::{CommitCertificates, HeightKey};
+        use reth_db_api::transaction::DbTx;
+
+        let key = HeightKey::new(height);
+
+        trace!(height, "Getting commit certificate");
+
+        let tx = self.db.tx()?;
+        let result = tx
+            .get::<CommitCertificates>(key)
+            .map_err(|e| StorageError::Database(format!("Failed to get certificate: {e}")))?;
+
+        // Unwrap BincodeValue to get inner Vec<u8>
+        Ok(result.map(|v| v.0))
+    }
+
+    async fn delete_commit_certificate(&self, height: u64) -> Result<bool> {
+        use super::tables::{CommitCertificates, HeightKey};
+        use reth_db_api::transaction::DbTxMut;
+
+        let key = HeightKey::new(height);
+
+        trace!(height, "Deleting commit certificate");
+
+        let tx = self.db.tx_mut()?;
+        let existed = tx
+            .get::<CommitCertificates>(key)
+            .map_err(|e| StorageError::Database(format!("Failed to check certificate: {e}")))?
+            .is_some();
+
+        if existed {
+            tx.delete::<CommitCertificates>(key, None)
+                .map_err(|e| StorageError::Database(format!("Failed to delete certificate: {e}")))?;
+            tx.commit()
+                .map_err(|e| StorageError::Database(format!("Failed to commit delete: {e}")))?;
+            debug!(height, "Commit certificate deleted");
+        }
+
+        Ok(existed)
+    }
+
     // ============================================================
     // Garbage Collection
     // ============================================================

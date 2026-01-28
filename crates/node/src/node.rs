@@ -36,8 +36,8 @@ use cipherbft_execution::{
     TransactionReceipt as ExecutionReceipt, U256,
 };
 use cipherbft_storage::{
-    Block, BlockStore, Database, DatabaseConfig, Log as StorageLog, MdbxBlockStore,
-    MdbxReceiptStore, MdbxTransactionStore, Receipt as StorageReceipt, ReceiptStore,
+    Block, BlockStore, Database, DatabaseConfig, DclStore, Log as StorageLog, MdbxBlockStore,
+    MdbxDclStore, MdbxReceiptStore, MdbxTransactionStore, Receipt as StorageReceipt, ReceiptStore,
     Transaction as StorageTransaction, TransactionStore,
 };
 use cipherbft_types::genesis::Genesis;
@@ -105,6 +105,9 @@ pub struct Node {
     validators: HashMap<ValidatorId, ValidatorInfo>,
     /// Execution layer bridge
     execution_bridge: Option<Arc<ExecutionBridge>>,
+    /// Shared DCL store for consensus sync and execution bridge.
+    /// When set to MdbxDclStore, enables persistent certificate storage for sync support.
+    dcl_store: Option<Arc<dyn DclStore>>,
     /// Whether DCL (Data Chain Layer) is enabled.
     /// When disabled, consensus proceeds without data availability attestations.
     dcl_enabled: bool,
@@ -152,6 +155,7 @@ impl Node {
             validator_id,
             validators: HashMap::new(),
             execution_bridge: None,
+            dcl_store: None,
             dcl_enabled: true, // Default to enabled, overridden by genesis
             epoch_block_reward: U256::from(2_000_000_000_000_000_000u128), // Default: 2 CPH
             beneficiary: [0u8; 20], // Default zero, overridden by genesis
@@ -317,13 +321,15 @@ impl Node {
     /// Must be called before `run()` to enable Cut execution.
     ///
     /// # Note
-    /// This creates an execution layer with an empty staking state.
+    /// This creates an execution layer with an in-memory store (for testing).
     /// For production use, prefer `with_execution_layer_from_genesis` to
-    /// initialize the staking state from the genesis file.
+    /// initialize the staking state from the genesis file and enable
+    /// persistent storage for consensus sync support.
     pub fn with_execution_layer(mut self) -> Result<Self> {
-        use cipherbft_storage::{DclStore, InMemoryStore};
+        use cipherbft_storage::InMemoryStore;
         let chain_config = ChainConfig::default();
-        let dcl_store: std::sync::Arc<dyn DclStore> = std::sync::Arc::new(InMemoryStore::new());
+        let dcl_store: Arc<dyn DclStore> = Arc::new(InMemoryStore::new());
+        self.dcl_store = Some(dcl_store.clone());
         let bridge = ExecutionBridge::new(chain_config, dcl_store)?;
         self.execution_bridge = Some(Arc::new(bridge));
         Ok(self)
@@ -334,6 +340,10 @@ impl Node {
     /// This is the preferred method for production use. It initializes the
     /// staking precompile with the validator set from the genesis file,
     /// ensuring validators are correctly registered on node startup.
+    ///
+    /// Creates a persistent MdbxDclStore for DCL data and consensus certificates.
+    /// The same store is shared between the ExecutionBridge and the consensus sync
+    /// mechanism, enabling validators to sync from height 1.
     ///
     /// # Arguments
     ///
@@ -347,9 +357,25 @@ impl Node {
     ///     .with_execution_layer_from_genesis(&genesis)?;
     /// ```
     pub fn with_execution_layer_from_genesis(mut self, genesis: &Genesis) -> Result<Self> {
-        use cipherbft_storage::{DclStore, InMemoryStore};
         let chain_config = ChainConfig::default();
-        let dcl_store: std::sync::Arc<dyn DclStore> = std::sync::Arc::new(InMemoryStore::new());
+
+        // Create persistent DCL store using MDBX for production use.
+        // This enables consensus sync support by persisting Cut + CommitCertificate pairs.
+        std::fs::create_dir_all(&self.config.data_dir)?;
+        let dcl_db_path = self.config.data_dir.join("dcl_storage");
+        let dcl_db_config = DatabaseConfig::new(&dcl_db_path);
+        let dcl_database = Database::open(dcl_db_config)
+            .context("Failed to open DCL storage database")?;
+        let dcl_store: Arc<dyn DclStore> = Arc::new(MdbxDclStore::new(Arc::new(dcl_database)));
+
+        info!(
+            "Created persistent DCL store at {}",
+            dcl_db_path.display()
+        );
+
+        // Store the dcl_store for later use in spawn_host (consensus sync)
+        self.dcl_store = Some(dcl_store.clone());
+
         let bridge = ExecutionBridge::from_genesis(chain_config, dcl_store, genesis)?;
         self.execution_bridge = Some(Arc::new(bridge));
 
@@ -786,12 +812,14 @@ impl Node {
         let wal = spawn_wal(&ctx, wal_path, metrics.clone()).await?;
 
         // Pass network to host for ProposalAndParts mode (enables non-proposers to receive proposal parts)
+        // Pass the shared DCL store for persistent certificate storage (enables sync from height 1)
         let host = spawn_host(
             self.validator_id,
             ctx.clone(),
             cut_rx,
             Some(decided_tx),
             Some(network.clone()),
+            self.dcl_store.clone(),
         )
         .await?;
 

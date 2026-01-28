@@ -518,6 +518,19 @@ impl Table for FinalizedCuts {
     type Value = BincodeValue<StoredCut>;
 }
 
+/// CommitCertificates table: Height -> Certificate bytes
+/// Stores Malachite commit certificates for consensus sync.
+/// The certificate bytes are opaque - serialization is handled by the consensus layer.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CommitCertificates;
+
+impl Table for CommitCertificates {
+    const NAME: &'static str = "CommitCertificates";
+    const DUPSORT: bool = false;
+    type Key = HeightKey;
+    type Value = BincodeValue<Vec<u8>>;
+}
+
 /// ConsensusWal table: Index -> WalEntry bytes
 /// Write-ahead log for crash recovery
 #[derive(Debug, Clone, Copy, Default)]
@@ -1404,6 +1417,7 @@ pub enum CipherBftTable {
     Attestations,
     PendingCuts,
     FinalizedCuts,
+    CommitCertificates,
     ConsensusWal,
     ConsensusState,
     ValidatorSets,
@@ -1445,6 +1459,7 @@ impl CipherBftTable {
         Self::Attestations,
         Self::PendingCuts,
         Self::FinalizedCuts,
+        Self::CommitCertificates,
         Self::ConsensusWal,
         Self::ConsensusState,
         Self::ValidatorSets,
@@ -1486,6 +1501,7 @@ impl TableInfo for CipherBftTable {
             Self::Attestations => Attestations::NAME,
             Self::PendingCuts => PendingCuts::NAME,
             Self::FinalizedCuts => FinalizedCuts::NAME,
+            Self::CommitCertificates => CommitCertificates::NAME,
             Self::ConsensusWal => ConsensusWal::NAME,
             Self::ConsensusState => ConsensusState::NAME,
             Self::ValidatorSets => ValidatorSets::NAME,
@@ -1519,6 +1535,7 @@ impl TableInfo for CipherBftTable {
             Self::Attestations => Attestations::DUPSORT,
             Self::PendingCuts => PendingCuts::DUPSORT,
             Self::FinalizedCuts => FinalizedCuts::DUPSORT,
+            Self::CommitCertificates => CommitCertificates::DUPSORT,
             Self::ConsensusWal => ConsensusWal::DUPSORT,
             Self::ConsensusState => ConsensusState::DUPSORT,
             Self::ValidatorSets => ValidatorSets::DUPSORT,
@@ -1558,6 +1575,7 @@ impl Tables {
         Attestations::NAME,
         PendingCuts::NAME,
         FinalizedCuts::NAME,
+        CommitCertificates::NAME,
         ConsensusWal::NAME,
         ConsensusState::NAME,
         ValidatorSets::NAME,
