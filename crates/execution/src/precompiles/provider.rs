@@ -6,6 +6,7 @@
 
 use crate::precompiles::StakingPrecompile;
 use alloy_primitives::Address;
+use cipherbft_metrics::execution::EXECUTION_PRECOMPILE_CALLS;
 use revm::{
     context::Cfg,
     context_interface::{Block, ContextTr, LocalContextTr, Transaction},
@@ -83,11 +84,24 @@ where
     ) -> Result<Option<Self::Output>, String> {
         // Check if this is our staking precompile
         if inputs.bytecode_address == STAKING_PRECOMPILE_ADDRESS {
+            // Track staking precompile calls
+            EXECUTION_PRECOMPILE_CALLS
+                .with_label_values(&["0x100"])
+                .inc();
+
             return Ok(Some(run_staking_precompile(
                 &self.staking,
                 context,
                 inputs,
             )?));
+        }
+
+        // Track other precompile calls if they are precompiles
+        if self.inner.contains(&inputs.bytecode_address) {
+            let addr_label = format!("{:#x}", inputs.bytecode_address);
+            EXECUTION_PRECOMPILE_CALLS
+                .with_label_values(&[&addr_label])
+                .inc();
         }
 
         // Delegate to standard Ethereum precompiles

@@ -145,6 +145,8 @@ impl MalachiteContext for CipherBftContext {
         value_id: NilOrVal<ValueId<Self>>,
         address: Self::Address,
     ) -> Self::Vote {
+        // Note: CONSENSUS_PREVOTES_RECEIVED should track votes received from network,
+        // not vote creation. Vote receipt tracking belongs in the gossip/network layer.
         ConsensusVote::new(height, round, value_id, VoteType::Prevote, address)
     }
 
@@ -155,6 +157,8 @@ impl MalachiteContext for CipherBftContext {
         value_id: NilOrVal<ValueId<Self>>,
         address: Self::Address,
     ) -> Self::Vote {
+        // Note: CONSENSUS_PRECOMMITS_RECEIVED should track votes received from network,
+        // not vote creation. Vote receipt tracking belongs in the gossip/network layer.
         ConsensusVote::new(height, round, value_id, VoteType::Precommit, address)
     }
 }

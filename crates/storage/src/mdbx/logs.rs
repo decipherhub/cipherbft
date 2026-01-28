@@ -4,8 +4,12 @@
 //! using MDBX as the backing storage engine for transaction log/event persistence.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
+use cipherbft_metrics::storage::{
+    STORAGE_BATCH_COMMIT, STORAGE_READ_LATENCY, STORAGE_WRITE_LATENCY,
+};
 use reth_db::Database;
 use reth_db_api::cursor::DbCursorRO;
 use reth_db_api::transaction::{DbTx, DbTxMut};
@@ -85,6 +89,7 @@ impl LogStore for MdbxLogStore {
             return Ok(());
         }
 
+        let start = Instant::now();
         let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         for log in logs {
@@ -101,7 +106,15 @@ impl LogStore for MdbxLogStore {
                 .map_err(|e| db_err(e.to_string()))?;
         }
 
+        let commit_start = Instant::now();
         tx.commit().map_err(|e| db_err(e.to_string()))?;
+        STORAGE_BATCH_COMMIT
+            .with_label_values(&[])
+            .observe(commit_start.elapsed().as_secs_f64());
+
+        STORAGE_WRITE_LATENCY
+            .with_label_values(&["logs"])
+            .observe(start.elapsed().as_secs_f64());
         Ok(())
     }
 
@@ -110,6 +123,7 @@ impl LogStore for MdbxLogStore {
         filter: &LogFilter,
         max_results: usize,
     ) -> LogStoreResult<Vec<StoredLog>> {
+        let start = Instant::now();
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
 
         // Determine block range
@@ -188,6 +202,9 @@ impl LogStore for MdbxLogStore {
                 .map_err(|e| db_err(e.to_string()))?
                 .is_none()
             {
+                STORAGE_READ_LATENCY
+                    .with_label_values(&["logs"])
+                    .observe(start.elapsed().as_secs_f64());
                 return Ok(results);
             }
 
@@ -228,10 +245,15 @@ impl LogStore for MdbxLogStore {
                 .then_with(|| a.log_index.cmp(&b.log_index))
         });
 
+        STORAGE_READ_LATENCY
+            .with_label_values(&["logs"])
+            .observe(start.elapsed().as_secs_f64());
+
         Ok(results)
     }
 
     async fn get_logs_by_block(&self, block_number: u64) -> LogStoreResult<Vec<StoredLog>> {
+        let start = Instant::now();
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
 
         let mut results = Vec::new();
@@ -246,6 +268,9 @@ impl LogStore for MdbxLogStore {
             .map_err(|e| db_err(e.to_string()))?
             .is_none()
         {
+            STORAGE_READ_LATENCY
+                .with_label_values(&["logs"])
+                .observe(start.elapsed().as_secs_f64());
             return Ok(results);
         }
 
@@ -267,6 +292,10 @@ impl LogStore for MdbxLogStore {
                 None => break,
             }
         }
+
+        STORAGE_READ_LATENCY
+            .with_label_values(&["logs"])
+            .observe(start.elapsed().as_secs_f64());
 
         Ok(results)
     }
@@ -293,6 +322,7 @@ impl LogStore for MdbxLogStore {
     }
 
     async fn delete_logs_by_block(&self, block_number: u64) -> LogStoreResult<()> {
+        let start = Instant::now();
         let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         // First, collect all logs for this block to know what to delete from indices
@@ -342,15 +372,24 @@ impl LogStore for MdbxLogStore {
         tx.delete::<BlockBlooms>(bloom_key, None)
             .map_err(|e| db_err(e.to_string()))?;
 
+        let commit_start = Instant::now();
         tx.commit().map_err(|e| db_err(e.to_string()))?;
+        STORAGE_BATCH_COMMIT
+            .with_label_values(&[])
+            .observe(commit_start.elapsed().as_secs_f64());
+
+        STORAGE_WRITE_LATENCY
+            .with_label_values(&["logs"])
+            .observe(start.elapsed().as_secs_f64());
         Ok(())
     }
 
     async fn get_block_bloom(&self, block_number: u64) -> LogStoreResult<Option<[u8; 256]>> {
+        let start = Instant::now();
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
 
         let key = BlockNumberKey::new(block_number);
-        match tx
+        let result = match tx
             .get::<BlockBlooms>(key)
             .map_err(|e| db_err(e.to_string()))?
         {
@@ -364,10 +403,17 @@ impl LogStore for MdbxLogStore {
                 }
             }
             None => Ok(None),
-        }
+        };
+
+        STORAGE_READ_LATENCY
+            .with_label_values(&["block_blooms"])
+            .observe(start.elapsed().as_secs_f64());
+
+        result
     }
 
     async fn put_block_bloom(&self, block_number: u64, bloom: &[u8; 256]) -> LogStoreResult<()> {
+        let start = Instant::now();
         let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         let key = BlockNumberKey::new(block_number);
@@ -378,7 +424,15 @@ impl LogStore for MdbxLogStore {
         tx.put::<BlockBlooms>(key, BincodeValue(stored))
             .map_err(|e| db_err(e.to_string()))?;
 
+        let commit_start = Instant::now();
         tx.commit().map_err(|e| db_err(e.to_string()))?;
+        STORAGE_BATCH_COMMIT
+            .with_label_values(&[])
+            .observe(commit_start.elapsed().as_secs_f64());
+
+        STORAGE_WRITE_LATENCY
+            .with_label_values(&["block_blooms"])
+            .observe(start.elapsed().as_secs_f64());
         Ok(())
     }
 }

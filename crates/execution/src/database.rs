@@ -5,6 +5,10 @@
 
 use crate::error::{DatabaseError, Result};
 use alloy_primitives::{Address, B256, U256};
+use cipherbft_metrics::execution::{
+    EXECUTION_ACCOUNT_READS, EXECUTION_STATE_READS, EXECUTION_STATE_WRITES,
+    EXECUTION_STORAGE_READS, EXECUTION_STORAGE_WRITES,
+};
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use revm::DatabaseRef;
@@ -379,6 +383,10 @@ impl<P: Provider> CipherBftDatabase<P> {
     /// and releasing them as soon as possible. For cache operations, we use a
     /// single lock acquisition to both check and update the cache.
     fn get_account_internal(&self, address: Address) -> Result<Option<Account>> {
+        // Track account read
+        EXECUTION_ACCOUNT_READS.inc();
+        EXECUTION_STATE_READS.inc();
+
         // Check pending changes first (read lock, released immediately)
         if let Some(account) = self.pending_accounts.read().get(&address) {
             return Ok(Some(account.clone()));
@@ -427,6 +435,10 @@ impl<P: Provider> CipherBftDatabase<P> {
 
     /// Get storage, checking pending changes first, then provider.
     fn get_storage_internal(&self, address: Address, slot: U256) -> Result<U256> {
+        // Track storage read
+        EXECUTION_STORAGE_READS.inc();
+        EXECUTION_STATE_READS.inc();
+
         // Check pending changes first
         if let Some(value) = self.pending_storage.read().get(&(address, slot)) {
             return Ok(*value);
@@ -522,6 +534,9 @@ impl<P: Provider> revm::DatabaseCommit for CipherBftDatabase<P> {
         let mut pending_storage = self.pending_storage.write();
 
         for (address, account) in changes {
+            // Track account write
+            EXECUTION_STATE_WRITES.inc();
+
             // Update account info
             let acc = Account {
                 nonce: account.info.nonce,
@@ -536,8 +551,10 @@ impl<P: Provider> revm::DatabaseCommit for CipherBftDatabase<P> {
                 pending_code.insert(account.info.code_hash, code);
             }
 
-            // Update storage
+            // Update storage and track writes
             for (slot, value) in account.storage {
+                EXECUTION_STORAGE_WRITES.inc();
+                EXECUTION_STATE_WRITES.inc();
                 pending_storage.insert((address, slot), value.present_value);
             }
         }

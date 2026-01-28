@@ -4,8 +4,12 @@
 //! using MDBX as the backing storage engine for transaction receipt persistence.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
+use cipherbft_metrics::storage::{
+    STORAGE_BATCH_COMMIT, STORAGE_READ_LATENCY, STORAGE_WRITE_LATENCY,
+};
 use reth_db::Database;
 use reth_db_api::transaction::{DbTx, DbTxMut};
 
@@ -124,6 +128,7 @@ impl MdbxReceiptStore {
 #[async_trait]
 impl ReceiptStore for MdbxReceiptStore {
     async fn put_receipt(&self, receipt: &Receipt) -> ReceiptStoreResult<()> {
+        let start = Instant::now();
         let stored = Self::receipt_to_stored(receipt);
         let tx_key = HashKey(receipt.transaction_hash);
         let block_key = BlockNumberKey::new(receipt.block_number);
@@ -147,7 +152,15 @@ impl ReceiptStore for MdbxReceiptStore {
                 .map_err(|e| db_err(e.to_string()))?;
         }
 
+        let commit_start = Instant::now();
         tx.commit().map_err(|e| db_err(e.to_string()))?;
+        STORAGE_BATCH_COMMIT
+            .with_label_values(&[])
+            .observe(commit_start.elapsed().as_secs_f64());
+
+        STORAGE_WRITE_LATENCY
+            .with_label_values(&["receipts"])
+            .observe(start.elapsed().as_secs_f64());
         Ok(())
     }
 
@@ -156,6 +169,7 @@ impl ReceiptStore for MdbxReceiptStore {
             return Ok(());
         }
 
+        let start = Instant::now();
         let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
 
         // Group receipts by block number for efficient block index updates
@@ -198,15 +212,28 @@ impl ReceiptStore for MdbxReceiptStore {
                 .map_err(|e| db_err(e.to_string()))?;
         }
 
+        let commit_start = Instant::now();
         tx.commit().map_err(|e| db_err(e.to_string()))?;
+        STORAGE_BATCH_COMMIT
+            .with_label_values(&[])
+            .observe(commit_start.elapsed().as_secs_f64());
+
+        STORAGE_WRITE_LATENCY
+            .with_label_values(&["receipts"])
+            .observe(start.elapsed().as_secs_f64());
         Ok(())
     }
 
     async fn get_receipt(&self, tx_hash: &[u8; 32]) -> ReceiptStoreResult<Option<Receipt>> {
+        let start = Instant::now();
         let key = HashKey(*tx_hash);
 
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
         let result = tx.get::<Receipts>(key).map_err(|e| db_err(e.to_string()))?;
+
+        STORAGE_READ_LATENCY
+            .with_label_values(&["receipts"])
+            .observe(start.elapsed().as_secs_f64());
 
         match result {
             Some(bincode_value) => {
@@ -218,6 +245,7 @@ impl ReceiptStore for MdbxReceiptStore {
     }
 
     async fn get_receipts_by_block(&self, block_number: u64) -> ReceiptStoreResult<Vec<Receipt>> {
+        let start = Instant::now();
         let block_key = BlockNumberKey::new(block_number);
 
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
@@ -241,19 +269,29 @@ impl ReceiptStore for MdbxReceiptStore {
         // Sort by transaction index
         receipts.sort_by_key(|r| r.transaction_index);
 
+        STORAGE_READ_LATENCY
+            .with_label_values(&["receipts"])
+            .observe(start.elapsed().as_secs_f64());
+
         Ok(receipts)
     }
 
     async fn has_receipt(&self, tx_hash: &[u8; 32]) -> ReceiptStoreResult<bool> {
+        let start = Instant::now();
         let key = HashKey(*tx_hash);
 
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
         let result = tx.get::<Receipts>(key).map_err(|e| db_err(e.to_string()))?;
 
+        STORAGE_READ_LATENCY
+            .with_label_values(&["receipts"])
+            .observe(start.elapsed().as_secs_f64());
+
         Ok(result.is_some())
     }
 
     async fn delete_receipts_by_block(&self, block_number: u64) -> ReceiptStoreResult<()> {
+        let start = Instant::now();
         let block_key = BlockNumberKey::new(block_number);
 
         let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
@@ -276,7 +314,15 @@ impl ReceiptStore for MdbxReceiptStore {
         tx.delete::<ReceiptsByBlock>(block_key, None)
             .map_err(|e| db_err(e.to_string()))?;
 
+        let commit_start = Instant::now();
         tx.commit().map_err(|e| db_err(e.to_string()))?;
+        STORAGE_BATCH_COMMIT
+            .with_label_values(&[])
+            .observe(commit_start.elapsed().as_secs_f64());
+
+        STORAGE_WRITE_LATENCY
+            .with_label_values(&["receipts"])
+            .observe(start.elapsed().as_secs_f64());
         Ok(())
     }
 }

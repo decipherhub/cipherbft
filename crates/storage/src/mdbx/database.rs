@@ -4,6 +4,7 @@
 //! handling initialization, configuration, and table creation.
 
 use crate::error::{Result, StorageError};
+use cipherbft_metrics::storage::STORAGE_TOTAL_SIZE_BYTES;
 use reth_db::{
     mdbx::{init_db_for, DatabaseArguments},
     ClientVersion, DatabaseEnv as RethDatabaseEnv,
@@ -167,14 +168,21 @@ impl Database {
             .stat()
             .map_err(|e| StorageError::Database(format!("Failed to get database stats: {e}")))?;
 
-        Ok(DatabaseStats {
+        let stats = DatabaseStats {
             page_size: stat.page_size(),
             tree_depth: stat.depth(),
             branch_pages: stat.branch_pages() as u64,
             leaf_pages: stat.leaf_pages() as u64,
             overflow_pages: stat.overflow_pages() as u64,
             entries: stat.entries() as u64,
-        })
+        };
+
+        // Update total size metric
+        let total_size =
+            (stats.leaf_pages + stats.branch_pages + stats.overflow_pages) * stats.page_size as u64;
+        STORAGE_TOTAL_SIZE_BYTES.set(total_size as f64);
+
+        Ok(stats)
     }
 }
 

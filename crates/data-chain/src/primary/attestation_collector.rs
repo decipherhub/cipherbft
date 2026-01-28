@@ -5,6 +5,7 @@
 use crate::attestation::{AggregatedAttestation, Attestation};
 use crate::car::Car;
 use crate::error::DclError;
+use cipherbft_metrics::dcl::DCL_ATTESTATION_COLLECTION;
 use cipherbft_types::{Hash, ValidatorId};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -134,6 +135,12 @@ impl AttestationCollector {
         let attestation_count = pending.attestations.len() + 1; // +1 for self
 
         if attestation_count >= self.threshold {
+            // Track attestation collection latency
+            let elapsed = pending.started_at.elapsed();
+            DCL_ATTESTATION_COLLECTION
+                .with_label_values(&[])
+                .observe(elapsed.as_secs_f64());
+
             // Aggregate and return
             let agg = self.aggregate(&car_hash)?;
             self.pending.remove(&car_hash);

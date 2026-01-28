@@ -4,8 +4,12 @@
 //! using MDBX as the backing storage engine for worker batch persistence.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
+use cipherbft_metrics::storage::{
+    STORAGE_BATCH_COMMIT, STORAGE_READ_LATENCY, STORAGE_WRITE_LATENCY,
+};
 use reth_db::Database;
 use reth_db_api::transaction::{DbTx, DbTxMut};
 
@@ -81,6 +85,7 @@ impl MdbxBatchStore {
 #[async_trait]
 impl BatchStore for MdbxBatchStore {
     async fn put_batch(&self, batch: &Batch) -> BatchStoreResult<()> {
+        let start = Instant::now();
         let hash = batch.hash();
         let stored = Self::batch_to_stored(batch);
         let key = HashKey::from_slice(hash.as_bytes());
@@ -88,16 +93,30 @@ impl BatchStore for MdbxBatchStore {
         let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
         tx.put::<Batches>(key, BincodeValue(stored))
             .map_err(|e| db_err(e.to_string()))?;
+
+        let commit_start = Instant::now();
         tx.commit().map_err(|e| db_err(e.to_string()))?;
+        STORAGE_BATCH_COMMIT
+            .with_label_values(&[])
+            .observe(commit_start.elapsed().as_secs_f64());
+
+        STORAGE_WRITE_LATENCY
+            .with_label_values(&["batches"])
+            .observe(start.elapsed().as_secs_f64());
 
         Ok(())
     }
 
     async fn get_batch(&self, digest: &Hash) -> BatchStoreResult<Option<Batch>> {
+        let start = Instant::now();
         let key = HashKey::from_slice(digest.as_bytes());
 
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
         let result = tx.get::<Batches>(key).map_err(|e| db_err(e.to_string()))?;
+
+        STORAGE_READ_LATENCY
+            .with_label_values(&["batches"])
+            .observe(start.elapsed().as_secs_f64());
 
         match result {
             Some(bincode_value) => {
@@ -109,21 +128,36 @@ impl BatchStore for MdbxBatchStore {
     }
 
     async fn has_batch(&self, digest: &Hash) -> BatchStoreResult<bool> {
+        let start = Instant::now();
         let key = HashKey::from_slice(digest.as_bytes());
 
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
         let result = tx.get::<Batches>(key).map_err(|e| db_err(e.to_string()))?;
 
+        STORAGE_READ_LATENCY
+            .with_label_values(&["batches"])
+            .observe(start.elapsed().as_secs_f64());
+
         Ok(result.is_some())
     }
 
     async fn delete_batch(&self, digest: &Hash) -> BatchStoreResult<()> {
+        let start = Instant::now();
         let key = HashKey::from_slice(digest.as_bytes());
 
         let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
         tx.delete::<Batches>(key, None)
             .map_err(|e| db_err(e.to_string()))?;
+
+        let commit_start = Instant::now();
         tx.commit().map_err(|e| db_err(e.to_string()))?;
+        STORAGE_BATCH_COMMIT
+            .with_label_values(&[])
+            .observe(commit_start.elapsed().as_secs_f64());
+
+        STORAGE_WRITE_LATENCY
+            .with_label_values(&["batches"])
+            .observe(start.elapsed().as_secs_f64());
 
         Ok(())
     }

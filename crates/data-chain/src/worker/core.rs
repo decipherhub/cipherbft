@@ -14,6 +14,10 @@ use crate::worker::batch_maker::BatchMaker;
 use crate::worker::config::WorkerConfig;
 use crate::worker::state::WorkerState;
 use crate::worker::synchronizer::Synchronizer;
+use cipherbft_metrics::dcl::{
+    DCL_SYNC_REQUESTS, DCL_SYNC_RESPONSES, DCL_WORKER_BATCHES_CREATED, DCL_WORKER_BATCH_LATENCY,
+    DCL_WORKER_BATCH_SIZE_BYTES, DCL_WORKER_BATCH_TX_COUNT,
+};
 use cipherbft_types::{Hash, ValidatorId};
 use std::sync::Arc;
 use std::time::Duration;
@@ -454,6 +458,9 @@ impl Worker {
                     return;
                 }
 
+                // Track sync request metric
+                DCL_SYNC_REQUESTS.inc();
+
                 // Start sync for missing batches
                 let _request_id = self
                     .synchronizer
@@ -579,6 +586,9 @@ impl Worker {
             }
 
             WorkerMessage::BatchResponse { digest, data } => {
+                // Track sync response metric
+                DCL_SYNC_RESPONSES.inc();
+
                 if let Some(batch) = data {
                     debug!(
                         worker_id = self.config.worker_id,
@@ -691,6 +701,25 @@ impl Worker {
     /// Process a completed batch
     async fn process_batch(&mut self, batch: Batch) {
         let digest = batch.digest();
+        let worker_id_str = self.config.worker_id.to_string();
+
+        // Update metrics for batch creation
+        DCL_WORKER_BATCHES_CREATED
+            .with_label_values(&[&worker_id_str])
+            .inc();
+        DCL_WORKER_BATCH_SIZE_BYTES
+            .with_label_values(&[&worker_id_str])
+            .observe(digest.byte_size as f64);
+        DCL_WORKER_BATCH_TX_COUNT
+            .with_label_values(&[&worker_id_str])
+            .observe(digest.tx_count as f64);
+
+        // Record batch latency if we have timing info
+        if let Some(elapsed) = self.batch_maker.time_since_batch_start() {
+            DCL_WORKER_BATCH_LATENCY
+                .with_label_values(&[&worker_id_str])
+                .observe(elapsed.as_secs_f64());
+        }
 
         debug!(
             worker_id = self.config.worker_id,

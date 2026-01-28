@@ -11,6 +11,7 @@ description = "Storage layer for CipherBFT"
 cipherbft-types = { path = "../types" }
 cipherbft-crypto = { path = "../crypto" }
 cipherbft-data-chain = { path = "../data-chain" }
+cipherbft-metrics = { path = "../metrics" }
 
 # Async runtime
 tokio = { workspace = true }

@@ -14,9 +14,14 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use cipherbft_metrics::consensus::{
+    CONSENSUS_BLOCK_FINALIZATION, CONSENSUS_HEIGHT, CONSENSUS_PROPOSALS_MADE,
+    CONSENSUS_PROPOSALS_RECEIVED, CONSENSUS_PROPOSAL_SIZE, CONSENSUS_ROUND,
+    CONSENSUS_ROUND_DURATION, CONSENSUS_TIMEOUTS,
+};
 use informalsystems_malachitebft_app::streaming::StreamContent;
 use informalsystems_malachitebft_app::types::ProposedValue;
 use informalsystems_malachitebft_core_consensus::LocallyProposedValue;
@@ -291,6 +296,12 @@ pub struct HostArgs {
 pub struct HostState {
     /// Current height being processed.
     current_height: Option<ConsensusHeight>,
+    /// Current round being processed.
+    current_round: Option<Round>,
+    /// Round start time for duration tracking.
+    round_start: Option<Instant>,
+    /// Height start time for block finalization tracking.
+    height_start: Option<Instant>,
 }
 
 /// Ractor Actor implementation for CipherBftHost.
@@ -379,7 +390,37 @@ impl Actor for CipherBftHost {
                     "Started round"
                 );
 
+                // Track round duration - record previous round duration if starting a new round
+                if let Some(round_start) = state.round_start.take() {
+                    let duration = round_start.elapsed();
+                    // Previous round ended with timeout since we're starting a new round
+                    CONSENSUS_ROUND_DURATION
+                        .with_label_values(&["timeout"])
+                        .observe(duration.as_secs_f64());
+
+                    // Track timeout type based on round progression within same height
+                    // If we're at same height but different round, a timeout occurred
+                    if state.current_height == Some(height) && state.current_round != Some(round) {
+                        // We can estimate timeout type: if round > 0, likely a propose timeout
+                        // (More precise tracking would require Malachite-level integration)
+                        CONSENSUS_TIMEOUTS.with_label_values(&["propose"]).inc();
+                    }
+                }
+
+                // Update height/round metrics
+                CONSENSUS_HEIGHT.set(height.0 as f64);
+                CONSENSUS_ROUND.set(round.as_i64() as f64);
+
+                // Start tracking new round
+                state.round_start = Some(Instant::now());
+
+                // Track height start time for block finalization metric
+                if state.current_height != Some(height) {
+                    state.height_start = Some(Instant::now());
+                }
+
                 state.current_height = Some(height);
+                state.current_round = Some(round);
 
                 // Reply with empty vec - no undecided values to replay
                 // In a full implementation, this would check WAL for uncommitted proposals
@@ -424,6 +465,19 @@ impl Actor for CipherBftHost {
                                 height = height.0,
                                 "Built proposal value"
                             );
+
+                            // Track proposal made metric
+                            CONSENSUS_PROPOSALS_MADE.inc();
+
+                            // Track proposal size (estimate from Cut serialization)
+                            let cut = &value.value.0;
+                            let proposal_size = bincode::serialize(cut)
+                                .map(|bytes| bytes.len())
+                                .unwrap_or(0);
+                            CONSENSUS_PROPOSAL_SIZE
+                                .with_label_values(&[])
+                                .observe(proposal_size as f64);
+
                             if reply_to.send(value).is_err() {
                                 warn!(parent: &span, "Failed to send GetValue reply");
                             }
@@ -464,6 +518,9 @@ impl Actor for CipherBftHost {
                             let valid_round = proposal_part.valid_round;
                             let proposer = proposal_part.proposer;
                             let value = ConsensusValue(proposal_part.cut);
+
+                            // Track proposal received metric
+                            CONSENSUS_PROPOSALS_RECEIVED.inc();
 
                             debug!(
                                 parent: &self.span,
@@ -566,6 +623,22 @@ impl Actor for CipherBftHost {
                 let height = certificate.height;
                 let round = certificate.round;
                 let value_id = certificate.value_id.clone();
+
+                // Track successful round completion
+                if let Some(round_start) = state.round_start.take() {
+                    let duration = round_start.elapsed();
+                    CONSENSUS_ROUND_DURATION
+                        .with_label_values(&["success"])
+                        .observe(duration.as_secs_f64());
+                }
+
+                // Track block finalization time (proposal to decision)
+                if let Some(height_start) = state.height_start.take() {
+                    let duration = height_start.elapsed();
+                    CONSENSUS_BLOCK_FINALIZATION
+                        .with_label_values(&[])
+                        .observe(duration.as_secs_f64());
+                }
 
                 info!(
                     parent: &self.span,

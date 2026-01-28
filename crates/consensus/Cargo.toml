@@ -43,6 +43,7 @@ cipherbft-types = { path = "../types" }
 cipherbft-crypto = { path = "../crypto" }
 cipherbft-data-chain = { path = "../data-chain" }
 cipherbft-storage = { path = "../storage", optional = true }
+cipherbft-metrics = { path = "../metrics" }
 
 # Malachite BFT (all optional; enable via the `malachite` feature)
 informalsystems-malachitebft-app = { workspace = true, optional = true }
