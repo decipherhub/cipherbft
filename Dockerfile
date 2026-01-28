@@ -11,6 +11,10 @@ WORKDIR /app
 # Copy manifests first for better layer caching
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+# Copy vendored dependencies (patched malachite crates for sync fixes):
+# - malachitebft-network: OutboundFailure handling for sync retries
+# - malachitebft-sync: Automatic height skip when peers lack history
+COPY vendor ./vendor
 
 # Build release binary
 RUN cargo build --release -p cipherd
