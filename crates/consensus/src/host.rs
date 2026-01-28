@@ -1656,9 +1656,16 @@ impl DecisionHandler for ChannelDecisionHandler {
                         return Ok(ConsensusHeight(latest.height));
                     }
                 }
-                // Truly empty - return 1 as genesis height
-                // This is safe because we have no history to serve
-                Ok(ConsensusHeight(1))
+                // Truly empty - return 0 to indicate no servable history
+                // IMPORTANT: Returning 1 here would cause sync issues! When a node starts
+                // fresh, tip_height=0 (before any decisions). If we return history_min_height=1,
+                // the sync status becomes {tip:0, min:1}, creating an EMPTY range (1..=0).
+                // No peer can serve height 1 from an empty range, causing lagging validators
+                // to be unable to sync.
+                //
+                // By returning 0, the range becomes 0..=0 which is valid. Peers will correctly
+                // report they have no blocks to serve until consensus decides the first block.
+                Ok(ConsensusHeight(0))
             }
         }
     }
@@ -2124,6 +2131,44 @@ mod tests {
         assert!(
             stored_cut.is_some(),
             "on_decided must call put_finalized_cut to persist the cut to storage"
+        );
+    }
+
+    /// Test that get_history_min_height returns 0 when there's no history.
+    /// This is critical for sync: at startup before any blocks are decided,
+    /// tip_height=0. If we returned history_min_height=1, the sync status would be
+    /// {tip:0, min:1}, creating an EMPTY range (1..=0) where no heights can be served.
+    /// By returning 0, we get {tip:0, min:0} which is valid (range 0..=0).
+    #[tokio::test]
+    async fn test_empty_history_returns_zero_not_one() {
+        // Create handler WITHOUT storage
+        let handler = ChannelDecisionHandler::new(None, 100);
+
+        // With no decisions stored, get_history_min_height should return 0
+        // This ensures sync Status messages have a valid range
+        let min_height = handler.get_history_min_height().await.unwrap();
+        assert_eq!(
+            min_height.0, 0,
+            "Empty history should return 0, not 1. Returning 1 causes sync issues \
+             because at startup tip_height=0, creating invalid range 1..=0"
+        );
+    }
+
+    /// Test that get_history_min_height returns 0 when storage is present but empty.
+    #[tokio::test]
+    async fn test_empty_storage_returns_zero_not_one() {
+        use cipherbft_storage::InMemoryStore;
+
+        // Create handler WITH storage (but storage is empty)
+        let store: Arc<dyn cipherbft_storage::DclStore> = Arc::new(InMemoryStore::new());
+        let handler = ChannelDecisionHandler::new(None, 100).with_storage(Arc::clone(&store));
+
+        // Even with storage, if there's no data, should return 0
+        let min_height = handler.get_history_min_height().await.unwrap();
+        assert_eq!(
+            min_height.0, 0,
+            "Empty storage should return 0, not 1. Returning 1 causes sync issues \
+             because at startup tip_height=0, creating invalid range 1..=0"
         );
     }
 }
