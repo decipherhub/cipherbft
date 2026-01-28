@@ -64,6 +64,7 @@ pub mod pruning;
 pub mod receipts;
 pub mod staking;
 pub mod tables;
+pub mod transactions;
 pub mod wal;
 
 // MDBX backend (requires feature flag)
@@ -84,11 +85,12 @@ pub use persistent_state::{
 pub use pruning::{PruningConfig, PruningHandle, PruningTask};
 pub use receipts::{Log, Receipt, ReceiptStore, ReceiptStoreResult};
 pub use staking::{StakingStore, StakingStoreResult, StoredValidator};
+pub use transactions::{Transaction, TransactionStore, TransactionStoreResult};
 pub use wal::{Wal, WalEntry};
 
 // Re-export MDBX types when feature is enabled
 #[cfg(feature = "mdbx")]
 pub use mdbx::{
     Database, DatabaseConfig, MdbxBatchStore, MdbxBlockStore, MdbxDclStore, MdbxEvmStore,
-    MdbxLogStore, MdbxReceiptStore, MdbxStakingStore, MdbxWal,
+    MdbxLogStore, MdbxReceiptStore, MdbxStakingStore, MdbxTransactionStore, MdbxWal,
 };

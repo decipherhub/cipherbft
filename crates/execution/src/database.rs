@@ -286,6 +286,14 @@ impl<P: Provider> CipherBftDatabase<P> {
         }
     }
 
+    /// Get a reference to the underlying provider.
+    ///
+    /// This allows sharing the provider with other components (e.g., RPC layer)
+    /// that need to read committed state.
+    pub fn provider(&self) -> Arc<P> {
+        Arc::clone(&self.provider)
+    }
+
     /// Commit pending changes to the underlying provider.
     ///
     /// # Concurrency

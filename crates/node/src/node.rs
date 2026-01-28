@@ -22,8 +22,8 @@ use crate::supervisor::NodeSupervisor;
 use anyhow::{Context, Result};
 use cipherbft_consensus::{
     create_context, default_consensus_params, default_engine_config_single_part, spawn_host,
-    spawn_network, spawn_wal, ConsensusHeight, ConsensusSigner, ConsensusSigningProvider,
-    ConsensusValidator, EpochConfig, MalachiteEngineBuilder,
+    spawn_network, spawn_sync, spawn_wal, ConsensusHeight, ConsensusSigner,
+    ConsensusSigningProvider, ConsensusValidator, EpochConfig, MalachiteEngineBuilder, SyncConfig,
 };
 use cipherbft_crypto::{BlsKeyPair, BlsPublicKey, Ed25519KeyPair, Ed25519PublicKey};
 use cipherbft_data_chain::{
@@ -32,12 +32,13 @@ use cipherbft_data_chain::{
     Cut, DclMessage, WorkerMessage,
 };
 use cipherbft_execution::{
-    keccak256, ChainConfig, InMemoryProvider, Log as ExecutionLog,
+    keccak256, Bytes as ExecutionBytes, ChainConfig, InMemoryProvider, Log as ExecutionLog,
     TransactionReceipt as ExecutionReceipt, U256,
 };
 use cipherbft_storage::{
     Block, BlockStore, Database, DatabaseConfig, Log as StorageLog, MdbxBlockStore,
-    MdbxReceiptStore, Receipt as StorageReceipt, ReceiptStore,
+    MdbxReceiptStore, MdbxTransactionStore, Receipt as StorageReceipt, ReceiptStore,
+    Transaction as StorageTransaction, TransactionStore,
 };
 use cipherbft_types::genesis::Genesis;
 use cipherbft_types::ValidatorId;
@@ -113,7 +114,10 @@ pub struct Node {
     /// Epoch block reward in wei (from genesis staking params).
     /// Used for validator reward distribution at epoch boundaries.
     epoch_block_reward: U256,
-    /// Block gas limit (from genesis configuration)
+    /// Block beneficiary address (coinbase) from genesis.
+    /// This is the address that receives block rewards.
+    beneficiary: [u8; 20],
+    /// Block gas limit from genesis configuration.
     gas_limit: u64,
 }
 
@@ -154,6 +158,7 @@ impl Node {
             dcl_enabled: true, // Default to enabled, overridden by genesis
             epoch_block_reward: U256::from(2_000_000_000_000_000_000u128), // Default: 2 CPH
             gas_limit: DEFAULT_GAS_LIMIT, // Default, overridden by genesis
+            beneficiary: [0u8; 20], // Default zero, overridden by genesis
         })
     }
 
@@ -297,9 +302,15 @@ impl Node {
             info!("DCL (Data Chain Layer) is DISABLED - consensus will proceed without data availability attestations");
         }
 
-        // Set gas limit from genesis configuration
+        // Set beneficiary address from genesis coinbase (if specified)
+        if let Some(coinbase) = genesis.coinbase {
+            self.beneficiary = coinbase.0 .0;
+            info!("Block beneficiary set from genesis: {}", coinbase);
+        }
+
+        // Set gas limit from genesis
         self.gas_limit = genesis.gas_limit.try_into().unwrap_or(DEFAULT_GAS_LIMIT);
-        info!("Block gas limit set to {} from genesis", self.gas_limit);
+        info!("Block gas limit set from genesis: {}", self.gas_limit);
 
         Ok(())
     }
@@ -787,7 +798,11 @@ impl Node {
         )
         .await?;
 
-        // Build and spawn Consensus engine
+        // Spawn Sync actor for state synchronization
+        let sync_config = SyncConfig::new(true); // enabled by default
+        let sync = spawn_sync(ctx.clone(), network.clone(), host.clone(), sync_config).await?;
+
+        // Build and spawn Consensus engine with sync support
         let _engine_handles = MalachiteEngineBuilder::new(
             ctx.clone(),
             params,
@@ -797,6 +812,7 @@ impl Node {
             host,
             wal,
         )
+        .with_sync(sync)
         .spawn()
         .await?;
 
@@ -814,19 +830,33 @@ impl Node {
                 Database::open(db_config).context("Failed to open RPC storage database")?;
             let db_env = database.env().clone();
 
-            // Create block and receipt stores
+            // Create block, receipt, and transaction stores
             let block_store = Arc::new(MdbxBlockStore::new(db_env.clone()));
-            let receipt_store = Arc::new(MdbxReceiptStore::new(db_env));
+            let receipt_store = Arc::new(MdbxReceiptStore::new(db_env.clone()));
+            let transaction_store = Arc::new(MdbxTransactionStore::new(db_env));
 
-            // Create a provider for state queries (shared with execution layer)
-            let provider = Arc::new(InMemoryProvider::new());
+            // Get provider from ExecutionBridge to share state with execution layer.
+            // This ensures eth_getBalance and other RPC queries see the same state
+            // as the execution layer, including genesis allocations.
+            let provider = if let Some(ref bridge) = self.execution_bridge {
+                bridge.provider().await
+            } else {
+                // Fallback: create new provider if no execution bridge is configured
+                // (e.g., for tests or minimal node configurations)
+                warn!("RPC enabled but no execution bridge configured - creating empty provider");
+                Arc::new(InMemoryProvider::new())
+            };
 
-            // Create MdbxRpcStorage with chain ID
+            // Create MdbxRpcStorage with chain ID and transaction store.
+            // The transaction store enables eth_getTransactionByHash and
+            // full_transactions=true support in eth_getBlockByNumber/Hash.
             let chain_id = 85300u64; // CipherBFT testnet chain ID
-            let storage = Arc::new(MdbxRpcStorage::new(
+            let storage = Arc::new(MdbxRpcStorage::with_transaction_store(
                 provider,
                 block_store,
                 receipt_store,
+                transaction_store,
+                None, // log_store - not yet implemented
                 chain_id,
             ));
 
@@ -892,17 +922,27 @@ impl Node {
             (&rpc_storage, &rpc_debug_executor, &subscription_manager)
         {
             use cipherbft_rpc::{
-                RpcConfig, RpcServer, StubExecutionApi, StubMempoolApi, StubNetworkApi,
+                EvmExecutionApi, RpcConfig, RpcServer, StubMempoolApi, StubNetworkApi,
             };
 
-            let mut rpc_config = RpcConfig::with_chain_id(85300); // CipherBFT testnet chain ID
+            let chain_id = 85300u64; // CipherBFT testnet chain ID
+            let mut rpc_config = RpcConfig::with_chain_id(chain_id);
             rpc_config.http_port = self.config.rpc_http_port;
             rpc_config.ws_port = self.config.rpc_ws_port;
 
-            // For now, use stub implementations for mempool, execution, and network
-            // Block storage is now backed by MDBX
+            // Get provider from ExecutionBridge for eth_call/eth_estimateGas
+            // This shares the same genesis-initialized state as MdbxRpcStorage
+            let exec_provider = if let Some(ref bridge) = self.execution_bridge {
+                bridge.provider().await
+            } else {
+                warn!("RPC execution using empty provider - eth_call may not work correctly");
+                Arc::new(InMemoryProvider::new())
+            };
+
+            // Use stub implementations for mempool and network
+            // Use real EVM execution with shared provider for eth_call/eth_estimateGas
             let mempool = Arc::new(StubMempoolApi::new());
-            let executor = Arc::new(StubExecutionApi::new());
+            let executor = Arc::new(EvmExecutionApi::new(exec_provider, chain_id));
             let network = Arc::new(StubNetworkApi::new());
 
             // Use with_subscription_manager to share the subscription manager
@@ -956,6 +996,10 @@ impl Node {
         // Default: 100 blocks per epoch
         let epoch_config = EpochConfig::default();
 
+        // Block configuration from genesis
+        let beneficiary = self.beneficiary;
+        let gas_limit = self.gas_limit;
+
         // Run the main event loop with graceful shutdown support
         let result = Self::run_event_loop(
             cancel_token,
@@ -970,7 +1014,8 @@ impl Node {
             rpc_debug_executor,
             epoch_config,
             self.epoch_block_reward,
-            self.gas_limit,
+            beneficiary,
+            gas_limit,
         )
         .await;
 
@@ -1019,6 +1064,7 @@ impl Node {
         rpc_debug_executor: Option<Arc<cipherbft_rpc::StubDebugExecutionApi>>,
         epoch_config: EpochConfig,
         epoch_block_reward: U256,
+        beneficiary: [u8; 20],
         gas_limit: u64,
     ) -> Result<()> {
         loop {
@@ -1154,7 +1200,7 @@ impl Node {
                                     debug!("Updated RPC block number to {}", height.0);
 
                                     // Create and store the block
-                                    let block = Self::execution_result_to_block(height.0, &block_result, gas_limit);
+                                    let block = Self::execution_result_to_block(height.0, &block_result, beneficiary, gas_limit);
                                     if let Err(e) = storage.block_store().put_block(&block).await {
                                         error!("Failed to store block {} to MDBX: {}", height.0, e);
                                     } else {
@@ -1181,6 +1227,43 @@ impl Node {
                                             error!("Failed to store {} receipts for block {}: {}", storage_receipts.len(), height.0, e);
                                         } else {
                                             debug!("Stored {} receipts for block {}", storage_receipts.len(), height.0);
+                                        }
+                                    }
+
+                                    // Store transactions for eth_getTransactionByHash queries
+                                    if let Some(tx_store) = storage.transaction_store() {
+                                        if !block_result.executed_transactions.is_empty() {
+                                            let block_hash_bytes = block_result.block_hash.0;
+                                            let storage_txs: Vec<StorageTransaction> = block_result
+                                                .executed_transactions
+                                                .iter()
+                                                .enumerate()
+                                                .filter_map(|(idx, tx_bytes)| {
+                                                    Self::raw_tx_to_storage_transaction(
+                                                        tx_bytes,
+                                                        height.0,
+                                                        block_hash_bytes,
+                                                        idx as u32,
+                                                    )
+                                                })
+                                                .collect();
+
+                                            if !storage_txs.is_empty() {
+                                                if let Err(e) = tx_store.put_transactions(&storage_txs).await {
+                                                    error!(
+                                                        "Failed to store {} transactions for block {}: {}",
+                                                        storage_txs.len(),
+                                                        height.0,
+                                                        e
+                                                    );
+                                                } else {
+                                                    debug!(
+                                                        "Stored {} transactions for block {}",
+                                                        storage_txs.len(),
+                                                        height.0
+                                                    );
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -1289,9 +1372,17 @@ impl Node {
     ///
     /// This creates a Block struct suitable for storage from the execution result.
     /// The block hash and parent hash are properly computed by the ExecutionBridge.
+    ///
+    /// # Arguments
+    ///
+    /// * `block_number` - The block height
+    /// * `result` - Execution result containing state roots and receipts
+    /// * `beneficiary` - Block beneficiary address (coinbase) from genesis
+    /// * `gas_limit` - Block gas limit from genesis configuration
     fn execution_result_to_block(
         block_number: u64,
         result: &BlockExecutionResult,
+        beneficiary: [u8; 20],
         gas_limit: u64,
     ) -> Block {
         let exec = &result.execution_result;
@@ -1308,7 +1399,7 @@ impl Node {
             number: block_number,
             parent_hash: result.parent_hash.0,
             ommers_hash: [0u8; 32], // Always empty in PoS
-            beneficiary: [0u8; 20], // TODO: Set to validator address
+            beneficiary,            // From genesis coinbase
             state_root: exec.state_root.0,
             transactions_root: exec.transactions_root.0,
             receipts_root: exec.receipts_root.0,
@@ -1377,6 +1468,112 @@ impl Node {
             log_index,
             transaction_index,
         }
+    }
+
+    /// Convert raw transaction bytes to StorageTransaction for MDBX persistence.
+    ///
+    /// Parses RLP-encoded transaction bytes and extracts all fields needed for
+    /// `eth_getTransactionByHash` and `full_transactions=true` responses.
+    ///
+    /// # Arguments
+    /// * `tx_bytes` - RLP-encoded transaction bytes
+    /// * `block_number` - Block number containing this transaction
+    /// * `block_hash` - Block hash containing this transaction
+    /// * `transaction_index` - Index of this transaction within the block
+    ///
+    /// # Returns
+    /// * `Some(StorageTransaction)` if parsing succeeds
+    /// * `None` if the transaction cannot be decoded
+    fn raw_tx_to_storage_transaction(
+        tx_bytes: &ExecutionBytes,
+        block_number: u64,
+        block_hash: [u8; 32],
+        transaction_index: u32,
+    ) -> Option<StorageTransaction> {
+        use alloy_consensus::Transaction as ConsensusTx;
+        use alloy_rlp::Decodable;
+        use reth_primitives::TransactionSigned;
+        use reth_primitives_traits::SignedTransaction;
+
+        // Decode the RLP-encoded transaction
+        let tx = TransactionSigned::decode(&mut tx_bytes.as_ref()).ok()?;
+
+        // Get the transaction hash
+        let tx_hash = *tx.tx_hash();
+
+        // Recover the sender address using try_recover (SignedTransaction trait)
+        let sender = tx.try_recover().ok()?;
+
+        // Get signature components
+        let signature = *tx.signature();
+
+        // Determine transaction type
+        let tx_type = tx.tx_type() as u8;
+
+        // Get gas price fields based on transaction type
+        // Use the Transaction trait methods directly on TransactionSigned
+        // Note: alloy returns u128 for gas prices, but storage uses u64 (sufficient for real values)
+        let (gas_price, max_fee_per_gas, max_priority_fee_per_gas): (
+            Option<u64>,
+            Option<u64>,
+            Option<u64>,
+        ) = match tx_type {
+            0 | 1 => {
+                // Legacy (0) or EIP-2930 (1): use gas_price
+                (Some(tx.max_fee_per_gas() as u64), None, None)
+            }
+            2 => {
+                // EIP-1559: use max_fee_per_gas and max_priority_fee_per_gas
+                (
+                    None,
+                    Some(tx.max_fee_per_gas() as u64),
+                    tx.max_priority_fee_per_gas().map(|v| v as u64),
+                )
+            }
+            _ => (None, None, None),
+        };
+
+        // Convert value to big-endian bytes
+        let value_bytes: [u8; 32] = tx.value().to_be_bytes();
+
+        // Convert signature v from bool (odd_y_parity) to u64
+        // EIP-155: v = chain_id * 2 + 35 + parity (0 or 1)
+        // For typed transactions (EIP-2930, EIP-1559): v is just parity (0 or 1)
+        let v: u64 = if tx_type == 0 {
+            // Legacy: use EIP-155 encoding if chain_id present
+            match tx.chain_id() {
+                Some(chain_id) => chain_id * 2 + 35 + (signature.v() as u64),
+                None => 27 + (signature.v() as u64),
+            }
+        } else {
+            // Typed transactions: parity is 0 or 1
+            signature.v() as u64
+        };
+
+        // Convert r and s from U256 to [u8; 32]
+        let r_bytes: [u8; 32] = signature.r().to_be_bytes();
+        let s_bytes: [u8; 32] = signature.s().to_be_bytes();
+
+        Some(StorageTransaction {
+            hash: tx_hash.0,
+            block_number,
+            block_hash,
+            transaction_index,
+            from: sender.0 .0,
+            to: tx.to().map(|a| a.0 .0),
+            value: value_bytes,
+            input: tx.input().to_vec(),
+            nonce: tx.nonce(),
+            gas: tx.gas_limit(),
+            gas_price,
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+            chain_id: tx.chain_id(),
+            v,
+            r: r_bytes,
+            s: s_bytes,
+            transaction_type: tx_type,
+        })
     }
 
     /// Create a genesis block (block 0) for RPC compatibility.

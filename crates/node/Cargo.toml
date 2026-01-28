@@ -22,8 +22,14 @@ cipherbft-rpc = { path = "../rpc" }
 cipherbft-mempool = { path = "../mempool" }
 cipherbft-metrics = { path = "../metrics" }
 
-# Ethereum primitives (for genesis types in tests)
+# Ethereum primitives (for genesis types in tests and transaction parsing)
 alloy-primitives = { version = "1", features = ["serde"] }
+alloy-rlp = { workspace = true }
+alloy-consensus = { workspace = true }
+
+# Reth primitives (for transaction parsing in block execution)
+reth-primitives = { workspace = true }
+reth-primitives-traits = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true, features = ["full", "signal"] }

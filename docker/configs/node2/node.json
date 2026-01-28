@@ -1,0 +1,45 @@
+{
+  "validator_id": "76858a8c0702a5761d5ea94e52d7e8513cab5d46",
+  "keyring_backend": "test",
+  "key_name": "validator-2",
+  "keystore_dir": "/app/keys",
+  "keystore_account": 0,
+  "primary_listen": "0.0.0.0:9020",
+  "consensus_listen": "0.0.0.0:9025",
+  "worker_listens": [
+    "0.0.0.0:9021"
+  ],
+  "peers": [
+    {
+      "validator_id": "6017fe04d4465135f3f0f1a0a875a5e97109072b",
+      "bls_public_key_hex": "8108ae025455d480880ecb40421b4556011ed84c5daa63358fc2f0d509d18036b57360524ba5242fb5992140607705f8",
+      "ed25519_public_key_hex": "0c10a694de5287c291739144c0ffac4c98c666a88e24023480a581089d59ed64",
+      "primary_addr": "10.200.0.10:9000",
+      "consensus_addr": "10.200.0.10:9005",
+      "worker_addrs": [
+        "10.200.0.10:9001"
+      ]
+    },
+    {
+      "validator_id": "5f9f7d5f49c65309a7d151dc8d80a3b65bad1978",
+      "bls_public_key_hex": "94b9fa119f3d1e7435d92a101cc94fda1080b618b587d9e513a09f45622652f56d095198f7624520fffbdf717a42774a",
+      "ed25519_public_key_hex": "92a4b1c3e007d6eaa84a51cd4e019437e4f75c9343e78cf65f1d67941c226fb4",
+      "primary_addr": "10.200.0.11:9010",
+      "consensus_addr": "10.200.0.11:9015",
+      "worker_addrs": [
+        "10.200.0.11:9011"
+      ]
+    }
+  ],
+  "num_workers": 1,
+  "home_dir": "/app",
+  "data_dir": "/app/data",
+  "genesis_path": "/app/genesis.json",
+  "car_interval_ms": 100,
+  "max_batch_txs": 100,
+  "max_batch_bytes": 1048576,
+  "rpc_enabled": true,
+  "rpc_http_port": 8565,
+  "rpc_ws_port": 8566,
+  "metrics_port": 9120
+}

@@ -806,6 +806,53 @@ pub struct StoredStorageValue {
 }
 
 // =============================================================================
+// Transaction Types (for RPC eth_getTransactionByHash)
+// =============================================================================
+
+/// Stored transaction for MDBX persistence.
+///
+/// Contains all the information returned by `eth_getTransactionByHash`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredTransaction {
+    /// Transaction hash (32 bytes)
+    pub hash: [u8; 32],
+    /// Block number where the transaction was included
+    pub block_number: u64,
+    /// Block hash (32 bytes)
+    pub block_hash: [u8; 32],
+    /// Transaction index within the block
+    pub transaction_index: u32,
+    /// Sender address (20 bytes)
+    pub from: [u8; 20],
+    /// Recipient address (20 bytes), None for contract creation
+    pub to: Option<[u8; 20]>,
+    /// Transaction value (U256 as big-endian bytes)
+    pub value: [u8; 32],
+    /// Transaction input data
+    pub input: Vec<u8>,
+    /// Sender nonce
+    pub nonce: u64,
+    /// Gas limit
+    pub gas: u64,
+    /// Gas price (legacy transactions)
+    pub gas_price: Option<u64>,
+    /// Max fee per gas (EIP-1559)
+    pub max_fee_per_gas: Option<u64>,
+    /// Max priority fee per gas (EIP-1559)
+    pub max_priority_fee_per_gas: Option<u64>,
+    /// Chain ID
+    pub chain_id: Option<u64>,
+    /// Signature v value
+    pub v: u64,
+    /// Signature r value (32 bytes)
+    pub r: [u8; 32],
+    /// Signature s value (32 bytes)
+    pub s: [u8; 32],
+    /// Transaction type (0 = legacy, 1 = EIP-2930, 2 = EIP-1559)
+    pub transaction_type: u8,
+}
+
+// =============================================================================
 // Block Types (for RPC eth_getBlockByNumber/eth_getBlockByHash)
 // =============================================================================
 
@@ -927,6 +974,34 @@ pub struct ReceiptsByBlock;
 
 impl Table for ReceiptsByBlock {
     const NAME: &'static str = "ReceiptsByBlock";
+    const DUPSORT: bool = false;
+    type Key = BlockNumberKey;
+    type Value = BincodeValue<Vec<[u8; 32]>>;
+}
+
+// =============================================================================
+// Transaction Tables (for RPC eth_getTransactionByHash)
+// =============================================================================
+
+/// Transactions table: TxHash -> StoredTransaction
+/// Stores transactions indexed by transaction hash
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Transactions;
+
+impl Table for Transactions {
+    const NAME: &'static str = "Transactions";
+    const DUPSORT: bool = false;
+    type Key = HashKey;
+    type Value = BincodeValue<StoredTransaction>;
+}
+
+/// TransactionsByBlock table: BlockNumber -> List of TxHashes
+/// Secondary index for looking up transactions by block
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TransactionsByBlock;
+
+impl Table for TransactionsByBlock {
+    const NAME: &'static str = "TransactionsByBlock";
     const DUPSORT: bool = false;
     type Key = BlockNumberKey;
     type Value = BincodeValue<Vec<[u8; 32]>>;
@@ -1345,6 +1420,9 @@ pub enum CipherBftTable {
     // Receipt tables
     Receipts,
     ReceiptsByBlock,
+    // Transaction tables
+    Transactions,
+    TransactionsByBlock,
     // Block tables
     Blocks,
     BlocksByHash,
@@ -1383,6 +1461,9 @@ impl CipherBftTable {
         // Receipt tables
         Self::Receipts,
         Self::ReceiptsByBlock,
+        // Transaction tables
+        Self::Transactions,
+        Self::TransactionsByBlock,
         // Block tables
         Self::Blocks,
         Self::BlocksByHash,
@@ -1418,6 +1499,8 @@ impl TableInfo for CipherBftTable {
             Self::StakingMetadata => StakingMetadata::NAME,
             Self::Receipts => Receipts::NAME,
             Self::ReceiptsByBlock => ReceiptsByBlock::NAME,
+            Self::Transactions => Transactions::NAME,
+            Self::TransactionsByBlock => TransactionsByBlock::NAME,
             Self::Blocks => Blocks::NAME,
             Self::BlocksByHash => BlocksByHash::NAME,
             Self::Logs => Logs::NAME,
@@ -1449,6 +1532,8 @@ impl TableInfo for CipherBftTable {
             Self::StakingMetadata => StakingMetadata::DUPSORT,
             Self::Receipts => Receipts::DUPSORT,
             Self::ReceiptsByBlock => ReceiptsByBlock::DUPSORT,
+            Self::Transactions => Transactions::DUPSORT,
+            Self::TransactionsByBlock => TransactionsByBlock::DUPSORT,
             Self::Blocks => Blocks::DUPSORT,
             Self::BlocksByHash => BlocksByHash::DUPSORT,
             Self::Logs => Logs::DUPSORT,
@@ -1489,6 +1574,9 @@ impl Tables {
         // Receipt tables
         Receipts::NAME,
         ReceiptsByBlock::NAME,
+        // Transaction tables
+        Transactions::NAME,
+        TransactionsByBlock::NAME,
         // Block tables
         Blocks::NAME,
         BlocksByHash::NAME,
