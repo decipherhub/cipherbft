@@ -50,17 +50,34 @@ impl CutFormer {
     ) -> Result<Cut, DclError> {
         let mut cut = Cut::new(height);
 
+        // Log all attested Cars being considered
+        tracing::info!(
+            height,
+            attested_count = attested_cars.len(),
+            threshold = self.threshold,
+            "form_cut: evaluating attested Cars"
+        );
+
         // Add all attested Cars
         for (validator, (car, attestation)) in attested_cars {
+            tracing::info!(
+                validator = %validator,
+                position = car.position,
+                batches = car.batch_digests.len(),
+                attestation_count = attestation.count(),
+                threshold = self.threshold,
+                "form_cut: checking Car"
+            );
+
             // Verify threshold is met
             if attestation.count() < self.threshold {
-                tracing::info!(
+                tracing::warn!(
                     validator = %validator,
                     position = car.position,
                     batches = car.batch_digests.len(),
                     attestations = attestation.count(),
                     threshold = self.threshold,
-                    "Skipping Car - below attestation threshold"
+                    "SKIPPING Car - below attestation threshold"
                 );
                 continue; // Skip Cars without enough attestations
             }
