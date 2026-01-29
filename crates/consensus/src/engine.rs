@@ -105,7 +105,8 @@ pub fn default_consensus_params(
 /// This allows the engine to buffer votes, proposals, and sync responses
 /// that arrive for heights we haven't reached yet. Without this, such
 /// messages are silently dropped, causing validators to get stuck during sync.
-const DEFAULT_QUEUE_CAPACITY: usize = 10;
+/// Set to a high value to handle extreme sync lag scenarios.
+const DEFAULT_QUEUE_CAPACITY: usize = 1000;
 
 /// Engine config tuned for ProposalAndParts mode.
 ///
