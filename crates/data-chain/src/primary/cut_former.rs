@@ -15,7 +15,15 @@ pub struct CutFormer {
     validators: Vec<ValidatorId>,
     /// Byzantine tolerance (f)
     f: usize,
-    /// Attestation threshold (f+1)
+    /// Attestation threshold for Cut inclusion (2f+1)
+    ///
+    /// We require 2f+1 attestations (quorum) before including a Car in a Cut.
+    /// This ensures that a majority of honest validators have received and
+    /// validated the Car's batches before consensus decides on it.
+    ///
+    /// With only f+1, a Car could be attested by f byzantine + 1 honest validators
+    /// before other honest validators have synced the batch data, causing the
+    /// batched Car to be replaced by an empty Car in the final decision.
     threshold: usize,
 }
 
@@ -27,7 +35,9 @@ impl CutFormer {
 
         let n = validators.len();
         let f = (n - 1) / 3;
-        let threshold = f + 1;
+        // Use 2f+1 (quorum) threshold for Cut inclusion
+        // This ensures enough honest validators have synced batch data
+        let threshold = 2 * f + 1;
 
         Self {
             validators,
@@ -50,49 +60,25 @@ impl CutFormer {
     ) -> Result<Cut, DclError> {
         let mut cut = Cut::new(height);
 
-        // Log all attested Cars being considered
-        tracing::info!(
-            height,
-            attested_count = attested_cars.len(),
-            threshold = self.threshold,
-            "form_cut: evaluating attested Cars"
-        );
-
-        // Add all attested Cars
+        // Add all attested Cars that meet the 2f+1 threshold
         for (validator, (car, attestation)) in attested_cars {
-            tracing::info!(
-                validator = %validator,
-                position = car.position,
-                batches = car.batch_digests.len(),
-                attestation_count = attestation.count(),
-                threshold = self.threshold,
-                "form_cut: checking Car"
-            );
-
-            // Verify threshold is met
+            // Verify 2f+1 threshold is met
             if attestation.count() < self.threshold {
-                tracing::warn!(
+                tracing::debug!(
                     validator = %validator,
                     position = car.position,
                     batches = car.batch_digests.len(),
                     attestations = attestation.count(),
                     threshold = self.threshold,
-                    "SKIPPING Car - below attestation threshold"
+                    "Skipping Car - below 2f+1 attestation threshold"
                 );
-                continue; // Skip Cars without enough attestations
+                continue;
             }
 
             // Check monotonicity
             if let Some(last) = last_cut {
                 if let Some(last_car) = last.get_car(validator) {
                     if car.position < last_car.position {
-                        tracing::warn!(
-                            validator = %validator,
-                            car_position = car.position,
-                            last_position = last_car.position,
-                            batches = car.batch_digests.len(),
-                            "Monotonicity violation - Car position behind last Cut"
-                        );
                         return Err(DclError::MonotonicityViolation {
                             validator: *validator,
                             old: last_car.position,
@@ -264,9 +250,9 @@ mod tests {
         let validators = make_validators(4);
         let former = CutFormer::new(validators.clone());
 
-        // threshold = 2 for n=4
+        // For n=4: f=1, threshold=2f+1=3
         let mut attested_cars = HashMap::new();
-        let (car, att) = make_car_with_attestation(validators[0], 0, 2, 4);
+        let (car, att) = make_car_with_attestation(validators[0], 0, 3, 4);
         attested_cars.insert(validators[0], (car, att));
 
         let cut = former.form_cut(1, &attested_cars, None).unwrap();
@@ -281,12 +267,13 @@ mod tests {
 
         let mut attested_cars = HashMap::new();
 
-        // Car with sufficient attestations (2)
-        let (car1, att1) = make_car_with_attestation(validators[0], 0, 2, 4);
+        // For n=4: f=1, threshold=2f+1=3
+        // Car with sufficient attestations (3)
+        let (car1, att1) = make_car_with_attestation(validators[0], 0, 3, 4);
         attested_cars.insert(validators[0], (car1, att1));
 
-        // Car with insufficient attestations (1)
-        let (car2, att2) = make_car_with_attestation(validators[1], 0, 1, 4);
+        // Car with insufficient attestations (2 < threshold of 3)
+        let (car2, att2) = make_car_with_attestation(validators[1], 0, 2, 4);
         attested_cars.insert(validators[1], (car2, att2));
 
         let cut = former.form_cut(1, &attested_cars, None).unwrap();
@@ -302,12 +289,12 @@ mod tests {
 
         // Last cut had position 5
         let mut last_cut = Cut::new(1);
-        let (car_old, _) = make_car_with_attestation(validators[0], 5, 2, 4);
+        let (car_old, _) = make_car_with_attestation(validators[0], 5, 3, 4);
         last_cut.cars.insert(validators[0], car_old);
 
         // New cut tries position 3 (going backwards)
         let mut attested_cars = HashMap::new();
-        let (car_new, att_new) = make_car_with_attestation(validators[0], 3, 2, 4);
+        let (car_new, att_new) = make_car_with_attestation(validators[0], 3, 3, 4);
         attested_cars.insert(validators[0], (car_new, att_new));
 
         let result = former.form_cut(2, &attested_cars, Some(&last_cut));
@@ -325,7 +312,7 @@ mod tests {
         // f=1 for n=4, so we can exclude at most 1 validator
         let mut cut = Cut::new(1);
         for v in &validators[0..3] {
-            let (car, _) = make_car_with_attestation(*v, 0, 2, 4);
+            let (car, _) = make_car_with_attestation(*v, 0, 3, 4);
             cut.cars.insert(*v, car);
         }
 
@@ -342,7 +329,7 @@ mod tests {
         // f=1, but we exclude 2 validators
         let mut cut = Cut::new(1);
         for v in &validators[0..2] {
-            let (car, _) = make_car_with_attestation(*v, 0, 2, 4);
+            let (car, _) = make_car_with_attestation(*v, 0, 3, 4);
             cut.cars.insert(*v, car);
         }
 
@@ -362,8 +349,8 @@ mod tests {
         let mut candidates = HashMap::new();
 
         // Validator 0 has two cars at different positions
-        let (car_0_pos_1, att_0_1) = make_car_with_attestation(validators[0], 1, 2, 4);
-        let (car_0_pos_5, att_0_5) = make_car_with_attestation(validators[0], 5, 2, 4);
+        let (car_0_pos_1, att_0_1) = make_car_with_attestation(validators[0], 1, 3, 4);
+        let (car_0_pos_5, att_0_5) = make_car_with_attestation(validators[0], 5, 3, 4);
         candidates.insert(
             validators[0],
             vec![(car_0_pos_1, att_0_1), (car_0_pos_5.clone(), att_0_5)],
