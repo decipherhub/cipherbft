@@ -38,6 +38,7 @@ criterion/
 
 # Testnet data
 testnet/
+devnet/
 
 .serena
 .claude
