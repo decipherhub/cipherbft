@@ -358,6 +358,12 @@ impl Worker {
         let mut sync_check_interval = interval(Duration::from_millis(500));
         sync_check_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+        info!(
+            worker_id = self.config.worker_id,
+            flush_interval_ms = self.config.flush_interval.as_millis(),
+            "Worker entering main loop"
+        );
+
         while !self.shutdown {
             // Handle peer receiver if available
             let peer_msg = async {
@@ -372,6 +378,7 @@ impl Worker {
                 // Handle incoming transactions
                 Some(tx) = self.tx_receiver.recv() => {
                     self.handle_transaction(tx).await;
+                    trace!(worker_id = self.config.worker_id, "Returned from handle_transaction");
                 }
 
                 // Handle messages from Primary
@@ -386,6 +393,7 @@ impl Worker {
 
                 // Time-based flush
                 _ = flush_interval.tick() => {
+                    trace!(worker_id = self.config.worker_id, "Flush tick");
                     self.check_time_flush().await;
                 }
 
@@ -671,6 +679,18 @@ impl Worker {
             .batch_maker
             .should_flush_by_time(self.config.flush_interval);
         let has_pending = self.batch_maker.has_pending();
+        let elapsed = self.batch_maker.time_since_batch_start();
+
+        // Log every call so we can see the tick is working
+        if has_pending {
+            info!(
+                worker_id = self.config.worker_id,
+                should_flush,
+                has_pending,
+                elapsed_ms = elapsed.map(|e| e.as_millis()).unwrap_or(0),
+                "check_time_flush called"
+            );
+        }
 
         if should_flush && has_pending {
             info!(
