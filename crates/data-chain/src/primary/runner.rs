@@ -477,6 +477,10 @@ impl Primary {
 
                 // Periodic Car creation
                 _ = car_interval.tick() => {
+                    let pending_count = self.state.pending_digests.len();
+                    if pending_count > 0 {
+                        info!(pending_count, "car_interval tick - has pending digests");
+                    }
                     self.try_create_car().await;
                 }
 

@@ -285,9 +285,9 @@ impl Node {
                 power.max(1) as u64 // Ensure at least 1 voting power
             };
 
-            debug!(
-                "Adding validator {} (stake: {}, voting_power: {})",
-                validator.address, validator.staked_amount, voting_power
+            info!(
+                "Adding validator: genesis_address={}, derived_validator_id={}, ed25519_pubkey={}, voting_power={}",
+                validator.address, validator_id, validator.ed25519_pubkey, voting_power
             );
 
             self.validators.insert(
@@ -506,6 +506,13 @@ impl Node {
                 .iter()
                 .map(|(id, info)| (*id, info.bls_public_key.clone()))
                 .collect();
+
+            // Log all known validators for debugging
+            info!(
+                "Primary will know {} validators: {:?}",
+                bls_pubkeys.len(),
+                bls_pubkeys.keys().collect::<Vec<_>>()
+            );
 
             // Load the last finalized cut for Primary state restoration on restart
             // This is CRITICAL for validator restart: without it, a restarted validator

@@ -34,6 +34,14 @@ impl Core {
         let mut validators: Vec<ValidatorId> = validator_pubkeys.keys().cloned().collect();
         validators.sort(); // Deterministic ordering
 
+        // Log what validators Core is initialized with
+        tracing::info!(
+            our_id = %our_id,
+            validator_count = validators.len(),
+            validators = ?validators,
+            "Core initialized with validators"
+        );
+
         let validator_indices: HashMap<_, _> = validators
             .iter()
             .enumerate()
@@ -63,6 +71,14 @@ impl Core {
     ) -> Result<Option<Attestation>, DclError> {
         // 1. Verify Car signature
         let Some(proposer_pubkey) = self.validator_pubkeys.get(&car.proposer) else {
+            // Log what validators we DO know about for debugging
+            let known_validators: Vec<_> = self.validator_pubkeys.keys().collect();
+            tracing::warn!(
+                car_proposer = %car.proposer,
+                known_count = known_validators.len(),
+                known_validators = ?known_validators,
+                "Rejecting Car from unknown validator"
+            );
             return Err(DclError::UnknownValidator {
                 validator: car.proposer,
             });
