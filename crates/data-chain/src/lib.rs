@@ -127,11 +127,13 @@ pub trait DataChainLayer {
     /// - `None` if no attested Cars are available
     fn form_cut(&self, height: u64) -> Option<Cut>;
 
-    /// Get the attestation threshold (f+1)
+    /// Get the attestation threshold (2f+1)
     ///
     /// Returns the number of attestations required for a Car to be
-    /// considered valid for Cut inclusion. This is f+1 where f is
-    /// the maximum number of Byzantine validators.
+    /// considered valid for Cut inclusion. This is 2f+1 (quorum) where f is
+    /// the maximum number of Byzantine validators. Requiring quorum ensures
+    /// that a majority of honest validators have synced the Car's batches
+    /// before consensus decides on it.
     fn attestation_threshold(&self) -> usize;
 
     /// Check if a Car has sufficient attestations

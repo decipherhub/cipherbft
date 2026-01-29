@@ -78,7 +78,8 @@ impl PrimaryDcl {
     ) -> Self {
         let validator_count = validator_pubkeys.len();
         let f = (validator_count - 1) / 3;
-        let threshold = f + 1;
+        // Use 2f+1 (quorum) threshold for attestation collection
+        let threshold = 2 * f + 1;
 
         // Create validator indices
         let mut sorted_validators: Vec<_> = validator_pubkeys.keys().cloned().collect();
@@ -216,7 +217,7 @@ impl DataChainLayer for PrimaryDcl {
 
     fn attestation_threshold(&self) -> usize {
         let f = (self.validator_pubkeys.len() - 1) / 3;
-        f + 1
+        2 * f + 1
     }
 
     fn is_car_attested(&self, car_hash: &Hash) -> bool {

@@ -284,7 +284,8 @@ mod tests {
             .collect();
 
         let our_id = validator_id_from_bls_pubkey(&keypairs[0].public_key);
-        let threshold = (n - 1) / 3 + 1; // f+1
+        let f = (n - 1) / 3;
+        let threshold = 2 * f + 1; // 2f+1 (quorum)
 
         let collector = AttestationCollector::new(
             our_id,
@@ -326,7 +327,7 @@ mod tests {
 
     #[test]
     fn test_threshold_reached() {
-        // n=4, f=1, threshold=2
+        // n=4, f=1, threshold=2f+1=3
         let (mut collector, keypairs) = make_test_setup(4);
         let car = make_car(&keypairs[0]);
         let car_hash = car.hash();
@@ -334,18 +335,23 @@ mod tests {
 
         collector.start_collection(car.clone(), self_attestation);
 
-        // Add one attestation (self + 1 = 2 = threshold)
-        let att = make_attestation(&car, &keypairs[1]);
-        let result = collector.add_attestation(att).unwrap();
+        // Add first attestation (self + 1 = 2, below threshold)
+        let att1 = make_attestation(&car, &keypairs[1]);
+        let result1 = collector.add_attestation(att1).unwrap();
+        assert!(result1.is_none());
 
-        assert!(result.is_some());
-        let agg = result.unwrap();
+        // Add second attestation (self + 2 = 3 = threshold)
+        let att2 = make_attestation(&car, &keypairs[2]);
+        let result2 = collector.add_attestation(att2).unwrap();
+
+        assert!(result2.is_some());
+        let agg = result2.unwrap();
         assert_eq!(agg.car_hash, car_hash);
     }
 
     #[test]
     fn test_threshold_reached_with_verification() {
-        // n=4, f=1, threshold=2
+        // n=4, f=1, threshold=2f+1=3
         // This test verifies the aggregated signature is correct
         let (mut collector, keypairs) = make_test_setup(4);
         let car = make_car(&keypairs[0]);
@@ -353,12 +359,17 @@ mod tests {
 
         collector.start_collection(car.clone(), self_attestation);
 
-        // Add one attestation (self + 1 = 2 = threshold)
-        let att = make_attestation(&car, &keypairs[1]);
-        let result = collector.add_attestation(att).unwrap();
+        // Add first attestation (self + 1 = 2, below threshold)
+        let att1 = make_attestation(&car, &keypairs[1]);
+        let result1 = collector.add_attestation(att1).unwrap();
+        assert!(result1.is_none());
 
-        assert!(result.is_some());
-        let agg = result.unwrap();
+        // Add second attestation (self + 2 = 3 = threshold)
+        let att2 = make_attestation(&car, &keypairs[2]);
+        let result2 = collector.add_attestation(att2).unwrap();
+
+        assert!(result2.is_some());
+        let agg = result2.unwrap();
 
         // Build public key lookup
         let pubkeys: Vec<_> = keypairs.iter().map(|kp| kp.public_key.clone()).collect();
@@ -366,12 +377,13 @@ mod tests {
         // Verify the aggregated signature
         assert!(agg.verify(|idx| pubkeys.get(idx).cloned()));
 
-        // Verify count includes both self and external attestation
-        assert_eq!(agg.count(), 2);
+        // Verify count includes self and two external attestations
+        assert_eq!(agg.count(), 3);
 
-        // Verify bitmap has both validators set
+        // Verify bitmap has all three validators set
         assert!(agg.has_attested(0)); // proposer (self)
-        assert!(agg.has_attested(1)); // external attester
+        assert!(agg.has_attested(1)); // first external attester
+        assert!(agg.has_attested(2)); // second external attester
     }
 
     #[test]
