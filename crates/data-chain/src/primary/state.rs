@@ -301,6 +301,12 @@ impl PrimaryState {
     /// completes, our_position has drifted far ahead of what peers expect. By resetting
     /// our_position from the finalized cut containing our Car, we re-sync with the network.
     pub fn sync_positions_from_cut(&mut self, cut: &Cut) {
+        tracing::info!(
+            height = cut.height,
+            car_count = cut.cars.len(),
+            "sync_positions_from_cut called"
+        );
+
         for (validator, car) in &cut.cars {
             let current_pos = self.last_seen_positions.get(validator).copied();
             // Only update if the decided position is higher than our current tracking
@@ -311,10 +317,17 @@ impl PrimaryState {
             // Track which positions have been included in decided Cuts
             // This is used by mark_attested to determine if a Car with batches
             // has already been "used" and can be safely replaced
-            let last_included = self.last_included_positions.get(validator).copied();
-            if last_included.is_none_or(|p| car.position > p) {
+            let old_last_included = self.last_included_positions.get(validator).copied();
+            if old_last_included.is_none_or(|p| car.position > p) {
                 self.last_included_positions
                     .insert(*validator, car.position);
+                tracing::info!(
+                    validator = %validator,
+                    car_position = car.position,
+                    old_last_included = old_last_included.unwrap_or(0),
+                    batches = car.batch_digests.len(),
+                    "Updated last_included_positions"
+                );
             }
 
             // CRITICAL: Remove attested Cars that were included in this Cut

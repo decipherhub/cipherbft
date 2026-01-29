@@ -241,6 +241,18 @@ impl ExecutionBridge {
             .values()
             .map(|car| car.batch_digests.len())
             .sum();
+
+        // Log each Car's validator, position, and batch count for debugging
+        for (validator, car) in &consensus_cut.cars {
+            info!(
+                height = consensus_cut.height,
+                validator = %validator,
+                position = car.position,
+                batches = car.batch_digests.len(),
+                "Car in decided Cut"
+            );
+        }
+
         info!(
             height = consensus_cut.height,
             cars = consensus_cut.cars.len(),
