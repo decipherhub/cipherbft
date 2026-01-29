@@ -60,6 +60,7 @@ pub mod proof;
 pub mod receipts;
 pub mod rlp;
 pub mod state;
+pub mod state_provider;
 pub mod types;
 
 // Re-export main types for convenience
@@ -86,6 +87,7 @@ pub use receipts::{
 };
 pub use rlp::{rlp_encode_account, rlp_encode_storage_value, RlpAccount, KECCAK_EMPTY};
 pub use state::StateManager;
+pub use state_provider::{BlockTracker, CipherBftStateProvider, CipherBftStateProviderFactory};
 
 // Re-export inspector types for RPC tracing
 pub use inspector::{

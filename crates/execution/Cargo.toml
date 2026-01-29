@@ -29,11 +29,20 @@ alloy-eips = "1"
 alloy-rlp = "0.3"
 alloy-sol-types = "1"
 
+# Reth storage API for StateProviderFactory (matching workspace v1.10.0)
+reth-storage-api = { git = "https://github.com/paradigmxyz/reth", tag = "v1.10.0" }
+reth-storage-errors = { git = "https://github.com/paradigmxyz/reth", tag = "v1.10.0" }
+reth-chainspec = { git = "https://github.com/paradigmxyz/reth", tag = "v1.10.0" }
+reth-primitives-traits = { git = "https://github.com/paradigmxyz/reth", tag = "v1.10.0" }
+reth-trie-common = { git = "https://github.com/paradigmxyz/reth", tag = "v1.10.0" }
+reth-execution-types = { git = "https://github.com/paradigmxyz/reth", tag = "v1.10.0" }
+
 # Error handling
 thiserror = "2"
 
 # Derive macros (required by alloy dependencies)
 derive_more = { version = "1.0", features = ["display", "from"] }
+auto_impl = "1"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
