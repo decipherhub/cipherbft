@@ -1575,6 +1575,11 @@ impl MempoolApi for ChannelMempoolApi {
         }
 
         // Forward to worker via channel
+        info!(
+            "Sending transaction {} to worker channel (capacity: {})",
+            tx_hash,
+            self.tx_sender.capacity()
+        );
         self.tx_sender.send(tx_bytes.to_vec()).await.map_err(|_| {
             warn!("Failed to send transaction to worker - channel closed");
             RpcError::Execution("Transaction submission failed: worker channel closed".to_string())

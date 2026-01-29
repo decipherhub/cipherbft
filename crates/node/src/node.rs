@@ -611,6 +611,15 @@ impl Node {
                 tokio::spawn(async move {
                     // Move mempool_rx into the async block
                     let mut mempool_rx = mempool_rx;
+                    info!(
+                        "Worker {} bridge started (mempool_rx: {})",
+                        worker_id,
+                        if mempool_rx.is_some() {
+                            "enabled"
+                        } else {
+                            "disabled"
+                        }
+                    );
                     loop {
                         // Use a macro-like pattern to handle optional mempool receiver
                         // Worker 0 has mempool_rx, others don't
