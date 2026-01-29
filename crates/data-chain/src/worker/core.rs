@@ -781,15 +781,31 @@ impl Worker {
 
         // Persist to storage if available (T069)
         if let Some(ref storage) = self.storage {
-            if let Err(e) = storage.put_batch(batch.clone()).await {
-                error!(
-                    worker_id = self.config.worker_id,
-                    digest = %digest.digest,
-                    error = %e,
-                    "Failed to persist batch to storage"
-                );
-                // Continue anyway - in-memory state will still have it
+            match storage.put_batch(batch.clone()).await {
+                Ok(_) => {
+                    info!(
+                        worker_id = self.config.worker_id,
+                        digest = %digest.digest,
+                        tx_count = batch.transactions.len(),
+                        "Batch persisted to storage"
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        worker_id = self.config.worker_id,
+                        digest = %digest.digest,
+                        error = %e,
+                        "Failed to persist batch to storage"
+                    );
+                    // Continue anyway - in-memory state will still have it
+                }
             }
+        } else {
+            warn!(
+                worker_id = self.config.worker_id,
+                digest = %digest.digest,
+                "No storage configured - batch will only be in memory"
+            );
         }
 
         // Store in local memory
