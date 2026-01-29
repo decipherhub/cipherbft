@@ -1533,9 +1533,10 @@ impl ChannelMempoolApi {
 #[async_trait]
 impl MempoolApi for ChannelMempoolApi {
     async fn submit_transaction(&self, tx_bytes: Bytes) -> RpcResult<B256> {
-        debug!(
-            "ChannelMempoolApi::submit_transaction({} bytes)",
-            tx_bytes.len()
+        info!(
+            "ChannelMempoolApi::submit_transaction received {} bytes (chain_id={})",
+            tx_bytes.len(),
+            self.chain_id
         );
 
         // Decode the transaction

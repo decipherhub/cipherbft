@@ -14,7 +14,7 @@ use crate::types::RpcBlock;
 use jsonrpsee::core::RpcResult as JsonRpcResult;
 use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::ErrorObjectOwned;
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use crate::config::RpcConfig;
 use crate::error::RpcError;
@@ -585,7 +585,7 @@ where
         address: Address,
         block: Option<String>,
     ) -> JsonRpcResult<U64> {
-        trace!(
+        info!(
             "eth_getTransactionCount: address={}, block={:?}",
             address,
             block
@@ -596,6 +596,7 @@ where
             .get_transaction_count(address, block_num)
             .await
             .map_err(Self::to_json_rpc_error)?;
+        info!("eth_getTransactionCount: address={}, count={}", address, count);
         Ok(U64::from(count))
     }
 
@@ -707,7 +708,7 @@ where
     }
 
     async fn send_raw_transaction(&self, tx_bytes: Bytes) -> JsonRpcResult<B256> {
-        debug!("eth_sendRawTransaction: {} bytes", tx_bytes.len());
+        info!("eth_sendRawTransaction: received {} bytes", tx_bytes.len());
 
         // Validate the transaction before submission
         let (tx, sender) = self.validate_transaction(&tx_bytes).map_err(|e| {
@@ -715,16 +716,24 @@ where
             Self::to_json_rpc_error(e)
         })?;
 
-        trace!(
-            "Submitting transaction to mempool: hash={}, sender={}",
-            tx.tx_hash(),
-            sender
+        let tx_hash = tx.tx_hash();
+        info!(
+            "Transaction validated: hash={}, sender={}, submitting to mempool",
+            tx_hash, sender
         );
 
-        self.mempool
+        let result = self
+            .mempool
             .submit_transaction(tx_bytes)
             .await
-            .map_err(Self::to_json_rpc_error)
+            .map_err(Self::to_json_rpc_error);
+
+        match &result {
+            Ok(hash) => info!("Transaction {} submitted to mempool successfully", hash),
+            Err(e) => warn!("Transaction {} failed to submit to mempool: {:?}", tx_hash, e),
+        }
+
+        result
     }
 
     async fn call(&self, call_request: CallRequest, block: Option<String>) -> JsonRpcResult<Bytes> {
@@ -749,7 +758,13 @@ where
         call_request: CallRequest,
         block: Option<String>,
     ) -> JsonRpcResult<U64> {
-        trace!("eth_estimateGas: {:?}, block={:?}", call_request, block);
+        info!(
+            "eth_estimateGas: from={:?}, to={:?}, value={:?}, block={:?}",
+            call_request.from,
+            call_request.to,
+            call_request.value,
+            block
+        );
         let block_num = self.parse_block_number(block)?;
         let gas = self
             .executor
@@ -764,6 +779,7 @@ where
             )
             .await
             .map_err(Self::to_json_rpc_error)?;
+        info!("eth_estimateGas: estimated gas={}", gas);
         Ok(U64::from(gas))
     }
 
