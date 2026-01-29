@@ -39,7 +39,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use cipherbft_execution::precompiles::{CipherBftPrecompileProvider, StakingPrecompile};
 use cipherbft_execution::AccountProof;
@@ -1580,7 +1580,11 @@ impl MempoolApi for ChannelMempoolApi {
             RpcError::Execution("Transaction submission failed: worker channel closed".to_string())
         })?;
 
-        debug!("Transaction {} submitted to worker channel", tx_hash);
+        info!(
+            "Transaction {} sent to worker channel ({} bytes)",
+            tx_hash,
+            tx_bytes.len()
+        );
         Ok(tx_hash)
     }
 

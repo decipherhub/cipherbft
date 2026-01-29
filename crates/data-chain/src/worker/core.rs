@@ -401,10 +401,10 @@ impl Worker {
 
     /// Handle incoming transaction
     async fn handle_transaction(&mut self, tx: Transaction) {
-        trace!(
+        info!(
             worker_id = self.config.worker_id,
             tx_size = tx.len(),
-            "Received transaction"
+            "Worker received transaction from channel"
         );
 
         // Validate transaction if validator is available (CheckTx)
@@ -417,7 +417,7 @@ impl Worker {
                     );
                 }
                 Err(e) => {
-                    debug!(
+                    warn!(
                         worker_id = self.config.worker_id,
                         error = %e,
                         "Transaction validation failed, rejecting"
@@ -428,8 +428,19 @@ impl Worker {
         }
 
         // Add to batch maker
-        if let Some(batch) = self.batch_maker.add_transaction(tx) {
+        if let Some(batch) = self.batch_maker.add_transaction(tx.clone()) {
+            info!(
+                worker_id = self.config.worker_id,
+                tx_count = batch.transactions.len(),
+                "Batch ready, processing"
+            );
             self.process_batch(batch).await;
+        } else {
+            info!(
+                worker_id = self.config.worker_id,
+                pending_txs = self.batch_maker.pending_count(),
+                "Transaction added to batch maker, waiting for more or flush"
+            );
         }
     }
 

@@ -630,10 +630,12 @@ impl Node {
                                 }
                             } => {
                                 if let Some(tx_bytes) = tx {
-                                    debug!("Worker {} received transaction from RPC ({} bytes)", worker_id, tx_bytes.len());
+                                    info!("Worker {} received transaction from RPC mempool ({} bytes)", worker_id, tx_bytes.len());
                                     if worker_handle.submit_transaction(tx_bytes).await.is_err() {
                                         warn!("Worker {} submit_transaction failed", worker_id);
                                         // Don't break - continue processing other messages
+                                    } else {
+                                        info!("Worker {} forwarded transaction to batch maker", worker_id);
                                     }
                                 }
                             }
