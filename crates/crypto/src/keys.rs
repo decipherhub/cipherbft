@@ -234,10 +234,14 @@ impl ValidatorKeys {
     }
 
     /// Check if keys are backed by keystore files
+    ///
+    /// Returns true if at least the legacy keys (Ed25519 + BLS) have keystore paths.
+    /// Use `keystore_paths().map(|p| p.is_complete())` to check if all three key types
+    /// have keystore paths.
     pub fn has_keystore(&self) -> bool {
         self.keystore_paths
             .as_ref()
-            .map(|p| p.is_complete())
+            .map(|p| p.has_legacy_keys())
             .unwrap_or(false)
     }
 }
