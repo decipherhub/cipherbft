@@ -783,7 +783,17 @@ impl Worker {
         self.state.store_batch(batch.clone());
 
         // Broadcast to peer Workers
+        info!(
+            worker_id = self.config.worker_id,
+            digest = %digest.digest,
+            "Broadcasting batch to peer Workers..."
+        );
         self.network.broadcast_batch(&batch).await;
+        info!(
+            worker_id = self.config.worker_id,
+            digest = %digest.digest,
+            "Broadcast complete"
+        );
 
         // Report to Primary
         info!(
