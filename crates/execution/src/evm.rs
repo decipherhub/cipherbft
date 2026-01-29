@@ -1,7 +1,7 @@
 //! EVM configuration and transaction execution.
 //!
 //! This module provides the EVM setup for CipherBFT, including:
-//! - Chain configuration (Chain ID 31337)
+//! - Chain configuration (Chain ID 85300)
 //! - Staking precompile at address 0x100
 //! - Transaction execution with revm
 //! - Environment configuration (block, tx, cfg)
@@ -19,10 +19,8 @@ use revm::{
     primitives::{hardfork::SpecId, TxKind},
 };
 
-/// CipherBFT Chain ID (31337 - Ethereum testnet/development chain ID).
-///
-/// This can be configured for different networks but defaults to 31337.
-pub const CIPHERBFT_CHAIN_ID: u64 = 31337;
+/// CipherBFT Chain ID (85300).
+pub const CIPHERBFT_CHAIN_ID: u64 = 85300;
 
 /// Default block gas limit (30 million gas).
 pub const DEFAULT_BLOCK_GAS_LIMIT: u64 = 30_000_000;
@@ -555,7 +553,8 @@ mod tests {
 
     #[test]
     fn test_constants() {
-        assert_eq!(CIPHERBFT_CHAIN_ID, 31337);
+        // CipherBFT Testnet chain ID (matches ChainConfig::default() and genesis.json)
+        assert_eq!(CIPHERBFT_CHAIN_ID, 85300);
         assert_eq!(
             STAKING_PRECOMPILE_ADDRESS,
             Address::from_str("0x0000000000000000000000000000000000000100").unwrap()

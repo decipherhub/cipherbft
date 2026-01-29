@@ -1961,6 +1961,7 @@ impl<P: Provider> EvmExecutionApi<P> {
         ctx.tx.value = value.unwrap_or(U256::ZERO);
         ctx.tx.data = data.unwrap_or_default();
         ctx.tx.nonce = 0; // For calls, nonce doesn't matter
+        ctx.tx.chain_id = Some(self.chain_id); // Required for EIP-155 validation
 
         // Build the EVM with CipherBFT precompiles (includes staking at 0x100)
         let precompiles =
