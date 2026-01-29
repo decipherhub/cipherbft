@@ -33,7 +33,6 @@ use cipherbft_data_chain::{
     worker::{Worker, WorkerConfig},
     Batch, Cut, DclMessage, WorkerMessage,
 };
-use cipherbft_types::Hash;
 use cipherbft_execution::{
     keccak256, Bytes as ExecutionBytes, ChainConfig, InMemoryProvider, Log as ExecutionLog,
     TransactionReceipt as ExecutionReceipt, U256,
@@ -45,6 +44,7 @@ use cipherbft_storage::{
     TransactionStore,
 };
 use cipherbft_types::genesis::Genesis;
+use cipherbft_types::Hash;
 use cipherbft_types::ValidatorId;
 use informalsystems_malachitebft_metrics::SharedRegistry;
 use informalsystems_malachitebft_network::{
@@ -614,10 +614,10 @@ impl Node {
             // Create batch storage adapter for Workers to persist batches
             // This is CRITICAL: Workers must use the same storage as ExecutionBridge
             // so that batches can be retrieved when executing Cuts.
-            let worker_batch_storage: Option<Arc<dyn DclBatchStore>> =
-                self.dcl_store.clone().map(|store| {
-                    Arc::new(DclStoreBatchAdapter::new(store)) as Arc<dyn DclBatchStore>
-                });
+            let worker_batch_storage: Option<Arc<dyn DclBatchStore>> = self
+                .dcl_store
+                .clone()
+                .map(|store| Arc::new(DclStoreBatchAdapter::new(store)) as Arc<dyn DclBatchStore>);
 
             // Spawn Workers and wire up channels
             // Workers receive batches from peers and notify Primary when batches are ready
