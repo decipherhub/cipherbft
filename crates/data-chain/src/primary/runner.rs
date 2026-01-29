@@ -892,10 +892,10 @@ impl Primary {
 
     /// Handle a received attestation
     async fn handle_received_attestation(&mut self, attestation: Attestation) {
-        debug!(
+        info!(
             attester = %attestation.attester,
             car_hash = %attestation.car_hash,
-            "Received attestation"
+            "Received attestation from peer"
         );
 
         // Track attestation received metric
@@ -915,10 +915,10 @@ impl Primary {
         match self.attestation_collector.add_attestation(attestation) {
             Ok(Some(aggregated)) => {
                 // Threshold reached - Car is ready for Cut
-                debug!(
+                info!(
                     car_hash = %aggregated.car_hash,
                     count = aggregated.count(),
-                    "Attestation threshold reached"
+                    "Attestation threshold reached - Car ready for Cut"
                 );
 
                 // Track quorum reached metric
@@ -955,6 +955,13 @@ impl Primary {
         if let Some(pending) = self.state.remove_pending_car(&aggregated.car_hash) {
             let car = pending.car;
 
+            info!(
+                position = car.position,
+                batch_count = car.batch_digests.len(),
+                car_hash = %aggregated.car_hash,
+                "Car marked as attested"
+            );
+
             // Mark as attested with the aggregated attestation (contains BLS aggregate signature)
             self.state.mark_attested(car.clone(), aggregated);
 
@@ -963,6 +970,11 @@ impl Primary {
 
             // Try to form a Cut
             self.try_form_cut().await;
+        } else {
+            warn!(
+                car_hash = %aggregated.car_hash,
+                "Threshold reached but Car not found in pending state"
+            );
         }
     }
 
@@ -1149,9 +1161,13 @@ impl Primary {
                             .observe(start.elapsed().as_secs_f64());
                     }
 
-                    debug!(
+                    // Calculate total batches in this Cut for diagnostics
+                    let total_batches: usize =
+                        cut.cars.values().map(|c| c.batch_digests.len()).sum();
+                    info!(
                         height = cut.height,
                         validators = cut.validator_count(),
+                        total_batches,
                         "Formed Cut"
                     );
 
