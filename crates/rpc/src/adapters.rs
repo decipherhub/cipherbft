@@ -1494,6 +1494,7 @@ impl MempoolApi for StubMempoolApi {
 ///
 /// Unlike `StubMempoolApi`, this actually processes transactions and routes them
 /// to the consensus layer via DCL workers.
+#[allow(clippy::type_complexity)]
 pub struct ChannelMempoolApi {
     /// Channel sender for forwarding transactions to workers
     tx_sender: mpsc::Sender<Vec<u8>>,
@@ -1574,13 +1575,10 @@ impl MempoolApi for ChannelMempoolApi {
         }
 
         // Forward to worker via channel
-        self.tx_sender
-            .send(tx_bytes.to_vec())
-            .await
-            .map_err(|_| {
-                warn!("Failed to send transaction to worker - channel closed");
-                RpcError::Execution("Transaction submission failed: worker channel closed".to_string())
-            })?;
+        self.tx_sender.send(tx_bytes.to_vec()).await.map_err(|_| {
+            warn!("Failed to send transaction to worker - channel closed");
+            RpcError::Execution("Transaction submission failed: worker channel closed".to_string())
+        })?;
 
         debug!("Transaction {} submitted to worker channel", tx_hash);
         Ok(tx_hash)

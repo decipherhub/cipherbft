@@ -552,8 +552,7 @@ impl Node {
 
             // Create transaction channel for RPC -> Worker forwarding
             // This channel is used by ChannelMempoolApi to send transactions to workers
-            let (mempool_tx_sender, mempool_tx_receiver) =
-                mpsc::channel::<Vec<u8>>(4096);
+            let (mempool_tx_sender, mempool_tx_receiver) = mpsc::channel::<Vec<u8>>(4096);
             mempool_tx_sender_opt = Some(mempool_tx_sender);
             // Wrap receiver in Option so we can move it into worker 0's bridge
             let mut mempool_tx_receiver_opt = Some(mempool_tx_receiver);
@@ -1103,7 +1102,9 @@ impl Node {
                 info!("RPC using ChannelMempoolApi - transactions will be forwarded to workers");
                 MempoolWrapper::channel(tx_sender, chain_id)
             } else {
-                warn!("RPC using StubMempoolApi - transactions will NOT be processed (DCL disabled)");
+                warn!(
+                    "RPC using StubMempoolApi - transactions will NOT be processed (DCL disabled)"
+                );
                 MempoolWrapper::stub()
             });
             // Use real NetworkApi when DCL enabled, stub otherwise
