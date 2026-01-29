@@ -1580,7 +1580,11 @@ impl MempoolApi for ChannelMempoolApi {
             RpcError::Execution("Transaction submission failed: worker channel closed".to_string())
         })?;
 
-        info!("Transaction {} sent to worker channel ({} bytes)", tx_hash, tx_bytes.len());
+        info!(
+            "Transaction {} sent to worker channel ({} bytes)",
+            tx_hash,
+            tx_bytes.len()
+        );
         Ok(tx_hash)
     }
 
