@@ -446,6 +446,8 @@ impl Node {
         let mut primary_handle_opt: Option<cipherbft_data_chain::primary::PrimaryHandle> = None;
         // Store reference to primary network for RPC NetworkApi
         let mut primary_network_opt: Option<Arc<TcpPrimaryNetwork>> = None;
+        // Transaction channel sender for RPC -> Worker forwarding (created when DCL enabled)
+        let mut mempool_tx_sender_opt: Option<mpsc::Sender<Vec<u8>>> = None;
 
         if self.dcl_enabled {
             // Create primary network
@@ -548,6 +550,13 @@ impl Node {
                 initial_cut,
             );
 
+            // Create transaction channel for RPC -> Worker forwarding
+            // This channel is used by ChannelMempoolApi to send transactions to workers
+            let (mempool_tx_sender, mempool_tx_receiver) = mpsc::channel::<Vec<u8>>(4096);
+            mempool_tx_sender_opt = Some(mempool_tx_sender);
+            // Wrap receiver in Option so we can move it into worker 0's bridge
+            let mut mempool_tx_receiver_opt = Some(mempool_tx_receiver);
+
             // Spawn Workers and wire up channels
             // Workers receive batches from peers and notify Primary when batches are ready
             for (worker_idx, mut from_primary_rx) in worker_rxs.into_iter().enumerate() {
@@ -590,16 +599,43 @@ impl Node {
                 // - Primary -> Worker: forward batch requests
                 // - Worker -> Primary: forward batch digests
                 // - Network -> Worker: forward peer messages
+                // - RPC -> Worker: forward mempool transactions (worker 0 only)
                 let token = cancel_token.clone();
                 let primary_worker_sender = primary_handle.worker_sender();
+                // Worker 0 handles RPC transactions from the mempool channel
+                let mempool_rx = if worker_id == 0 {
+                    mempool_tx_receiver_opt.take()
+                } else {
+                    None
+                };
                 tokio::spawn(async move {
+                    // Move mempool_rx into the async block
+                    let mut mempool_rx = mempool_rx;
                     loop {
+                        // Use a macro-like pattern to handle optional mempool receiver
+                        // Worker 0 has mempool_rx, others don't
                         tokio::select! {
                             biased;
 
                             _ = token.cancelled() => {
                                 debug!("Worker {} bridge shutting down", worker_id);
                                 break;
+                            }
+
+                            // RPC -> Worker: forward mempool transactions (worker 0 only)
+                            tx = async {
+                                match &mut mempool_rx {
+                                    Some(rx) => rx.recv().await,
+                                    None => std::future::pending().await,
+                                }
+                            } => {
+                                if let Some(tx_bytes) = tx {
+                                    debug!("Worker {} received transaction from RPC ({} bytes)", worker_id, tx_bytes.len());
+                                    if worker_handle.submit_transaction(tx_bytes).await.is_err() {
+                                        warn!("Worker {} submit_transaction failed", worker_id);
+                                        // Don't break - continue processing other messages
+                                    }
+                                }
                             }
 
                             // Primary -> Worker: forward batch requests and digests
@@ -1048,7 +1084,7 @@ impl Node {
             (&rpc_storage, &rpc_debug_executor, &subscription_manager)
         {
             use crate::NodeNetworkApi;
-            use cipherbft_rpc::{RpcConfig, RpcServer, StubMempoolApi};
+            use cipherbft_rpc::{MempoolWrapper, RpcConfig, RpcServer};
 
             let chain_id = 85300u64; // CipherBFT testnet chain ID
             let mut rpc_config = RpcConfig::with_chain_id(chain_id);
@@ -1060,8 +1096,17 @@ impl Node {
                 .clone()
                 .expect("rpc_executor should be Some when RPC enabled");
 
-            // Use stub implementation for mempool
-            let mempool = Arc::new(StubMempoolApi::new());
+            // Use MempoolWrapper::channel when DCL is enabled (transactions forwarded to workers),
+            // otherwise fall back to MempoolWrapper::stub
+            let mempool = Arc::new(if let Some(tx_sender) = mempool_tx_sender_opt.take() {
+                info!("RPC using ChannelMempoolApi - transactions will be forwarded to workers");
+                MempoolWrapper::channel(tx_sender, chain_id)
+            } else {
+                warn!(
+                    "RPC using StubMempoolApi - transactions will NOT be processed (DCL disabled)"
+                );
+                MempoolWrapper::stub()
+            });
             // Use real NetworkApi when DCL enabled, stub otherwise
             let network = Arc::new(if let Some(ref pn) = primary_network_opt {
                 NodeNetworkApi::tcp(Arc::clone(pn))
