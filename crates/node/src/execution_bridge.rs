@@ -235,23 +235,12 @@ impl ExecutionBridge {
         &self,
         consensus_cut: cipherbft_data_chain::Cut,
     ) -> anyhow::Result<BlockExecutionResult> {
-        // Count total batch digests across all cars for diagnostic purposes
+        // Count total batch digests across all cars
         let total_batches: usize = consensus_cut
             .cars
             .values()
             .map(|car| car.batch_digests.len())
             .sum();
-
-        // Log each Car's validator, position, and batch count for debugging
-        for (validator, car) in &consensus_cut.cars {
-            info!(
-                height = consensus_cut.height,
-                validator = %validator,
-                position = car.position,
-                batches = car.batch_digests.len(),
-                "Car in decided Cut"
-            );
-        }
 
         info!(
             height = consensus_cut.height,
