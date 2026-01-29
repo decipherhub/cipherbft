@@ -1300,13 +1300,6 @@ impl Node {
                         }
                     }
 
-                    // Also update the debug executor's block number
-                    // This ensures debug trace methods use the correct block context
-                    if let Some(ref debug_executor) = rpc_debug_executor {
-                        debug_executor.set_latest_block(height.0);
-                        debug!("Updated RPC debug executor block number to {}", height.0);
-                    }
-
                     // Execute Cut if execution layer is enabled
                     // Then store the block to MDBX for RPC queries
                     if let Some(ref bridge) = execution_bridge {
@@ -1320,112 +1313,125 @@ impl Node {
                                 );
 
                                 // Store the block to MDBX for eth_getBlockByNumber queries
+                                // IMPORTANT: Store all data BEFORE updating latest_block to avoid race conditions
+                                // where clients see a block number they can't actually query yet.
+                                // All storage operations (block, receipts, txs, logs) are gated on block storage success
+                                // to prevent orphaned records referencing non-existent blocks.
                                 if let Some(ref storage) = rpc_storage {
-                                    // Update latest block number
-                                    storage.set_latest_block(height.0);
-                                    debug!("Updated RPC storage block number to {}", height.0);
-
-                                    // Also update executor's latest block for eth_call context
-                                    if let Some(ref executor) = rpc_executor {
-                                        executor.set_latest_block(height.0);
-                                        debug!("Updated RPC executor block number to {}", height.0);
-                                    }
-
-                                    // Create and store the block
+                                    // Create and store the block FIRST
                                     let block = Self::execution_result_to_block(height.0, &block_result, beneficiary, gas_limit);
                                     if let Err(e) = storage.block_store().put_block(&block).await {
-                                        error!("Failed to store block {} to MDBX: {}", height.0, e);
+                                        error!("Failed to store block {} (hash: {}) to MDBX: {}", height.0, block_result.block_hash, e);
+                                        // Skip all related storage operations - don't create orphaned receipts/txs/logs
                                     } else {
                                         debug!("Stored block {} to MDBX with hash {}", height.0, block_result.block_hash);
 
+                                        // Store receipts for eth_getBlockReceipts queries
+                                        if !block_result.execution_result.receipts.is_empty() {
+                                            let storage_receipts: Vec<StorageReceipt> = block_result
+                                                .execution_result
+                                                .receipts
+                                                .iter()
+                                                .map(Self::execution_receipt_to_storage)
+                                                .collect();
+                                            if let Err(e) = storage.receipt_store().put_receipts(&storage_receipts).await {
+                                                error!("Failed to store {} receipts for block {}: {}", storage_receipts.len(), height.0, e);
+                                            } else {
+                                                debug!("Stored {} receipts for block {}", storage_receipts.len(), height.0);
+                                            }
+                                        }
+
+                                        // Store transactions for eth_getTransactionByHash queries
+                                        if let Some(tx_store) = storage.transaction_store() {
+                                            if !block_result.executed_transactions.is_empty() {
+                                                let block_hash_bytes = block_result.block_hash.0;
+                                                let storage_txs: Vec<StorageTransaction> = block_result
+                                                    .executed_transactions
+                                                    .iter()
+                                                    .enumerate()
+                                                    .filter_map(|(idx, tx_bytes)| {
+                                                        Self::raw_tx_to_storage_transaction(
+                                                            tx_bytes,
+                                                            height.0,
+                                                            block_hash_bytes,
+                                                            idx as u32,
+                                                        )
+                                                    })
+                                                    .collect();
+
+                                                if !storage_txs.is_empty() {
+                                                    if let Err(e) = tx_store.put_transactions(&storage_txs).await {
+                                                        error!(
+                                                            "Failed to store {} transactions for block {}: {}",
+                                                            storage_txs.len(),
+                                                            height.0,
+                                                            e
+                                                        );
+                                                    } else {
+                                                        debug!(
+                                                            "Stored {} transactions for block {}",
+                                                            storage_txs.len(),
+                                                            height.0
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Store logs for eth_getLogs queries
+                                        if let Some(log_store) = storage.log_store() {
+                                            let mut all_logs: Vec<StoredLog> = Vec::new();
+                                            let block_hash = block_result.block_hash.0;
+
+                                            for (receipt_idx, receipt) in block_result.execution_result.receipts.iter().enumerate() {
+                                                for log in receipt.logs.iter() {
+                                                    all_logs.push(StoredLog {
+                                                        address: log.address.0 .0,
+                                                        topics: log.topics.iter().map(|t| t.0).collect(),
+                                                        data: log.data.to_vec(),
+                                                        block_number: height.0,
+                                                        block_hash,
+                                                        transaction_hash: receipt.transaction_hash.0,
+                                                        transaction_index: receipt_idx as u32,
+                                                        log_index: all_logs.len() as u32,
+                                                        removed: false,
+                                                    });
+                                                }
+                                            }
+
+                                            if !all_logs.is_empty() {
+                                                if let Err(e) = log_store.put_logs(&all_logs).await {
+                                                    error!("Failed to store {} logs for block {}: {}", all_logs.len(), height.0, e);
+                                                } else {
+                                                    debug!("Stored {} logs for block {}", all_logs.len(), height.0);
+                                                }
+                                            }
+                                        }
+
+                                        // NOW update latest block number AFTER all data is stored
+                                        // This ensures clients never see a block number they can't query
+                                        storage.set_latest_block(height.0);
+                                        debug!("Updated RPC storage block number to {}", height.0);
+
+                                        // Also update executor's latest block for eth_call context
+                                        if let Some(ref executor) = rpc_executor {
+                                            executor.set_latest_block(height.0);
+                                            debug!("Updated RPC executor block number to {}", height.0);
+                                        }
+
+                                        // Also update debug executor's latest block for debug trace methods
+                                        if let Some(ref debug_executor) = rpc_debug_executor {
+                                            debug_executor.set_latest_block(height.0);
+                                            debug!("Updated RPC debug executor block number to {}", height.0);
+                                        }
+
                                         // Broadcast to WebSocket subscribers (eth_subscribe("newHeads"))
+                                        // Only broadcast AFTER block is queryable
                                         if let Some(ref sub_mgr) = subscription_manager {
                                             use cipherbft_rpc::storage_block_to_rpc_block;
                                             let rpc_block = storage_block_to_rpc_block(block.clone(), false);
                                             sub_mgr.broadcast_block(rpc_block);
                                             debug!("Broadcast block {} to WebSocket subscribers", height.0);
-                                        }
-                                    }
-
-                                    // Store receipts for eth_getBlockReceipts queries
-                                    if !block_result.execution_result.receipts.is_empty() {
-                                        let storage_receipts: Vec<StorageReceipt> = block_result
-                                            .execution_result
-                                            .receipts
-                                            .iter()
-                                            .map(Self::execution_receipt_to_storage)
-                                            .collect();
-                                        if let Err(e) = storage.receipt_store().put_receipts(&storage_receipts).await {
-                                            error!("Failed to store {} receipts for block {}: {}", storage_receipts.len(), height.0, e);
-                                        } else {
-                                            debug!("Stored {} receipts for block {}", storage_receipts.len(), height.0);
-                                        }
-                                    }
-
-                                    // Store transactions for eth_getTransactionByHash queries
-                                    if let Some(tx_store) = storage.transaction_store() {
-                                        if !block_result.executed_transactions.is_empty() {
-                                            let block_hash_bytes = block_result.block_hash.0;
-                                            let storage_txs: Vec<StorageTransaction> = block_result
-                                                .executed_transactions
-                                                .iter()
-                                                .enumerate()
-                                                .filter_map(|(idx, tx_bytes)| {
-                                                    Self::raw_tx_to_storage_transaction(
-                                                        tx_bytes,
-                                                        height.0,
-                                                        block_hash_bytes,
-                                                        idx as u32,
-                                                    )
-                                                })
-                                                .collect();
-
-                                            if !storage_txs.is_empty() {
-                                                if let Err(e) = tx_store.put_transactions(&storage_txs).await {
-                                                    error!(
-                                                        "Failed to store {} transactions for block {}: {}",
-                                                        storage_txs.len(),
-                                                        height.0,
-                                                        e
-                                                    );
-                                                } else {
-                                                    debug!(
-                                                        "Stored {} transactions for block {}",
-                                                        storage_txs.len(),
-                                                        height.0
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Store logs for eth_getLogs queries
-                                    if let Some(log_store) = storage.log_store() {
-                                        let mut all_logs: Vec<StoredLog> = Vec::new();
-                                        let block_hash = block_result.block_hash.0;
-
-                                        for (receipt_idx, receipt) in block_result.execution_result.receipts.iter().enumerate() {
-                                            for log in receipt.logs.iter() {
-                                                all_logs.push(StoredLog {
-                                                    address: log.address.0 .0,
-                                                    topics: log.topics.iter().map(|t| t.0).collect(),
-                                                    data: log.data.to_vec(),
-                                                    block_number: height.0,
-                                                    block_hash,
-                                                    transaction_hash: receipt.transaction_hash.0,
-                                                    transaction_index: receipt_idx as u32,
-                                                    log_index: all_logs.len() as u32,
-                                                    removed: false,
-                                                });
-                                            }
-                                        }
-
-                                        if !all_logs.is_empty() {
-                                            if let Err(e) = log_store.put_logs(&all_logs).await {
-                                                error!("Failed to store {} logs for block {}: {}", all_logs.len(), height.0, e);
-                                            } else {
-                                                debug!("Stored {} logs for block {}", all_logs.len(), height.0);
-                                            }
                                         }
                                     }
                                 }
