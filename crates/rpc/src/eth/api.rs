@@ -587,8 +587,7 @@ where
     ) -> JsonRpcResult<U64> {
         info!(
             "eth_getTransactionCount: address={}, block={:?}",
-            address,
-            block
+            address, block
         );
         let block_num = self.parse_block_number(block)?;
         let count = self
@@ -596,7 +595,10 @@ where
             .get_transaction_count(address, block_num)
             .await
             .map_err(Self::to_json_rpc_error)?;
-        info!("eth_getTransactionCount: address={}, count={}", address, count);
+        info!(
+            "eth_getTransactionCount: address={}, count={}",
+            address, count
+        );
         Ok(U64::from(count))
     }
 
@@ -730,7 +732,10 @@ where
 
         match &result {
             Ok(hash) => info!("Transaction {} submitted to mempool successfully", hash),
-            Err(e) => warn!("Transaction {} failed to submit to mempool: {:?}", tx_hash, e),
+            Err(e) => warn!(
+                "Transaction {} failed to submit to mempool: {:?}",
+                tx_hash, e
+            ),
         }
 
         result
@@ -760,10 +765,7 @@ where
     ) -> JsonRpcResult<U64> {
         info!(
             "eth_estimateGas: from={:?}, to={:?}, value={:?}, block={:?}",
-            call_request.from,
-            call_request.to,
-            call_request.value,
-            block
+            call_request.from, call_request.to, call_request.value, block
         );
         let block_num = self.parse_block_number(block)?;
         let gas = self
