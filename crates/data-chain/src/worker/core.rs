@@ -786,7 +786,12 @@ impl Worker {
         self.network.broadcast_batch(&batch).await;
 
         // Report to Primary
-        let _ = self
+        info!(
+            worker_id = self.config.worker_id,
+            digest = %digest.digest,
+            "Sending BatchDigest to Primary"
+        );
+        if self
             .to_primary
             .send(WorkerToPrimary::BatchDigest {
                 worker_id: self.config.worker_id,
@@ -794,7 +799,19 @@ impl Worker {
                 tx_count: digest.tx_count,
                 byte_size: digest.byte_size,
             })
-            .await;
+            .await
+            .is_err()
+        {
+            error!(
+                worker_id = self.config.worker_id,
+                "Failed to send BatchDigest to Primary - channel closed"
+            );
+        } else {
+            info!(
+                worker_id = self.config.worker_id,
+                "BatchDigest sent to Primary successfully"
+            );
+        }
     }
 
     /// Force flush any pending transactions

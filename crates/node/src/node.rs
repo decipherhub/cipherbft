@@ -669,6 +669,7 @@ impl Node {
                             msg = worker_handle.recv_from_worker() => {
                                 match msg {
                                     Some(m) => {
+                                        info!("Worker {} bridge forwarding {:?} to Primary", worker_id, m);
                                         if primary_worker_sender.send(m).await.is_err() {
                                             warn!("Worker {} send to primary failed", worker_id);
                                             break;

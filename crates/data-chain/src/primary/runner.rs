@@ -502,11 +502,12 @@ impl Primary {
                 tx_count,
                 byte_size,
             } => {
-                trace!(
+                info!(
                     worker_id,
                     tx_count,
                     byte_size,
-                    "Received batch digest from Worker"
+                    digest = %digest,
+                    "Primary received batch digest from Worker"
                 );
                 self.state
                     .add_batch_digest(BatchDigest::new(worker_id, digest, tx_count, byte_size));
