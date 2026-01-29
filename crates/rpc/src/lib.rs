@@ -171,6 +171,12 @@ pub use adapters::{
     StubDebugExecutionApi, StubExecutionApi, StubMempoolApi, StubNetworkApi, StubRpcStorage,
 };
 
+// Channel-based mempool adapter for transaction forwarding to workers
+pub use adapters::ChannelMempoolApi;
+
+// Mempool wrapper for unified concrete type in RpcServer
+pub use adapters::MempoolWrapper;
+
 // Real implementations backed by storage
 pub use adapters::{
     EvmDebugExecutionApi, EvmExecutionApi, MdbxRpcStorage, PoolMempoolApi, ProviderBasedRpcStorage,
