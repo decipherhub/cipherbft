@@ -197,7 +197,7 @@ where
                 call_request.gas.map(|g| g.to::<u64>()),
                 call_request.gas_price,
                 call_request.value,
-                call_request.data,
+                call_request.input_data(),
                 block_num,
                 options,
             )
