@@ -970,19 +970,28 @@ impl Primary {
     async fn try_create_car(&mut self) {
         let pending_digests = self.state.take_pending_digests();
         let is_empty = pending_digests.is_empty();
+        let digest_count = pending_digests.len();
 
         // Check empty car policy
         if is_empty && !self.state.can_create_empty_car(self.config.max_empty_cars) {
-            // Skip this round
+            // Skip this round - no digests to restore since is_empty
             return;
         }
 
         let position = self.state.our_position;
         let parent_ref = self.state.last_car_hash;
 
+        // Log state before Car creation attempt for debugging
+        info!(
+            position,
+            has_parent_ref = parent_ref.is_some(),
+            digest_count,
+            "Attempting to create Car"
+        );
+
         match self.proposer.create_car(
             position,
-            pending_digests,
+            pending_digests.clone(),
             parent_ref,
             self.state.empty_car_count,
         ) {
@@ -1000,11 +1009,11 @@ impl Primary {
                     self.cut_start_time = Some(Instant::now());
                 }
 
-                debug!(
+                info!(
                     position = car.position,
                     batch_count = car.batch_digests.len(),
                     hash = %car_hash,
-                    "Created Car"
+                    "Created Car successfully"
                 );
 
                 // Persist to storage if available (T091)
@@ -1043,11 +1052,27 @@ impl Primary {
 
             Ok(None) => {
                 // Cannot create empty Car (policy)
+                // Restore digests so they aren't lost
+                for digest in pending_digests {
+                    self.state.add_batch_digest(digest);
+                }
                 trace!("Skipping Car creation (empty car policy)");
             }
 
             Err(e) => {
-                error!(error = %e, "Failed to create Car");
+                // CRITICAL FIX: Restore pending digests on error
+                // Without this, transactions would be lost when Car creation fails
+                // (e.g., due to missing parent_ref when position > 0)
+                for digest in pending_digests {
+                    self.state.add_batch_digest(digest);
+                }
+                error!(
+                    error = %e,
+                    position,
+                    has_parent_ref = parent_ref.is_some(),
+                    digest_count,
+                    "Failed to create Car - digests restored"
+                );
             }
         }
     }
