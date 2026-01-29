@@ -7,7 +7,7 @@ use alloy_consensus::{Transaction as TxTrait, TxEnvelope};
 use alloy_primitives::{Address, Bytes, B256, U256, U64};
 use alloy_rpc_types_eth::{
     transaction::AccessListResult, EIP1186AccountProofResponse, FeeHistory, Filter, Log, SyncInfo,
-    SyncStatus as EthSyncStatus, Transaction, TransactionReceipt,
+    SyncStatus as EthSyncStatus, Transaction, TransactionInput, TransactionReceipt,
 };
 
 use crate::types::RpcBlock;
@@ -312,6 +312,10 @@ pub trait EthRpc {
 }
 
 /// Call request parameters for eth_call and eth_estimateGas.
+///
+/// This struct supports both `data` and `input` fields for backwards compatibility.
+/// Per the Ethereum JSON-RPC specification, clients may send either field (or both).
+/// When both are provided, they must contain the same value.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CallRequest {
@@ -329,9 +333,19 @@ pub struct CallRequest {
     pub max_priority_fee_per_gas: Option<U256>,
     /// Value to send.
     pub value: Option<U256>,
-    /// Transaction data.
-    #[serde(alias = "input")]
-    pub data: Option<Bytes>,
+    /// Transaction data (supports both `data` and `input` fields).
+    #[serde(flatten)]
+    pub input: TransactionInput,
+}
+
+impl CallRequest {
+    /// Returns the transaction input data.
+    ///
+    /// This method extracts the input bytes from either the `input` or `data` field,
+    /// preferring `input` if both are set.
+    pub fn input_data(&self) -> Option<Bytes> {
+        self.input.input.clone().or_else(|| self.input.data.clone())
+    }
 }
 
 /// Ethereum namespace RPC handler.
@@ -723,7 +737,7 @@ where
                 call_request.gas.map(|g| g.to::<u64>()),
                 call_request.gas_price,
                 call_request.value,
-                call_request.data,
+                call_request.input_data(),
                 block_num,
             )
             .await
@@ -745,7 +759,7 @@ where
                 call_request.gas.map(|g| g.to::<u64>()),
                 call_request.gas_price,
                 call_request.value,
-                call_request.data,
+                call_request.input_data(),
                 block_num,
             )
             .await
@@ -1403,5 +1417,57 @@ where
     async fn uninstall_filter(&self, filter_id: U256) -> JsonRpcResult<bool> {
         trace!("eth_uninstallFilter: filter_id={}", filter_id);
         Ok(self.filter_manager.uninstall_filter(filter_id))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_call_request_deserialize_data_field() {
+        let json = r#"{"to":"0x0000000000000000000000000000000000000001","data":"0x1234"}"#;
+        let req: CallRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.input_data(), Some(Bytes::from(vec![0x12, 0x34])));
+    }
+
+    #[test]
+    fn test_call_request_deserialize_input_field() {
+        let json = r#"{"to":"0x0000000000000000000000000000000000000001","input":"0x5678"}"#;
+        let req: CallRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.input_data(), Some(Bytes::from(vec![0x56, 0x78])));
+    }
+
+    #[test]
+    fn test_call_request_deserialize_both_fields_same_value() {
+        // When both fields are present with same value, should deserialize fine
+        let json = r#"{"to":"0x0000000000000000000000000000000000000001","data":"0xabcd","input":"0xabcd"}"#;
+        let req: CallRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.input_data(), Some(Bytes::from(vec![0xab, 0xcd])));
+    }
+
+    #[test]
+    fn test_call_request_deserialize_both_fields_different_values() {
+        // This tests the case that was causing the "duplicate field" error
+        // With TransactionInput, both fields can coexist (though ideally should match)
+        let json = r#"{"to":"0x0000000000000000000000000000000000000001","data":"0x1234","input":"0x5678"}"#;
+        let req: CallRequest = serde_json::from_str(json).unwrap();
+        // input_data() prefers `input` field when both are set
+        assert_eq!(req.input_data(), Some(Bytes::from(vec![0x56, 0x78])));
+    }
+
+    #[test]
+    fn test_call_request_deserialize_empty() {
+        let json = r#"{}"#;
+        let req: CallRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.input_data(), None);
+    }
+
+    #[test]
+    fn test_call_request_deserialize_no_data() {
+        let json = r#"{"to":"0x0000000000000000000000000000000000000001","value":"0x1"}"#;
+        let req: CallRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.input_data(), None);
+        assert_eq!(req.value, Some(U256::from(1)));
     }
 }
