@@ -317,6 +317,17 @@ impl PrimaryState {
                     .insert(*validator, car.position);
             }
 
+            // CRITICAL: Remove attested Cars that were included in this Cut
+            // This prevents the same Car from being included in subsequent Cuts.
+            // Only remove if the attested Car's position matches what was included;
+            // if a newer Car arrived while consensus was deciding, it has a higher
+            // position and should be preserved for the next Cut.
+            if let Some((attested_car, _)) = self.attested_cars.get(validator) {
+                if attested_car.position == car.position {
+                    self.attested_cars.remove(validator);
+                }
+            }
+
             // Also sync our own position from finalized cuts to prevent position drift
             // This is critical for validators catching up during sync:
             // - While syncing, we create Cars that fail attestation (position mismatch)
@@ -1802,5 +1813,101 @@ mod tests {
 
         // But other validator's position is updated
         assert_eq!(state.expected_position(&validator_b), 21);
+    }
+
+    // =========================================================
+    // Attested Cars Clearing After Cut Decision Tests
+    // =========================================================
+
+    /// Test that attested Cars are cleared after being included in a decided Cut.
+    ///
+    /// This prevents the same Car from being included in multiple Cuts, which
+    /// would cause duplicate transaction execution attempts.
+    #[test]
+    fn test_attested_cars_cleared_after_cut_decision() {
+        use crate::car::Car;
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let mut state = PrimaryState::new(our_id, 1000);
+
+        let validator = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
+
+        // Create and attest a Car at position 5
+        let car_at_5 = Car::new(validator, 5, vec![], None);
+        let agg = create_aggregated_attestation(&car_at_5, &[0, 1], 4);
+        state.mark_attested(car_at_5.clone(), agg);
+
+        // Verify the Car is in attested_cars
+        assert!(
+            state.attested_cars.contains_key(&validator),
+            "Car should be in attested_cars before cut decision"
+        );
+        assert_eq!(state.attested_cars.get(&validator).unwrap().0.position, 5);
+
+        // Consensus decides with this Car
+        let mut decided_cut = Cut::new(1);
+        decided_cut.cars.insert(validator, car_at_5.clone());
+
+        // Sync from the decided cut
+        state.sync_positions_from_cut(&decided_cut);
+
+        // Attested Car should be CLEARED because it was included in the cut
+        assert!(
+            !state.attested_cars.contains_key(&validator),
+            "Attested Car should be cleared after being included in a decided Cut"
+        );
+
+        // Position tracking should be updated
+        assert_eq!(state.expected_position(&validator), 6);
+        assert_eq!(
+            state.last_included_positions.get(&validator),
+            Some(&5),
+            "last_included_positions should track the included position"
+        );
+    }
+
+    /// Test that newer attested Cars are NOT cleared after cut decision.
+    ///
+    /// If a newer Car arrives while consensus is deciding, it should be preserved
+    /// for inclusion in the next Cut.
+    #[test]
+    fn test_newer_attested_car_preserved_after_cut_decision() {
+        use crate::car::Car;
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let mut state = PrimaryState::new(our_id, 1000);
+
+        let validator = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
+
+        // Create and attest a Car at position 6 (newer than what will be in the cut)
+        let car_at_6 = Car::new(validator, 6, vec![], Some(Hash::compute(b"car5")));
+        let agg = create_aggregated_attestation(&car_at_6, &[0, 1], 4);
+        state.mark_attested(car_at_6.clone(), agg);
+
+        // Verify the Car is in attested_cars
+        assert_eq!(state.attested_cars.get(&validator).unwrap().0.position, 6);
+
+        // Consensus decides with an OLDER Car at position 5
+        // (this simulates a newer Car arriving while consensus was deciding)
+        let mut decided_cut = Cut::new(1);
+        let car_at_5 = Car::new(validator, 5, vec![], None);
+        decided_cut.cars.insert(validator, car_at_5);
+
+        // Sync from the decided cut
+        state.sync_positions_from_cut(&decided_cut);
+
+        // Attested Car at position 6 should be PRESERVED (not cleared)
+        // because it's newer than what was included
+        assert!(
+            state.attested_cars.contains_key(&validator),
+            "Newer attested Car should be preserved"
+        );
+        assert_eq!(
+            state.attested_cars.get(&validator).unwrap().0.position,
+            6,
+            "The preserved Car should still be at position 6"
+        );
     }
 }
