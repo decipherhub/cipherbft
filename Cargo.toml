@@ -58,6 +58,10 @@ uuid = { version = "1.7", features = ["v4", "serde"] }
 # Mnemonic & HD derivation (T003)
 bip39 = "2.1"
 tiny-bip39 = "1.0"
+bip32 = "0.5"
+
+# secp256k1 (EVM keys)
+k256 = { version = "0.13", features = ["ecdsa", "sha256"] }
 
 # OS keychain integration - optional (T004)
 keyring = "3.6"

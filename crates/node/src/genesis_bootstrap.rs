@@ -241,21 +241,27 @@ impl Default for GenesisGeneratorConfig {
 /// and public key hex strings for inclusion in genesis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeneratedValidator {
-    /// Validator's EVM address (derived from Ed25519 public key).
+    /// Validator's EVM address (derived from secp256k1 public key).
+    /// This is the Ethereum-compatible address used for rewards, staking, etc.
     pub address: Address,
-    /// Validator ID (for internal use).
+    /// Validator ID (for internal use, derived from Ed25519 pubkey).
     #[serde(skip)]
     pub validator_id: ValidatorId,
     /// Ed25519 public key as hex string (64 chars, no 0x prefix stored).
     pub ed25519_pubkey_hex: String,
     /// BLS12-381 public key as hex string (96 chars, no 0x prefix stored).
     pub bls_pubkey_hex: String,
+    /// Secp256k1 public key as hex string (66 chars compressed, no 0x prefix stored).
+    pub secp256k1_pubkey_hex: String,
     /// Ed25519 secret key as hex string (for secure storage).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ed25519_secret_hex: Option<String>,
     /// BLS12-381 secret key as hex string (for secure storage).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bls_secret_hex: Option<String>,
+    /// Secp256k1 secret key as hex string (for EVM transactions).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secp256k1_secret_hex: Option<String>,
 }
 
 /// Result of genesis generation.
@@ -337,23 +343,29 @@ impl GenesisGenerator {
 
         for i in 0..config.num_validators {
             // Derive keys from mnemonic at account index i
-            // Each validator gets unique keys: m/12381/8888/{i}/0 and m/12381/8888/{i}/1
+            // Each validator gets unique keys:
+            // - Ed25519: m/12381/8888/{i}/0 (consensus)
+            // - BLS: m/12381/8888/{i}/1 (DCL)
+            // - Secp256k1: m/44'/60'/0'/0/{i} (EVM)
             let keys = derive_validator_keys(&mnemonic, i as u32, None)
                 .expect("key derivation from valid mnemonic should succeed");
 
-            // Derive EVM address from validator ID (last 20 bytes of keccak256(ed25519_pubkey))
+            // Use secp256k1-derived EVM address as the validator's primary address
+            // This allows validators to control their rewards via standard EVM transactions
+            let address = keys.evm_address();
             let validator_id = keys.validator_id();
-            let address = Address::from_slice(&validator_id.0);
 
             // Convert keys to hex strings
             let ed25519_pubkey_hex = hex::encode(keys.consensus_pubkey().to_bytes());
             let bls_pubkey_hex = hex::encode(keys.data_chain_pubkey().to_bytes());
+            let secp256k1_pubkey_hex = hex::encode(keys.evm_pubkey().to_bytes());
             let ed25519_secret_hex = hex::encode(keys.consensus_secret().to_bytes());
             let bls_secret_hex = hex::encode(keys.data_chain_secret().to_bytes());
+            let secp256k1_secret_hex = hex::encode(keys.evm_secret().to_bytes());
 
             debug!(
-                "Derived validator {} from test mnemonic: address={}, ed25519={:.16}...",
-                i, address, ed25519_pubkey_hex
+                "Derived validator {} from test mnemonic: evm_address={}, validator_id={:?}",
+                i, address, validator_id
             );
 
             // Create genesis validator entry
@@ -375,8 +387,10 @@ impl GenesisGenerator {
                 validator_id,
                 ed25519_pubkey_hex,
                 bls_pubkey_hex,
+                secp256k1_pubkey_hex,
                 ed25519_secret_hex: Some(ed25519_secret_hex),
                 bls_secret_hex: Some(bls_secret_hex),
+                secp256k1_secret_hex: Some(secp256k1_secret_hex),
             });
         }
 
@@ -502,12 +516,11 @@ impl GenesisGenerator {
         let bls_pubkey_hex = hex::encode(validator_keys.data_chain_pubkey().to_bytes());
         let ed25519_pubkey_hex = hex::encode(validator_keys.consensus_pubkey().to_bytes());
 
-        // Derive EVM address from validator ID
-        let validator_id = validator_keys.validator_id();
-        let address = Address::from_slice(&validator_id.0);
+        // Use secp256k1-derived EVM address as the validator's primary address
+        let address = validator_keys.evm_address();
 
         debug!(
-            "Validator: address={}, ed25519={:.16}..., bls={:.16}...",
+            "Validator: evm_address={}, ed25519={:.16}..., bls={:.16}...",
             address, ed25519_pubkey_hex, bls_pubkey_hex
         );
 
@@ -568,7 +581,7 @@ impl GenesisGenerator {
 pub struct ValidatorKeyFile {
     /// Validator index in the genesis set.
     pub index: usize,
-    /// Validator's EVM address.
+    /// Validator's EVM address (derived from secp256k1 public key).
     pub address: String,
     /// Ed25519 public key (hex, for consensus layer).
     pub ed25519_pubkey: String,
@@ -578,6 +591,10 @@ pub struct ValidatorKeyFile {
     pub bls_pubkey: String,
     /// BLS12-381 secret key (hex, for DCL layer).
     pub bls_secret: String,
+    /// Secp256k1 public key (hex, compressed, for EVM layer).
+    pub secp256k1_pubkey: String,
+    /// Secp256k1 secret key (hex, for EVM transactions).
+    pub secp256k1_secret: String,
 }
 
 impl ValidatorKeyFile {
@@ -590,6 +607,8 @@ impl ValidatorKeyFile {
             ed25519_secret: validator.ed25519_secret_hex.clone().unwrap_or_default(),
             bls_pubkey: validator.bls_pubkey_hex.clone(),
             bls_secret: validator.bls_secret_hex.clone().unwrap_or_default(),
+            secp256k1_pubkey: validator.secp256k1_pubkey_hex.clone(),
+            secp256k1_secret: validator.secp256k1_secret_hex.clone().unwrap_or_default(),
         }
     }
 

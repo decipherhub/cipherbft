@@ -15,13 +15,13 @@
     "cancunTime": 0
   },
   "alloc": {
-    "0x6017fe04d4465135f3f0f1a0a875a5e97109072b": {
+    "0x70997970c51812dc3a010c7d01b50e0d17dc79c8": {
       "balance": "0x56bc75e2d63100000"
     },
-    "0x5f9f7d5f49c65309a7d151dc8d80a3b65bad1978": {
+    "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266": {
       "balance": "0x56bc75e2d63100000"
     },
-    "0x76858a8c0702a5761d5ea94e52d7e8513cab5d46": {
+    "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc": {
       "balance": "0x56bc75e2d63100000"
     }
   },
@@ -30,7 +30,7 @@
   "nonce": "0x0",
   "timestamp": "0x0",
   "cipherbft": {
-    "genesis_time": "2026-01-27T05:56:15Z",
+    "genesis_time": "2026-01-28T16:32:20Z",
     "network_id": "cipherbft-testnet-1",
     "native_token": {
       "name": "Cipher",
@@ -59,7 +59,7 @@
     },
     "validators": [
       {
-        "address": "0x6017fe04d4465135f3f0f1a0a875a5e97109072b",
+        "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
         "name": "validator-0",
         "ed25519_pubkey": "0x0c10a694de5287c291739144c0ffac4c98c666a88e24023480a581089d59ed64",
         "bls_pubkey": "0x8108ae025455d480880ecb40421b4556011ed84c5daa63358fc2f0d509d18036b57360524ba5242fb5992140607705f8",
@@ -67,7 +67,7 @@
         "commission_rate_percent": 10
       },
       {
-        "address": "0x5f9f7d5f49c65309a7d151dc8d80a3b65bad1978",
+        "address": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
         "name": "validator-1",
         "ed25519_pubkey": "0x92a4b1c3e007d6eaa84a51cd4e019437e4f75c9343e78cf65f1d67941c226fb4",
         "bls_pubkey": "0x94b9fa119f3d1e7435d92a101cc94fda1080b618b587d9e513a09f45622652f56d095198f7624520fffbdf717a42774a",
@@ -75,7 +75,7 @@
         "commission_rate_percent": 10
       },
       {
-        "address": "0x76858a8c0702a5761d5ea94e52d7e8513cab5d46",
+        "address": "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc",
         "name": "validator-2",
         "ed25519_pubkey": "0x2866f9071d75336e31ecf7eecd37e120d84878b207a386572d44247d9019976a",
         "bls_pubkey": "0x8b373e99a8e1a3518f29df40a6cc7f0812f18986f21a665a78483a382511eddbacbf0f9b1f4b82cd260e5194e7c2d3c1",

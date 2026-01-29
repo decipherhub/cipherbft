@@ -2,14 +2,28 @@
 //!
 //! Implements hierarchical deterministic (HD) key derivation for CipherBFT validators
 //! using a BLS12-381 compatible path structure.
+//!
+//! # Key Types
+//!
+//! - Ed25519: Consensus Layer (CL) - uses HKDF-style derivation
+//! - BLS12-381: Data Chain Layer (DCL) - uses HKDF-style derivation
+//! - Secp256k1: EVM Layer - uses BIP-32 derivation (Ethereum standard)
+//!
+//! # Derivation Paths
+//!
+//! - Ed25519/BLS: `m/12381/8888/{account}/{key_type}` (CipherBFT custom)
+//! - Secp256k1: `m/44'/60'/0'/0/{account}` (BIP-44 Ethereum standard)
 
 use super::error::{MnemonicError, MnemonicResult};
 use super::generate::Mnemonic;
 use crate::bls::{BlsKeyPair, BlsSecretKey};
 use crate::ed25519::{Ed25519KeyPair, Ed25519SecretKey};
 use crate::keys::ValidatorKeys;
+use crate::secp256k1::{Secp256k1KeyPair, Secp256k1SecretKey};
 use crate::secure::DerivationInfo;
+use bip32::{DerivationPath, XPrv};
 use sha2::{Digest, Sha256};
+use std::str::FromStr;
 
 /// CipherBFT coin type for BIP-44 style derivation
 ///
@@ -27,6 +41,10 @@ pub const DEFAULT_DERIVATION_PATH_ED25519: &str = "m/12381/8888/0/0";
 /// Default derivation path for BLS (data chain) keys
 /// Format: m/12381/8888/{account}/1
 pub const DEFAULT_DERIVATION_PATH_BLS: &str = "m/12381/8888/0/1";
+
+/// Default derivation path for secp256k1 (EVM) keys
+/// Format: m/44'/60'/0'/0/{account} (BIP-44 Ethereum standard)
+pub const DEFAULT_DERIVATION_PATH_SECP256K1: &str = "m/44'/60'/0'/0/0";
 
 /// Configuration for key derivation
 #[derive(Debug, Clone, Default)]
@@ -66,6 +84,13 @@ impl DerivationConfig {
             "m/{}/{}/{}/1",
             BLS_CURVE_ID, CIPHERBFT_COIN_TYPE, self.account
         )
+    }
+
+    /// Get the secp256k1 (EVM) derivation path
+    ///
+    /// Uses BIP-44 Ethereum standard: m/44'/60'/0'/0/{account}
+    pub fn secp256k1_path(&self) -> String {
+        format!("m/44'/60'/0'/0/{}", self.account)
     }
 }
 
@@ -107,16 +132,19 @@ pub fn derive_validator_keys(
 
     let ed25519_keypair = derive_ed25519_key(mnemonic, &config)?;
     let bls_keypair = derive_bls_key(mnemonic, &config)?;
+    let secp256k1_keypair = derive_secp256k1_key(mnemonic, &config)?;
 
     let derivation_info = DerivationInfo {
         account_index: account,
         consensus_path: config.ed25519_path(),
         data_chain_path: config.bls_path(),
+        evm_path: Some(config.secp256k1_path()),
     };
 
     Ok(ValidatorKeys::from_keypairs_with_derivation(
         ed25519_keypair,
         bls_keypair,
+        secp256k1_keypair,
         derivation_info,
     ))
 }
@@ -178,6 +206,67 @@ pub fn derive_bls_key(
     let public = secret.public_key();
 
     Ok(BlsKeyPair {
+        secret_key: secret,
+        public_key: public,
+    })
+}
+
+/// Derive a secp256k1 key pair from a mnemonic
+///
+/// Uses BIP-32 HD derivation with BIP-44 Ethereum path: m/44'/60'/0'/0/{account}
+///
+/// # Arguments
+///
+/// * `mnemonic` - The BIP-39 mnemonic
+/// * `config` - Derivation configuration
+///
+/// # Returns
+///
+/// `Secp256k1KeyPair` derived from the mnemonic
+///
+/// # Example
+///
+/// ```rust
+/// use cipherbft_crypto::mnemonic::{Mnemonic, derive_secp256k1_key, DerivationConfig};
+///
+/// // Test mnemonic (Hardhat default)
+/// let mnemonic = Mnemonic::from_phrase(
+///     "test test test test test test test test test test test junk"
+/// ).unwrap();
+///
+/// let config = DerivationConfig::new(0);
+/// let keypair = derive_secp256k1_key(&mnemonic, &config).unwrap();
+///
+/// // Should produce the Hardhat account 0 address
+/// assert_eq!(
+///     keypair.evm_address().to_string().to_lowercase(),
+///     "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+/// );
+/// ```
+pub fn derive_secp256k1_key(
+    mnemonic: &Mnemonic,
+    config: &DerivationConfig,
+) -> MnemonicResult<Secp256k1KeyPair> {
+    let seed = mnemonic.to_seed(config.passphrase.as_deref());
+    let path = config.secp256k1_path();
+
+    // Parse the derivation path
+    let derivation_path = DerivationPath::from_str(&path)
+        .map_err(|e| MnemonicError::InvalidPath(format!("invalid BIP-32 path: {}", e)))?;
+
+    // Derive the extended private key using BIP-32
+    let xprv = XPrv::derive_from_path(&seed, &derivation_path)
+        .map_err(|e| MnemonicError::DerivationFailed(format!("BIP-32 derivation failed: {}", e)))?;
+
+    // Extract the 32-byte private key
+    let private_key_bytes: [u8; 32] = xprv.private_key().to_bytes().into();
+
+    // Create the secp256k1 secret key
+    let secret = Secp256k1SecretKey::from_bytes(&private_key_bytes)
+        .map_err(|e| MnemonicError::DerivationFailed(format!("invalid secp256k1 key: {:?}", e)))?;
+    let public = secret.public_key();
+
+    Ok(Secp256k1KeyPair {
         secret_key: secret,
         public_key: public,
     })
@@ -398,6 +487,118 @@ mod tests {
         let config = DerivationConfig::new(5);
         assert_eq!(config.ed25519_path(), "m/12381/8888/5/0");
         assert_eq!(config.bls_path(), "m/12381/8888/5/1");
+        assert_eq!(config.secp256k1_path(), "m/44'/60'/0'/0/5");
+    }
+
+    // Hardhat test mnemonic (DO NOT USE IN PRODUCTION)
+    const HARDHAT_MNEMONIC: &str =
+        "test test test test test test test test test test test junk";
+
+    #[test]
+    fn test_derive_secp256k1_key_hardhat_account0() {
+        // Test with Hardhat's default mnemonic and account 0
+        // Expected address: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+        let mnemonic = Mnemonic::from_phrase(HARDHAT_MNEMONIC).unwrap();
+        let config = DerivationConfig::new(0);
+
+        let keypair = derive_secp256k1_key(&mnemonic, &config).unwrap();
+        let address = keypair.evm_address();
+
+        // Hardhat account 0 address
+        let expected_address = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
+        assert_eq!(
+            address.to_string().to_lowercase(),
+            expected_address.to_lowercase(),
+            "Hardhat account 0 address mismatch"
+        );
+    }
+
+    #[test]
+    fn test_derive_secp256k1_key_hardhat_account1() {
+        // Test with Hardhat's default mnemonic and account 1
+        // Expected address: 0x70997970C51812dc3A010C7d01b50e0d17dc79C8
+        let mnemonic = Mnemonic::from_phrase(HARDHAT_MNEMONIC).unwrap();
+        let config = DerivationConfig::new(1);
+
+        let keypair = derive_secp256k1_key(&mnemonic, &config).unwrap();
+        let address = keypair.evm_address();
+
+        let expected_address = "0x70997970c51812dc3a010c7d01b50e0d17dc79c8";
+        assert_eq!(
+            address.to_string().to_lowercase(),
+            expected_address.to_lowercase(),
+            "Hardhat account 1 address mismatch"
+        );
+    }
+
+    #[test]
+    fn test_derive_secp256k1_key_deterministic() {
+        let mnemonic = Mnemonic::from_phrase(HARDHAT_MNEMONIC).unwrap();
+        let config = DerivationConfig::new(0);
+
+        let keypair1 = derive_secp256k1_key(&mnemonic, &config).unwrap();
+        let keypair2 = derive_secp256k1_key(&mnemonic, &config).unwrap();
+
+        // Same mnemonic + account should produce same keys
+        assert_eq!(
+            keypair1.public_key.to_bytes(),
+            keypair2.public_key.to_bytes()
+        );
+        assert_eq!(keypair1.evm_address(), keypair2.evm_address());
+    }
+
+    #[test]
+    fn test_derive_secp256k1_key_different_accounts() {
+        let mnemonic = Mnemonic::from_phrase(HARDHAT_MNEMONIC).unwrap();
+
+        let keypair0 = derive_secp256k1_key(&mnemonic, &DerivationConfig::new(0)).unwrap();
+        let keypair1 = derive_secp256k1_key(&mnemonic, &DerivationConfig::new(1)).unwrap();
+
+        // Different accounts should produce different keys
+        assert_ne!(
+            keypair0.public_key.to_bytes(),
+            keypair1.public_key.to_bytes()
+        );
+        assert_ne!(keypair0.evm_address(), keypair1.evm_address());
+    }
+
+    #[test]
+    fn test_derive_secp256k1_key_passphrase_changes_keys() {
+        let mnemonic = Mnemonic::from_phrase(HARDHAT_MNEMONIC).unwrap();
+
+        let config_no_pass = DerivationConfig::new(0);
+        let config_with_pass = DerivationConfig::new(0).with_passphrase("test-passphrase");
+
+        let keypair_no_pass = derive_secp256k1_key(&mnemonic, &config_no_pass).unwrap();
+        let keypair_with_pass = derive_secp256k1_key(&mnemonic, &config_with_pass).unwrap();
+
+        // Different passphrase should produce different keys
+        assert_ne!(
+            keypair_no_pass.public_key.to_bytes(),
+            keypair_with_pass.public_key.to_bytes()
+        );
+    }
+
+    #[test]
+    fn test_derive_secp256k1_key_sign_verify() {
+        let mnemonic = Mnemonic::from_phrase(HARDHAT_MNEMONIC).unwrap();
+        let config = DerivationConfig::new(0);
+
+        let keypair = derive_secp256k1_key(&mnemonic, &config).unwrap();
+
+        // Should produce valid keypair that can sign and verify
+        let msg = b"test message";
+        let sig = keypair.sign(msg);
+        assert!(keypair.public_key.verify(msg, &sig));
+    }
+
+    #[test]
+    fn test_derivation_info_includes_evm_path() {
+        let mnemonic = Mnemonic::from_phrase(TEST_MNEMONIC).unwrap();
+        let keys = derive_validator_keys(&mnemonic, 0, None).unwrap();
+
+        let info = keys.derivation_info().unwrap();
+        assert_eq!(info.evm_path, Some("m/44'/60'/0'/0/0".to_string()));
     }
 
     #[test]
