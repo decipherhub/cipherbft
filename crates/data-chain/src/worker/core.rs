@@ -349,14 +349,26 @@ impl Worker {
             error!("Failed to send ready signal to Primary: {}", e);
             return;
         }
+        info!(
+            worker_id = self.config.worker_id,
+            "Worker Ready signal sent successfully"
+        );
 
         // Set up flush timer
         let mut flush_interval = interval(self.config.flush_interval);
         flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        info!(
+            worker_id = self.config.worker_id,
+            "Worker flush_interval created"
+        );
 
         // Set up sync timeout check interval
         let mut sync_check_interval = interval(Duration::from_millis(500));
         sync_check_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        info!(
+            worker_id = self.config.worker_id,
+            "Worker sync_check_interval created"
+        );
 
         info!(
             worker_id = self.config.worker_id,
