@@ -667,11 +667,17 @@ impl Worker {
 
     /// Check if we should flush due to time threshold
     async fn check_time_flush(&mut self) {
-        if self
+        let should_flush = self
             .batch_maker
-            .should_flush_by_time(self.config.flush_interval)
-            && self.batch_maker.has_pending()
-        {
+            .should_flush_by_time(self.config.flush_interval);
+        let has_pending = self.batch_maker.has_pending();
+
+        if should_flush && has_pending {
+            info!(
+                worker_id = self.config.worker_id,
+                pending_txs = self.batch_maker.pending_count(),
+                "Time flush triggered, creating batch"
+            );
             if let Some(batch) = self.batch_maker.flush() {
                 self.process_batch(batch).await;
             }
@@ -732,7 +738,7 @@ impl Worker {
                 .observe(elapsed.as_secs_f64());
         }
 
-        debug!(
+        info!(
             worker_id = self.config.worker_id,
             tx_count = batch.transactions.len(),
             byte_size = digest.byte_size,
