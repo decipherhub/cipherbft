@@ -54,6 +54,14 @@ impl CutFormer {
         for (validator, (car, attestation)) in attested_cars {
             // Verify threshold is met
             if attestation.count() < self.threshold {
+                tracing::info!(
+                    validator = %validator,
+                    position = car.position,
+                    batches = car.batch_digests.len(),
+                    attestations = attestation.count(),
+                    threshold = self.threshold,
+                    "Skipping Car - below attestation threshold"
+                );
                 continue; // Skip Cars without enough attestations
             }
 
@@ -61,6 +69,13 @@ impl CutFormer {
             if let Some(last) = last_cut {
                 if let Some(last_car) = last.get_car(validator) {
                     if car.position < last_car.position {
+                        tracing::warn!(
+                            validator = %validator,
+                            car_position = car.position,
+                            last_position = last_car.position,
+                            batches = car.batch_digests.len(),
+                            "Monotonicity violation - Car position behind last Cut"
+                        );
                         return Err(DclError::MonotonicityViolation {
                             validator: *validator,
                             old: last_car.position,
