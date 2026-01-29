@@ -745,6 +745,11 @@ impl Primary {
                     "Batch response received"
                 );
             }
+
+            DclMessage::CarWithAttestation { car, attestation } => {
+                self.handle_received_car_with_attestation(peer, car, attestation)
+                    .await;
+            }
         }
     }
 
@@ -959,8 +964,27 @@ impl Primary {
                 position = car.position,
                 batch_count = car.batch_digests.len(),
                 car_hash = %aggregated.car_hash,
-                "Car marked as attested"
+                attestation_count = aggregated.count(),
+                "Car marked as attested - broadcasting to peers"
             );
+
+            // CRITICAL FIX: Broadcast CarWithAttestation to all peers
+            //
+            // This ensures that ALL validators know about this attested Car, not just
+            // the proposer who collected attestations. Without this broadcast, when
+            // another validator is the consensus proposer, their Cut would not include
+            // this Car because it's not in their attested_cars.
+            //
+            // Flow:
+            // 1. This validator (Car proposer) collects 2f+1 attestations
+            // 2. Broadcast (Car, AggregatedAttestation) to all peers
+            // 3. Peers receive and verify, then add to their attested_cars
+            // 4. Now ALL validators can include this Car in their Cut
+            let broadcast_msg = DclMessage::CarWithAttestation {
+                car: car.clone(),
+                attestation: aggregated.clone(),
+            };
+            self.network.broadcast(&broadcast_msg).await;
 
             // Mark as attested with the aggregated attestation (contains BLS aggregate signature)
             self.state.mark_attested(car.clone(), aggregated);
@@ -976,6 +1000,95 @@ impl Primary {
                 "Threshold reached but Car not found in pending state"
             );
         }
+    }
+
+    /// Handle a received CarWithAttestation broadcast
+    ///
+    /// This is called when another validator broadcasts that their Car has reached
+    /// the attestation threshold. We verify the attestation and add the Car to our
+    /// attested_cars so it can be included in our Cut.
+    async fn handle_received_car_with_attestation(
+        &mut self,
+        from: ValidatorId,
+        car: Car,
+        attestation: AggregatedAttestation,
+    ) {
+        let car_hash = car.hash();
+
+        // Skip if this is our own Car (we already have it from attestation collection)
+        if car.proposer == self.config.validator_id {
+            trace!(
+                car_hash = %car_hash,
+                "Ignoring CarWithAttestation for our own Car"
+            );
+            return;
+        }
+
+        // Skip if we already have this Car attested
+        if self.state.attested_cars.contains_key(&car.proposer) {
+            let existing = &self.state.attested_cars[&car.proposer];
+            if existing.0.position >= car.position {
+                trace!(
+                    proposer = %car.proposer,
+                    position = car.position,
+                    existing_position = existing.0.position,
+                    "Already have attested Car at same or higher position"
+                );
+                return;
+            }
+        }
+
+        // Verify the attestation using Core's pubkey lookup
+        let core = &self.core;
+        if !attestation.verify(|idx| core.get_pubkey_by_index(idx)) {
+            warn!(
+                from = %from,
+                car_hash = %car_hash,
+                "Invalid aggregated attestation signature"
+            );
+            return;
+        }
+
+        // Verify the attestation count meets threshold
+        if attestation.count() < self.core.attestation_threshold() {
+            warn!(
+                from = %from,
+                car_hash = %car_hash,
+                count = attestation.count(),
+                threshold = self.core.attestation_threshold(),
+                "Attestation count below threshold"
+            );
+            return;
+        }
+
+        info!(
+            from = %from,
+            proposer = %car.proposer,
+            position = car.position,
+            batch_count = car.batch_digests.len(),
+            attestation_count = attestation.count(),
+            "Received valid CarWithAttestation from peer"
+        );
+
+        // Persist attestation to storage if available
+        if let Some(ref storage) = self.storage {
+            if let Err(e) = storage.put_attestation(attestation.clone()).await {
+                error!(
+                    car_hash = %car_hash,
+                    error = %e,
+                    "Failed to persist received attestation to storage"
+                );
+            }
+        }
+
+        // Add to attested_cars (this enables Cut formation)
+        self.state.mark_attested(car.clone(), attestation);
+
+        // Track total attested CARs (DAG certificates)
+        DCL_DAG_CERTIFICATES.set(self.state.attested_cars.len() as f64);
+
+        // Try to form a Cut with this newly attested Car
+        self.try_form_cut().await;
     }
 
     /// Try to create a new Car
