@@ -656,7 +656,12 @@ impl Node {
                 // Create Worker config and spawn with batch storage
                 // Passing the storage adapter ensures batches are persisted and retrievable
                 // during Cut execution (for transaction inclusion in blocks)
-                let worker_config = WorkerConfig::new(self.validator_id, worker_id);
+                //
+                // IMPORTANT: flush_interval (50ms) must be shorter than Primary's car_interval (100ms)
+                // to ensure batches are flushed before Cars are created. Without this, there's a race
+                // condition where Primary creates empty Cars before Worker flushes pending batches.
+                let worker_config = WorkerConfig::new(self.validator_id, worker_id)
+                    .with_flush_interval(std::time::Duration::from_millis(50));
                 let mut worker_handle = Worker::spawn_with_storage(
                     worker_config,
                     Box::new(worker_network),
