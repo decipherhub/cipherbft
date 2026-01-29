@@ -6,7 +6,9 @@
 use std::sync::Arc;
 
 use alloy_eips::{BlockNumHash, BlockNumberOrTag};
-use alloy_primitives::{Address, BlockHash, BlockNumber, Bytes, StorageKey, StorageValue, B256, U256};
+use alloy_primitives::{
+    Address, BlockHash, BlockNumber, Bytes, StorageKey, StorageValue, B256, U256,
+};
 use parking_lot::RwLock;
 use reth_chainspec::{ChainInfo, ChainSpec, ChainSpecProvider};
 use reth_execution_types::ExecutionOutcome;
@@ -18,8 +20,8 @@ use reth_storage_api::{
 };
 use reth_storage_errors::provider::{ProviderError, ProviderResult};
 use reth_trie_common::{
-    updates::TrieUpdates, AccountProof, HashedPostState, HashedStorage, KeccakKeyHasher, MultiProof,
-    MultiProofTargets, StorageMultiProof, StorageProof, TrieInput, Nibbles,
+    updates::TrieUpdates, AccountProof, HashedPostState, HashedStorage, KeccakKeyHasher,
+    MultiProof, MultiProofTargets, Nibbles, StorageMultiProof, StorageProof, TrieInput,
 };
 
 use crate::{
@@ -39,7 +41,9 @@ pub struct BlockTracker {
 
 impl BlockTracker {
     /// Create a new block tracker.
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Update the latest block.
     pub fn set_latest(&self, number: u64, hash: B256) {
@@ -49,10 +53,14 @@ impl BlockTracker {
     }
 
     /// Get the latest block number.
-    pub fn latest_number(&self) -> u64 { *self.latest_block_number.read() }
+    pub fn latest_number(&self) -> u64 {
+        *self.latest_block_number.read()
+    }
 
     /// Get the latest block hash.
-    pub fn latest_hash(&self) -> B256 { *self.latest_block_hash.read() }
+    pub fn latest_hash(&self) -> B256 {
+        *self.latest_block_hash.read()
+    }
 
     /// Get block hash by number.
     pub fn hash_by_number(&self, number: u64) -> Option<B256> {
@@ -61,13 +69,19 @@ impl BlockTracker {
 
     /// Get block number by hash.
     pub fn number_by_hash(&self, hash: B256) -> Option<u64> {
-        self.block_hashes.read().iter().find(|(_, h)| **h == hash).map(|(n, _)| *n)
+        self.block_hashes
+            .read()
+            .iter()
+            .find(|(_, h)| **h == hash)
+            .map(|(n, _)| *n)
     }
 
     /// Get canonical hashes in a range.
     pub fn canonical_hashes_range(&self, start: BlockNumber, end: BlockNumber) -> Vec<B256> {
         let hashes = self.block_hashes.read();
-        (start..end).filter_map(|n| hashes.get(&n).copied()).collect()
+        (start..end)
+            .filter_map(|n| hashes.get(&n).copied())
+            .collect()
     }
 }
 
@@ -92,15 +106,29 @@ impl<P: Provider> std::fmt::Debug for CipherBftStateProvider<P> {
 
 impl<P: Provider> CipherBftStateProvider<P> {
     /// Create a new state provider.
-    pub fn new(provider: Arc<P>, state_manager: Arc<StateManager<P>>, block_number: u64, block_hash: B256) -> Self {
-        Self { provider, state_manager, block_number, block_hash }
+    pub fn new(
+        provider: Arc<P>,
+        state_manager: Arc<StateManager<P>>,
+        block_number: u64,
+        block_hash: B256,
+    ) -> Self {
+        Self {
+            provider,
+            state_manager,
+            block_number,
+            block_hash,
+        }
     }
 
     fn to_reth_account(account: &Account) -> reth_primitives_traits::Account {
         reth_primitives_traits::Account {
             nonce: account.nonce,
             balance: account.balance,
-            bytecode_hash: if account.code_hash == B256::ZERO { None } else { Some(account.code_hash) },
+            bytecode_hash: if account.code_hash == B256::ZERO {
+                None
+            } else {
+                Some(account.code_hash)
+            },
         }
     }
 
@@ -113,7 +141,11 @@ impl<P: Provider> BlockHashReader for CipherBftStateProvider<P> {
     fn block_hash(&self, number: BlockNumber) -> ProviderResult<Option<BlockHash>> {
         self.provider.get_block_hash(number).map_err(Self::map_err)
     }
-    fn canonical_hashes_range(&self, _start: BlockNumber, _end: BlockNumber) -> ProviderResult<Vec<B256>> {
+    fn canonical_hashes_range(
+        &self,
+        _start: BlockNumber,
+        _end: BlockNumber,
+    ) -> ProviderResult<Vec<B256>> {
         // Note: State provider operates at a single block height and doesn't track historical hashes.
         // Use BlockTracker via the factory for canonical hash queries.
         Ok(vec![])
@@ -121,7 +153,10 @@ impl<P: Provider> BlockHashReader for CipherBftStateProvider<P> {
 }
 
 impl<P: Provider> AccountReader for CipherBftStateProvider<P> {
-    fn basic_account(&self, address: &Address) -> ProviderResult<Option<reth_primitives_traits::Account>> {
+    fn basic_account(
+        &self,
+        address: &Address,
+    ) -> ProviderResult<Option<reth_primitives_traits::Account>> {
         match self.provider.get_account(*address) {
             Ok(Some(account)) => Ok(Some(Self::to_reth_account(&account))),
             Ok(None) => Ok(None),
@@ -158,23 +193,44 @@ impl<P: Provider> StateRootProvider for CipherBftStateProvider<P> {
         Ok(self.state_manager.current_state_root())
     }
 
-    fn state_root_with_updates(&self, hashed_state: HashedPostState) -> ProviderResult<(B256, TrieUpdates)> {
+    fn state_root_with_updates(
+        &self,
+        hashed_state: HashedPostState,
+    ) -> ProviderResult<(B256, TrieUpdates)> {
         Ok((self.state_root(hashed_state)?, TrieUpdates::default()))
     }
 
-    fn state_root_from_nodes_with_updates(&self, input: TrieInput) -> ProviderResult<(B256, TrieUpdates)> {
+    fn state_root_from_nodes_with_updates(
+        &self,
+        input: TrieInput,
+    ) -> ProviderResult<(B256, TrieUpdates)> {
         Ok((self.state_root_from_nodes(input)?, TrieUpdates::default()))
     }
 }
 
 impl<P: Provider> StorageRootProvider for CipherBftStateProvider<P> {
-    fn storage_root(&self, address: Address, _hashed_storage: HashedStorage) -> ProviderResult<B256> {
-        let storage = self.provider.get_all_storage(address).map_err(Self::map_err)?;
+    fn storage_root(
+        &self,
+        address: Address,
+        _hashed_storage: HashedStorage,
+    ) -> ProviderResult<B256> {
+        let storage = self
+            .provider
+            .get_all_storage(address)
+            .map_err(Self::map_err)?;
         Ok(compute_storage_root(&storage))
     }
 
-    fn storage_proof(&self, address: Address, slot: B256, _hashed_storage: HashedStorage) -> ProviderResult<StorageProof> {
-        let value = self.provider.get_storage(address, slot.into()).map_err(Self::map_err)?;
+    fn storage_proof(
+        &self,
+        address: Address,
+        slot: B256,
+        _hashed_storage: HashedStorage,
+    ) -> ProviderResult<StorageProof> {
+        let value = self
+            .provider
+            .get_storage(address, slot.into())
+            .map_err(Self::map_err)?;
         Ok(StorageProof {
             key: slot,
             nibbles: Nibbles::unpack(alloy_primitives::keccak256(slot)),
@@ -183,7 +239,12 @@ impl<P: Provider> StorageRootProvider for CipherBftStateProvider<P> {
         })
     }
 
-    fn storage_multiproof(&self, address: Address, _slots: &[B256], hashed_storage: HashedStorage) -> ProviderResult<StorageMultiProof> {
+    fn storage_multiproof(
+        &self,
+        address: Address,
+        _slots: &[B256],
+        hashed_storage: HashedStorage,
+    ) -> ProviderResult<StorageMultiProof> {
         Ok(StorageMultiProof {
             root: self.storage_root(address, hashed_storage)?,
             subtree: Default::default(),
@@ -193,33 +254,45 @@ impl<P: Provider> StorageRootProvider for CipherBftStateProvider<P> {
 }
 
 impl<P: Provider> StateProofProvider for CipherBftStateProvider<P> {
-    fn proof(&self, _input: TrieInput, address: Address, slots: &[B256]) -> ProviderResult<AccountProof> {
+    fn proof(
+        &self,
+        _input: TrieInput,
+        address: Address,
+        slots: &[B256],
+    ) -> ProviderResult<AccountProof> {
         let accounts = self.provider.get_all_accounts().map_err(Self::map_err)?;
         let account = self.provider.get_account(address).map_err(Self::map_err)?;
         let provider_clone = Arc::clone(&self.provider);
         let storage_getter = move |addr: Address| provider_clone.get_all_storage(addr);
         let storage_keys: Vec<U256> = slots.iter().map(|s| (*s).into()).collect();
 
-        let proof = crate::proof::generate_account_proof(&accounts, storage_getter, address, storage_keys)
-            .map_err(Self::map_err)?;
+        let proof =
+            crate::proof::generate_account_proof(&accounts, storage_getter, address, storage_keys)
+                .map_err(Self::map_err)?;
 
         Ok(AccountProof {
             address,
             info: account.map(|a| Self::to_reth_account(&a)),
             proof: proof.account_proof,
             storage_root: proof.storage_hash,
-            storage_proofs: proof.storage_proof.into_iter().map(|sp| {
-                StorageProof {
+            storage_proofs: proof
+                .storage_proof
+                .into_iter()
+                .map(|sp| StorageProof {
                     key: sp.key.into(),
                     nibbles: Nibbles::unpack(alloy_primitives::keccak256(B256::from(sp.key))),
                     value: sp.value,
                     proof: sp.proof,
-                }
-            }).collect(),
+                })
+                .collect(),
         })
     }
 
-    fn multiproof(&self, _input: TrieInput, _targets: MultiProofTargets) -> ProviderResult<MultiProof> {
+    fn multiproof(
+        &self,
+        _input: TrieInput,
+        _targets: MultiProofTargets,
+    ) -> ProviderResult<MultiProof> {
         Ok(MultiProof {
             account_subtree: Default::default(),
             storages: Default::default(),
@@ -239,15 +312,29 @@ impl<P: Provider> HashedPostStateProvider for CipherBftStateProvider<P> {
 }
 
 impl<P: Provider + 'static> StateProvider for CipherBftStateProvider<P> {
-    fn storage(&self, account: Address, storage_key: StorageKey) -> ProviderResult<Option<StorageValue>> {
-        let value = self.provider.get_storage(account, storage_key.into()).map_err(Self::map_err)?;
-        if value.is_zero() { Ok(None) } else { Ok(Some(value)) }
+    fn storage(
+        &self,
+        account: Address,
+        storage_key: StorageKey,
+    ) -> ProviderResult<Option<StorageValue>> {
+        let value = self
+            .provider
+            .get_storage(account, storage_key.into())
+            .map_err(Self::map_err)?;
+        if value.is_zero() {
+            Ok(None)
+        } else {
+            Ok(Some(value))
+        }
     }
 }
 
 impl<P: Provider + 'static> StateReader for CipherBftStateProvider<P> {
     type Receipt = alloy_consensus::Receipt;
-    fn get_state(&self, _block: BlockNumber) -> ProviderResult<Option<ExecutionOutcome<Self::Receipt>>> {
+    fn get_state(
+        &self,
+        _block: BlockNumber,
+    ) -> ProviderResult<Option<ExecutionOutcome<Self::Receipt>>> {
         // TODO: Implement execution outcome retrieval for historical blocks if needed.
         // Currently not required for mempool validation (primary use case).
         Ok(None)
@@ -282,7 +369,12 @@ impl<P: Provider + 'static> CipherBftStateProviderFactory<P> {
         block_tracker: Arc<BlockTracker>,
         chain_spec: Arc<ChainSpec>,
     ) -> Self {
-        Self { provider, state_manager, block_tracker, chain_spec }
+        Self {
+            provider,
+            state_manager,
+            block_tracker,
+            chain_spec,
+        }
     }
 
     /// Create with default chain spec for testing.
@@ -296,13 +388,19 @@ impl<P: Provider + 'static> CipherBftStateProviderFactory<P> {
     }
 
     /// Get a reference to the block tracker.
-    pub fn block_tracker(&self) -> &Arc<BlockTracker> { &self.block_tracker }
+    pub fn block_tracker(&self) -> &Arc<BlockTracker> {
+        &self.block_tracker
+    }
 
     /// Get a reference to the provider.
-    pub fn provider(&self) -> &Arc<P> { &self.provider }
+    pub fn provider(&self) -> &Arc<P> {
+        &self.provider
+    }
 
     /// Get a reference to the state manager.
-    pub fn state_manager(&self) -> &Arc<StateManager<P>> { &self.state_manager }
+    pub fn state_manager(&self) -> &Arc<StateManager<P>> {
+        &self.state_manager
+    }
 
     fn create_provider(&self, block_number: u64, block_hash: B256) -> StateProviderBox {
         Box::new(CipherBftStateProvider::new(
@@ -316,14 +414,20 @@ impl<P: Provider + 'static> CipherBftStateProviderFactory<P> {
 
 impl<P: Provider + 'static> ChainSpecProvider for CipherBftStateProviderFactory<P> {
     type ChainSpec = ChainSpec;
-    fn chain_spec(&self) -> Arc<Self::ChainSpec> { Arc::clone(&self.chain_spec) }
+    fn chain_spec(&self) -> Arc<Self::ChainSpec> {
+        Arc::clone(&self.chain_spec)
+    }
 }
 
 impl<P: Provider + 'static> BlockHashReader for CipherBftStateProviderFactory<P> {
     fn block_hash(&self, number: BlockNumber) -> ProviderResult<Option<BlockHash>> {
         Ok(self.block_tracker.hash_by_number(number))
     }
-    fn canonical_hashes_range(&self, start: BlockNumber, end: BlockNumber) -> ProviderResult<Vec<B256>> {
+    fn canonical_hashes_range(
+        &self,
+        start: BlockNumber,
+        end: BlockNumber,
+    ) -> ProviderResult<Vec<B256>> {
         Ok(self.block_tracker.canonical_hashes_range(start, end))
     }
 }
@@ -335,32 +439,52 @@ impl<P: Provider + 'static> BlockNumReader for CipherBftStateProviderFactory<P> 
             best_number: self.block_tracker.latest_number(),
         })
     }
-    fn best_block_number(&self) -> ProviderResult<BlockNumber> { Ok(self.block_tracker.latest_number()) }
-    fn last_block_number(&self) -> ProviderResult<BlockNumber> { Ok(self.block_tracker.latest_number()) }
+    fn best_block_number(&self) -> ProviderResult<BlockNumber> {
+        Ok(self.block_tracker.latest_number())
+    }
+    fn last_block_number(&self) -> ProviderResult<BlockNumber> {
+        Ok(self.block_tracker.latest_number())
+    }
     fn block_number(&self, hash: B256) -> ProviderResult<Option<BlockNumber>> {
         Ok(self.block_tracker.number_by_hash(hash))
     }
 }
 
 impl<P: Provider + 'static> BlockIdReader for CipherBftStateProviderFactory<P> {
-    fn pending_block_num_hash(&self) -> ProviderResult<Option<BlockNumHash>> { Ok(None) }
+    fn pending_block_num_hash(&self) -> ProviderResult<Option<BlockNumHash>> {
+        Ok(None)
+    }
     fn safe_block_num_hash(&self) -> ProviderResult<Option<BlockNumHash>> {
-        Ok(Some(BlockNumHash::new(self.block_tracker.latest_number(), self.block_tracker.latest_hash())))
+        Ok(Some(BlockNumHash::new(
+            self.block_tracker.latest_number(),
+            self.block_tracker.latest_hash(),
+        )))
     }
     fn finalized_block_num_hash(&self) -> ProviderResult<Option<BlockNumHash>> {
-        Ok(Some(BlockNumHash::new(self.block_tracker.latest_number(), self.block_tracker.latest_hash())))
+        Ok(Some(BlockNumHash::new(
+            self.block_tracker.latest_number(),
+            self.block_tracker.latest_hash(),
+        )))
     }
 }
 
 impl<P: Provider + 'static> StateProviderFactory for CipherBftStateProviderFactory<P> {
     fn latest(&self) -> ProviderResult<StateProviderBox> {
-        Ok(self.create_provider(self.block_tracker.latest_number(), self.block_tracker.latest_hash()))
+        Ok(self.create_provider(
+            self.block_tracker.latest_number(),
+            self.block_tracker.latest_hash(),
+        ))
     }
 
-    fn state_by_block_number_or_tag(&self, number_or_tag: BlockNumberOrTag) -> ProviderResult<StateProviderBox> {
+    fn state_by_block_number_or_tag(
+        &self,
+        number_or_tag: BlockNumberOrTag,
+    ) -> ProviderResult<StateProviderBox> {
         match number_or_tag {
-            BlockNumberOrTag::Latest | BlockNumberOrTag::Pending |
-            BlockNumberOrTag::Finalized | BlockNumberOrTag::Safe => self.latest(),
+            BlockNumberOrTag::Latest
+            | BlockNumberOrTag::Pending
+            | BlockNumberOrTag::Finalized
+            | BlockNumberOrTag::Safe => self.latest(),
             BlockNumberOrTag::Earliest => {
                 let hash = self.block_tracker.hash_by_number(0).unwrap_or(B256::ZERO);
                 Ok(self.create_provider(0, hash))
@@ -376,12 +500,17 @@ impl<P: Provider + 'static> StateProviderFactory for CipherBftStateProviderFacto
             // exact match in reth's error types. Semantically close to "state unavailable".
             return Err(ProviderError::StateAtBlockPruned(block));
         }
-        let hash = self.block_tracker.hash_by_number(block).unwrap_or(B256::ZERO);
+        let hash = self
+            .block_tracker
+            .hash_by_number(block)
+            .unwrap_or(B256::ZERO);
         Ok(self.create_provider(block, hash))
     }
 
     fn history_by_block_hash(&self, block_hash: BlockHash) -> ProviderResult<StateProviderBox> {
-        let number = self.block_tracker.number_by_hash(block_hash)
+        let number = self
+            .block_tracker
+            .number_by_hash(block_hash)
             .ok_or(ProviderError::BlockHashNotFound(block_hash))?;
         self.history_by_block_number(number)
     }
@@ -390,9 +519,15 @@ impl<P: Provider + 'static> StateProviderFactory for CipherBftStateProviderFacto
         self.history_by_block_hash(block_hash)
     }
 
-    fn pending(&self) -> ProviderResult<StateProviderBox> { self.latest() }
-    fn pending_state_by_hash(&self, _block_hash: B256) -> ProviderResult<Option<StateProviderBox>> { Ok(None) }
-    fn maybe_pending(&self) -> ProviderResult<Option<StateProviderBox>> { Ok(None) }
+    fn pending(&self) -> ProviderResult<StateProviderBox> {
+        self.latest()
+    }
+    fn pending_state_by_hash(&self, _block_hash: B256) -> ProviderResult<Option<StateProviderBox>> {
+        Ok(None)
+    }
+    fn maybe_pending(&self) -> ProviderResult<Option<StateProviderBox>> {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -465,7 +600,8 @@ mod tests {
         provider.set_account(address, account).unwrap();
 
         let state_manager = Arc::new(StateManager::new(provider.clone()));
-        let factory = CipherBftStateProviderFactory::new_with_defaults(Arc::new(provider), state_manager);
+        let factory =
+            CipherBftStateProviderFactory::new_with_defaults(Arc::new(provider), state_manager);
         let state_provider = factory.latest().unwrap();
         let retrieved = state_provider.basic_account(&address).unwrap();
 
@@ -482,7 +618,8 @@ mod tests {
         provider.set_storage(address, slot, value).unwrap();
 
         let state_manager = Arc::new(StateManager::new(provider.clone()));
-        let factory = CipherBftStateProviderFactory::new_with_defaults(Arc::new(provider), state_manager);
+        let factory =
+            CipherBftStateProviderFactory::new_with_defaults(Arc::new(provider), state_manager);
         let state_provider = factory.latest().unwrap();
         let retrieved = state_provider.storage(address, B256::from(slot)).unwrap();
 
@@ -493,7 +630,9 @@ mod tests {
     #[test]
     fn test_history_by_block_number() {
         let factory = create_test_factory();
-        factory.block_tracker().set_latest(100, B256::repeat_byte(0x01));
+        factory
+            .block_tracker()
+            .set_latest(100, B256::repeat_byte(0x01));
         assert!(factory.history_by_block_number(100).is_ok());
         assert!(factory.history_by_block_number(200).is_err());
     }
@@ -515,12 +654,26 @@ mod tests {
     #[test]
     fn test_state_by_block_tag() {
         let factory = create_test_factory();
-        factory.block_tracker().set_latest(10, B256::repeat_byte(0x0a));
-        assert!(factory.state_by_block_number_or_tag(BlockNumberOrTag::Latest).is_ok());
-        assert!(factory.state_by_block_number_or_tag(BlockNumberOrTag::Pending).is_ok());
-        assert!(factory.state_by_block_number_or_tag(BlockNumberOrTag::Safe).is_ok());
-        assert!(factory.state_by_block_number_or_tag(BlockNumberOrTag::Finalized).is_ok());
-        assert!(factory.state_by_block_number_or_tag(BlockNumberOrTag::Earliest).is_ok());
-        assert!(factory.state_by_block_number_or_tag(BlockNumberOrTag::Number(5)).is_ok());
+        factory
+            .block_tracker()
+            .set_latest(10, B256::repeat_byte(0x0a));
+        assert!(factory
+            .state_by_block_number_or_tag(BlockNumberOrTag::Latest)
+            .is_ok());
+        assert!(factory
+            .state_by_block_number_or_tag(BlockNumberOrTag::Pending)
+            .is_ok());
+        assert!(factory
+            .state_by_block_number_or_tag(BlockNumberOrTag::Safe)
+            .is_ok());
+        assert!(factory
+            .state_by_block_number_or_tag(BlockNumberOrTag::Finalized)
+            .is_ok());
+        assert!(factory
+            .state_by_block_number_or_tag(BlockNumberOrTag::Earliest)
+            .is_ok());
+        assert!(factory
+            .state_by_block_number_or_tag(BlockNumberOrTag::Number(5))
+            .is_ok());
     }
 }
