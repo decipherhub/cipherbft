@@ -33,9 +33,12 @@ use cipherbft_storage::{
 };
 use parking_lot::RwLock;
 use reth_primitives::TransactionSigned;
+use reth_primitives_traits::SignedTransaction;
 use reth_transaction_pool::{PoolTransaction, TransactionOrigin, TransactionPool};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
 use cipherbft_execution::precompiles::{CipherBftPrecompileProvider, StakingPrecompile};
@@ -1481,6 +1484,235 @@ impl MempoolApi for StubMempoolApi {
     ) -> RpcResult<std::collections::HashMap<Address, Vec<Transaction>>> {
         trace!("StubMempoolApi::get_queued_content");
         Ok(std::collections::HashMap::new())
+    }
+}
+
+/// Channel-based mempool adapter that forwards transactions to workers.
+///
+/// This adapter validates transactions (signature, chain ID) and forwards them
+/// via an mpsc channel to the worker bridge task for inclusion in blocks.
+///
+/// Unlike `StubMempoolApi`, this actually processes transactions and routes them
+/// to the consensus layer via DCL workers.
+#[allow(clippy::type_complexity)]
+pub struct ChannelMempoolApi {
+    /// Channel sender for forwarding transactions to workers
+    tx_sender: mpsc::Sender<Vec<u8>>,
+    /// Chain ID for validation
+    chain_id: u64,
+    /// Pending transactions (for txpool_* methods)
+    /// Maps tx_hash -> (sender, raw_tx_bytes)
+    pending: Arc<RwLock<HashMap<B256, (Address, Vec<u8>)>>>,
+}
+
+impl ChannelMempoolApi {
+    /// Create a new channel-based mempool adapter.
+    ///
+    /// # Arguments
+    /// * `tx_sender` - Channel to send transactions to worker bridge
+    /// * `chain_id` - Expected chain ID for transaction validation
+    pub fn new(tx_sender: mpsc::Sender<Vec<u8>>, chain_id: u64) -> Self {
+        Self {
+            tx_sender,
+            chain_id,
+            pending: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// Remove transactions that have been included in blocks.
+    ///
+    /// Called by the node when blocks are finalized to clean up the pending map.
+    pub fn remove_included(&self, tx_hashes: &[B256]) {
+        let mut pending = self.pending.write();
+        for hash in tx_hashes {
+            pending.remove(hash);
+        }
+    }
+}
+
+#[async_trait]
+impl MempoolApi for ChannelMempoolApi {
+    async fn submit_transaction(&self, tx_bytes: Bytes) -> RpcResult<B256> {
+        debug!(
+            "ChannelMempoolApi::submit_transaction({} bytes)",
+            tx_bytes.len()
+        );
+
+        // Decode the transaction
+        use alloy_consensus::Transaction as ConsensusTx;
+        use alloy_rlp::Decodable;
+        let tx = TransactionSigned::decode(&mut tx_bytes.as_ref()).map_err(|e| {
+            warn!("Failed to decode transaction: {}", e);
+            RpcError::InvalidParams(format!("Invalid transaction encoding: {e}"))
+        })?;
+
+        // Recover signer to validate signature
+        let signer = tx.try_recover().map_err(|_| {
+            warn!("Failed to recover transaction signature");
+            RpcError::InvalidParams("Invalid transaction signature".to_string())
+        })?;
+
+        // Validate chain ID
+        if let Some(tx_chain_id) = ConsensusTx::chain_id(&tx) {
+            if tx_chain_id != self.chain_id {
+                warn!(
+                    "Transaction chain ID mismatch: expected {}, got {}",
+                    self.chain_id, tx_chain_id
+                );
+                return Err(RpcError::InvalidParams(format!(
+                    "Invalid chain ID: expected {}, got {}",
+                    self.chain_id, tx_chain_id
+                )));
+            }
+        }
+
+        let tx_hash = *tx.tx_hash();
+
+        // Store in pending map for txpool_* methods
+        {
+            let mut pending = self.pending.write();
+            pending.insert(tx_hash, (signer, tx_bytes.to_vec()));
+        }
+
+        // Forward to worker via channel
+        self.tx_sender.send(tx_bytes.to_vec()).await.map_err(|_| {
+            warn!("Failed to send transaction to worker - channel closed");
+            RpcError::Execution("Transaction submission failed: worker channel closed".to_string())
+        })?;
+
+        debug!("Transaction {} submitted to worker channel", tx_hash);
+        Ok(tx_hash)
+    }
+
+    async fn get_pending_transactions(&self) -> RpcResult<Vec<B256>> {
+        trace!("ChannelMempoolApi::get_pending_transactions");
+        let pending = self.pending.read();
+        Ok(pending.keys().copied().collect())
+    }
+
+    async fn get_transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction>> {
+        trace!("ChannelMempoolApi::get_transaction_by_hash({})", hash);
+        let pending = self.pending.read();
+
+        if let Some((sender, tx_bytes)) = pending.get(&hash) {
+            // Decode the transaction
+            use alloy_rlp::Decodable;
+            if let Ok(signed_tx) = TransactionSigned::decode(&mut tx_bytes.as_slice()) {
+                let rpc_tx = signed_tx_to_rpc_tx(&signed_tx, *sender);
+                return Ok(Some(rpc_tx));
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn get_pool_status(&self) -> RpcResult<(usize, usize)> {
+        trace!("ChannelMempoolApi::get_pool_status");
+        let pending = self.pending.read();
+        // All transactions are "pending" (ready to be included), none are "queued"
+        Ok((pending.len(), 0))
+    }
+
+    async fn get_pending_content(&self) -> RpcResult<HashMap<Address, Vec<Transaction>>> {
+        trace!("ChannelMempoolApi::get_pending_content");
+        let pending = self.pending.read();
+
+        let mut content: HashMap<Address, Vec<Transaction>> = HashMap::new();
+
+        for (_hash, (sender, tx_bytes)) in pending.iter() {
+            use alloy_rlp::Decodable;
+            if let Ok(signed_tx) = TransactionSigned::decode(&mut tx_bytes.as_slice()) {
+                let rpc_tx = signed_tx_to_rpc_tx(&signed_tx, *sender);
+                content.entry(*sender).or_default().push(rpc_tx);
+            }
+        }
+
+        Ok(content)
+    }
+
+    async fn get_queued_content(&self) -> RpcResult<HashMap<Address, Vec<Transaction>>> {
+        trace!("ChannelMempoolApi::get_queued_content");
+        // No queued transactions - all are pending
+        Ok(HashMap::new())
+    }
+}
+
+/// Mempool wrapper enum that provides a single concrete type for the RPC server.
+///
+/// This enum allows the node to use either `ChannelMempoolApi` (when DCL is enabled
+/// and transactions should be forwarded to workers) or `StubMempoolApi` (when DCL
+/// is disabled) while still providing a concrete type for `RpcServer`'s generic
+/// parameter.
+pub enum MempoolWrapper {
+    /// Channel-based mempool that forwards transactions to workers
+    Channel(ChannelMempoolApi),
+    /// Stub mempool that doesn't process transactions (DCL disabled)
+    Stub(StubMempoolApi),
+}
+
+impl MempoolWrapper {
+    /// Create a channel-based mempool wrapper.
+    pub fn channel(tx_sender: mpsc::Sender<Vec<u8>>, chain_id: u64) -> Self {
+        Self::Channel(ChannelMempoolApi::new(tx_sender, chain_id))
+    }
+
+    /// Create a stub mempool wrapper.
+    pub fn stub() -> Self {
+        Self::Stub(StubMempoolApi::new())
+    }
+
+    /// Remove transactions that have been included in blocks.
+    ///
+    /// Only has effect for `Channel` variant. No-op for `Stub`.
+    pub fn remove_included(&self, tx_hashes: &[B256]) {
+        if let Self::Channel(api) = self {
+            api.remove_included(tx_hashes);
+        }
+    }
+}
+
+#[async_trait]
+impl MempoolApi for MempoolWrapper {
+    async fn submit_transaction(&self, tx_bytes: Bytes) -> RpcResult<B256> {
+        match self {
+            Self::Channel(api) => api.submit_transaction(tx_bytes).await,
+            Self::Stub(api) => api.submit_transaction(tx_bytes).await,
+        }
+    }
+
+    async fn get_pending_transactions(&self) -> RpcResult<Vec<B256>> {
+        match self {
+            Self::Channel(api) => api.get_pending_transactions().await,
+            Self::Stub(api) => api.get_pending_transactions().await,
+        }
+    }
+
+    async fn get_transaction_by_hash(&self, hash: B256) -> RpcResult<Option<Transaction>> {
+        match self {
+            Self::Channel(api) => api.get_transaction_by_hash(hash).await,
+            Self::Stub(api) => api.get_transaction_by_hash(hash).await,
+        }
+    }
+
+    async fn get_pool_status(&self) -> RpcResult<(usize, usize)> {
+        match self {
+            Self::Channel(api) => api.get_pool_status().await,
+            Self::Stub(api) => api.get_pool_status().await,
+        }
+    }
+
+    async fn get_pending_content(&self) -> RpcResult<HashMap<Address, Vec<Transaction>>> {
+        match self {
+            Self::Channel(api) => api.get_pending_content().await,
+            Self::Stub(api) => api.get_pending_content().await,
+        }
+    }
+
+    async fn get_queued_content(&self) -> RpcResult<HashMap<Address, Vec<Transaction>>> {
+        match self {
+            Self::Channel(api) => api.get_queued_content().await,
+            Self::Stub(api) => api.get_queued_content().await,
+        }
     }
 }
 
