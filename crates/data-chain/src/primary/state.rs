@@ -136,6 +136,9 @@ pub struct PrimaryState {
     pub preserved_attested_cars: HashMap<ValidatorId, (Car, AggregatedAttestation)>,
     /// Last finalized height
     pub last_finalized_height: u64,
+    /// Last Car position included in a decided Cut, per validator
+    /// Used to determine if an attested Car has already been "used"
+    pub last_included_positions: HashMap<ValidatorId, u64>,
 }
 
 impl PrimaryState {
@@ -162,6 +165,7 @@ impl PrimaryState {
             cars_awaiting_gap_sync: HashMap::new(),
             pending_car_requests: HashMap::new(),
             attested_cars: HashMap::new(),
+            last_included_positions: HashMap::new(),
             last_attested_idx: 0,
             equivocations: HashMap::new(),
             equivocation_retention,
@@ -207,6 +211,10 @@ impl PrimaryState {
         for (validator, car) in &cut.cars {
             state.last_seen_positions.insert(*validator, car.position);
             state.last_seen_car_hashes.insert(*validator, car.hash());
+            // Track positions included in the cut (used for batch preservation logic)
+            state
+                .last_included_positions
+                .insert(*validator, car.position);
 
             // If this is our own CAR, restore our position state
             if *validator == our_id {
@@ -300,6 +308,14 @@ impl PrimaryState {
                 self.last_seen_positions.insert(*validator, car.position);
                 self.last_seen_car_hashes.insert(*validator, car.hash());
             }
+            // Track which positions have been included in decided Cuts
+            // This is used by mark_attested to determine if a Car with batches
+            // has already been "used" and can be safely replaced
+            let last_included = self.last_included_positions.get(validator).copied();
+            if last_included.is_none_or(|p| car.position > p) {
+                self.last_included_positions
+                    .insert(*validator, car.position);
+            }
 
             // Also sync our own position from finalized cuts to prevent position drift
             // This is critical for validators catching up during sync:
@@ -357,8 +373,53 @@ impl PrimaryState {
     /// # Arguments
     /// * `car` - The Car that has been attested
     /// * `aggregated` - The aggregated attestation with BLS aggregate signature
+    ///
+    /// # Note
+    /// This implements a policy to preserve Cars with batches (transactions):
+    /// - A Car with batches will always be stored
+    /// - An empty Car will only overwrite if:
+    ///   - The existing Car is also empty, OR
+    ///   - The existing Car's position has been included in a decided Cut
+    /// - This prevents the race condition where empty Cars get attested faster
+    ///   than Cars with batches (due to batch sync delays), causing transactions
+    ///   to be lost from Cuts.
     pub fn mark_attested(&mut self, car: Car, aggregated: AggregatedAttestation) {
         let validator = car.proposer;
+        let new_has_batches = !car.batch_digests.is_empty();
+
+        // Check if we should replace the existing attested Car
+        if let Some((existing_car, _)) = self.attested_cars.get(&validator) {
+            let existing_has_batches = !existing_car.batch_digests.is_empty();
+            let last_included = self
+                .last_included_positions
+                .get(&validator)
+                .copied()
+                .unwrap_or(0);
+
+            // Don't replace a Car with batches with an empty Car, UNLESS the
+            // existing Car's position has already been included in a decided Cut
+            if existing_has_batches
+                && !new_has_batches
+                && car.position > existing_car.position
+                && existing_car.position > last_included
+            {
+                tracing::info!(
+                    validator = %validator,
+                    existing_position = existing_car.position,
+                    existing_batches = existing_car.batch_digests.len(),
+                    new_position = car.position,
+                    last_included,
+                    "Preserving Car with batches, deferring empty Car"
+                );
+                return;
+            }
+
+            // Allow replacement if:
+            // 1. New Car has batches (prioritize transactions)
+            // 2. Both are empty (normal progression)
+            // 3. Existing Car was already included in a Cut (position <= last_included)
+        }
+
         self.attested_cars.insert(validator, (car, aggregated));
     }
 
