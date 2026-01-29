@@ -238,8 +238,12 @@ fn test_derivation_info_tracking() {
         evm_path: Some("m/44'/60'/0'/0/5".to_string()),
     };
 
-    let keys =
-        ValidatorKeys::from_keypairs_with_derivation(consensus, data_chain, evm, derivation.clone());
+    let keys = ValidatorKeys::from_keypairs_with_derivation(
+        consensus,
+        data_chain,
+        evm,
+        derivation.clone(),
+    );
 
     // Verify derivation info is preserved
     assert!(keys.is_derived());

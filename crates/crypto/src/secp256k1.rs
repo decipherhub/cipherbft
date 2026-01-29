@@ -419,7 +419,8 @@ mod tests {
         let addr = keypair.evm_address();
 
         // The expected address for private key = 1
-        let expected = Address::from_slice(&hex::decode("7E5F4552091A69125d5DfCb7b8C2659029395Bdf").unwrap());
+        let expected =
+            Address::from_slice(&hex::decode("7E5F4552091A69125d5DfCb7b8C2659029395Bdf").unwrap());
         assert_eq!(addr, expected);
     }
 

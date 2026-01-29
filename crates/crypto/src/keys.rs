@@ -21,11 +21,12 @@
 use std::path::PathBuf;
 
 use alloy_primitives::Address;
+use cipherbft_types::ValidatorId;
+
 use crate::bls::{BlsKeyPair, BlsPublicKey, BlsSecretKey};
 use crate::ed25519::{Ed25519KeyPair, Ed25519PublicKey, Ed25519SecretKey};
 use crate::secp256k1::{Secp256k1KeyPair, Secp256k1PublicKey, Secp256k1SecretKey};
 use crate::secure::DerivationInfo;
-use cipherbft_types::ValidatorId;
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;

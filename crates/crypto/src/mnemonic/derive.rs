@@ -255,7 +255,7 @@ pub fn derive_secp256k1_key(
         .map_err(|e| MnemonicError::InvalidPath(format!("invalid BIP-32 path: {}", e)))?;
 
     // Derive the extended private key using BIP-32
-    let xprv = XPrv::derive_from_path(&seed, &derivation_path)
+    let xprv = XPrv::derive_from_path(seed, &derivation_path)
         .map_err(|e| MnemonicError::DerivationFailed(format!("BIP-32 derivation failed: {}", e)))?;
 
     // Extract the 32-byte private key
@@ -491,8 +491,7 @@ mod tests {
     }
 
     // Hardhat test mnemonic (DO NOT USE IN PRODUCTION)
-    const HARDHAT_MNEMONIC: &str =
-        "test test test test test test test test test test test junk";
+    const HARDHAT_MNEMONIC: &str = "test test test test test test test test test test test junk";
 
     #[test]
     fn test_derive_secp256k1_key_hardhat_account0() {
