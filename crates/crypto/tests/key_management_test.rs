@@ -225,19 +225,25 @@ fn test_debug_output_safety() {
 #[test]
 fn test_derivation_info_tracking() {
     use cipherbft_crypto::secure::DerivationInfo;
-    use cipherbft_crypto::{BlsKeyPair, Ed25519KeyPair};
+    use cipherbft_crypto::{BlsKeyPair, Ed25519KeyPair, Secp256k1KeyPair};
 
     let consensus = Ed25519KeyPair::generate(&mut rand::thread_rng());
     let data_chain = BlsKeyPair::generate(&mut rand::thread_rng());
+    let evm = Secp256k1KeyPair::generate(&mut rand::thread_rng());
 
     let derivation = DerivationInfo {
         account_index: 5,
         consensus_path: "m/12381/8888/5/0".to_string(),
         data_chain_path: "m/12381/8888/5/1".to_string(),
+        evm_path: Some("m/44'/60'/0'/0/5".to_string()),
     };
 
-    let keys =
-        ValidatorKeys::from_keypairs_with_derivation(consensus, data_chain, derivation.clone());
+    let keys = ValidatorKeys::from_keypairs_with_derivation(
+        consensus,
+        data_chain,
+        evm,
+        derivation.clone(),
+    );
 
     // Verify derivation info is preserved
     assert!(keys.is_derived());

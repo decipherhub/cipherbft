@@ -59,6 +59,8 @@ pub struct DerivationInfo {
     pub consensus_path: String,
     /// Full derivation path for BLS key (e.g., "m/12381/8888/0/1")
     pub data_chain_path: String,
+    /// Full derivation path for secp256k1/EVM key (e.g., "m/44'/60'/0'/0/0")
+    pub evm_path: Option<String>,
 }
 
 impl SecureKeyMaterial {
@@ -174,6 +176,7 @@ mod tests {
             account_index: 0,
             consensus_path: "m/12381/8888/0/0".to_string(),
             data_chain_path: "m/12381/8888/0/1".to_string(),
+            evm_path: Some("m/44'/60'/0'/0/0".to_string()),
         };
 
         let material = SecureKeyMaterial::with_derivation(ed_seed, bls_seed, derivation);
@@ -182,6 +185,7 @@ mod tests {
         let info = material.derivation_info().unwrap();
         assert_eq!(info.account_index, 0);
         assert_eq!(info.consensus_path, "m/12381/8888/0/0");
+        assert_eq!(info.evm_path, Some("m/44'/60'/0'/0/0".to_string()));
     }
 
     #[test]

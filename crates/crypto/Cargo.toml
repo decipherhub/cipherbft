@@ -47,6 +47,11 @@ uuid = { workspace = true }
 
 # Mnemonic & HD derivation (T003)
 bip39 = { workspace = true }
+bip32 = { workspace = true }
+
+# secp256k1 (EVM keys)
+k256 = { workspace = true }
+alloy-primitives = { workspace = true }
 
 # OS keychain integration - optional (T004)
 keyring = { workspace = true, optional = true }

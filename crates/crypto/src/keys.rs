@@ -1,11 +1,15 @@
-//! Dual key structure for CipherBFT validators
+//! Triple key structure for CipherBFT validators
 //!
-//! CipherBFT uses two key types:
+//! CipherBFT uses three key types:
 //! - Ed25519: Consensus Layer (CL) - Malachite BFT voting/proposals
 //! - BLS12-381: Data Chain Layer (DCL) - Car/Attestation signing
+//! - Secp256k1: EVM Layer - Ethereum-compatible transactions and addresses
 //!
 //! ValidatorId is derived from the Ed25519 public key to match Malachite's
 //! address format: keccak256(ed25519_pubkey)[12..] (20 bytes, Ethereum style)
+//!
+//! The EVM address is derived from the secp256k1 public key using standard
+//! Ethereum address derivation: keccak256(uncompressed_pubkey[1..])[12..]
 //!
 //! # Security
 //!
@@ -16,10 +20,13 @@
 
 use std::path::PathBuf;
 
+use alloy_primitives::Address;
+use cipherbft_types::ValidatorId;
+
 use crate::bls::{BlsKeyPair, BlsPublicKey, BlsSecretKey};
 use crate::ed25519::{Ed25519KeyPair, Ed25519PublicKey, Ed25519SecretKey};
+use crate::secp256k1::{Secp256k1KeyPair, Secp256k1PublicKey, Secp256k1SecretKey};
 use crate::secure::DerivationInfo;
-use cipherbft_types::ValidatorId;
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
@@ -31,31 +38,52 @@ pub struct KeystorePaths {
     pub consensus: Option<PathBuf>,
     /// Path to data chain (BLS) keystore file
     pub data_chain: Option<PathBuf>,
+    /// Path to EVM (secp256k1) keystore file
+    pub evm: Option<PathBuf>,
 }
 
 impl KeystorePaths {
-    /// Create new keystore paths
+    /// Create new keystore paths (legacy, without EVM)
     pub fn new(consensus: PathBuf, data_chain: PathBuf) -> Self {
         Self {
             consensus: Some(consensus),
             data_chain: Some(data_chain),
+            evm: None,
         }
     }
 
-    /// Check if both keystore paths are set
+    /// Create new keystore paths with all three key types
+    pub fn new_with_evm(consensus: PathBuf, data_chain: PathBuf, evm: PathBuf) -> Self {
+        Self {
+            consensus: Some(consensus),
+            data_chain: Some(data_chain),
+            evm: Some(evm),
+        }
+    }
+
+    /// Check if all keystore paths are set
     pub fn is_complete(&self) -> bool {
+        self.consensus.is_some() && self.data_chain.is_some() && self.evm.is_some()
+    }
+
+    /// Check if legacy (Ed25519 + BLS) keystore paths are set
+    pub fn has_legacy_keys(&self) -> bool {
         self.consensus.is_some() && self.data_chain.is_some()
     }
 }
 
 /// Complete key set for a CipherBFT validator
 ///
-/// Contains both:
+/// Contains all three key types:
 /// - Consensus keys (Ed25519) for CL operations
 /// - Data chain keys (BLS12-381) for DCL operations
+/// - EVM keys (secp256k1) for Ethereum-compatible transactions
 ///
 /// The ValidatorId is derived from the Ed25519 public key to ensure
 /// consistency with Malachite's address format.
+///
+/// The EVM address is derived from the secp256k1 public key for
+/// Ethereum compatibility (rewards, staking, governance).
 ///
 /// # Security
 ///
@@ -69,6 +97,8 @@ pub struct ValidatorKeys {
     pub consensus: Ed25519KeyPair,
     /// BLS12-381 keys for Data Chain Layer
     pub data_chain: BlsKeyPair,
+    /// Secp256k1 keys for EVM Layer (Ethereum-compatible)
+    pub evm: Secp256k1KeyPair,
     /// Cached validator ID (derived from Ed25519 pubkey)
     validator_id: ValidatorId,
     /// Derivation info (if derived from mnemonic)
@@ -78,27 +108,34 @@ pub struct ValidatorKeys {
 }
 
 impl ValidatorKeys {
-    /// Generate a new validator key set
+    /// Generate a new validator key set with all three key types
     pub fn generate<R: CryptoRng + RngCore>(rng: &mut R) -> Self {
         let consensus = Ed25519KeyPair::generate(rng);
         let data_chain = BlsKeyPair::generate(rng);
+        let evm = Secp256k1KeyPair::generate(rng);
         let validator_id = consensus.validator_id();
 
         Self {
             consensus,
             data_chain,
+            evm,
             validator_id,
             derivation_info: None,
             keystore_paths: None,
         }
     }
 
-    /// Create from existing key pairs
-    pub fn from_keypairs(consensus: Ed25519KeyPair, data_chain: BlsKeyPair) -> Self {
+    /// Create from existing key pairs (all three types)
+    pub fn from_keypairs(
+        consensus: Ed25519KeyPair,
+        data_chain: BlsKeyPair,
+        evm: Secp256k1KeyPair,
+    ) -> Self {
         let validator_id = consensus.validator_id();
         Self {
             consensus,
             data_chain,
+            evm,
             validator_id,
             derivation_info: None,
             keystore_paths: None,
@@ -111,12 +148,14 @@ impl ValidatorKeys {
     pub fn from_keypairs_with_derivation(
         consensus: Ed25519KeyPair,
         data_chain: BlsKeyPair,
+        evm: Secp256k1KeyPair,
         derivation_info: DerivationInfo,
     ) -> Self {
         let validator_id = consensus.validator_id();
         Self {
             consensus,
             data_chain,
+            evm,
             validator_id,
             derivation_info: Some(derivation_info),
             keystore_paths: None,
@@ -148,6 +187,27 @@ impl ValidatorKeys {
         &self.data_chain.secret_key
     }
 
+    /// Get the secp256k1 public key (for EVM operations)
+    pub fn evm_pubkey(&self) -> &Secp256k1PublicKey {
+        &self.evm.public_key
+    }
+
+    /// Get the secp256k1 secret key (for EVM signing)
+    pub fn evm_secret(&self) -> &Secp256k1SecretKey {
+        &self.evm.secret_key
+    }
+
+    /// Get the EVM address (derived from secp256k1 pubkey)
+    ///
+    /// This is the Ethereum-compatible address used for:
+    /// - Receiving validator rewards
+    /// - Staking operations
+    /// - Governance participation
+    /// - Any EVM transactions
+    pub fn evm_address(&self) -> Address {
+        self.evm.evm_address()
+    }
+
     /// Get derivation info if available
     pub fn derivation_info(&self) -> Option<&DerivationInfo> {
         self.derivation_info.as_ref()
@@ -174,10 +234,14 @@ impl ValidatorKeys {
     }
 
     /// Check if keys are backed by keystore files
+    ///
+    /// Returns true if at least the legacy keys (Ed25519 + BLS) have keystore paths.
+    /// Use `keystore_paths().map(|p| p.is_complete())` to check if all three key types
+    /// have keystore paths.
     pub fn has_keystore(&self) -> bool {
         self.keystore_paths
             .as_ref()
-            .map(|p| p.is_complete())
+            .map(|p| p.has_legacy_keys())
             .unwrap_or(false)
     }
 }
@@ -186,8 +250,10 @@ impl std::fmt::Debug for ValidatorKeys {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ValidatorKeys")
             .field("validator_id", &self.validator_id)
+            .field("evm_address", &self.evm_address())
             .field("consensus", &self.consensus.public_key)
             .field("data_chain", &self.data_chain.public_key)
+            .field("evm", &self.evm.public_key)
             .finish()
     }
 }
@@ -214,10 +280,17 @@ impl Drop for ValidatorKeys {
         let mut bls_bytes = self.data_chain.secret_key.to_bytes();
         bls_bytes.zeroize();
 
+        // Zero secp256k1 secret key bytes
+        let mut secp_bytes = self.evm.secret_key.to_bytes();
+        secp_bytes.zeroize();
+
         // Clear derivation info if present
         if let Some(ref mut info) = self.derivation_info {
             info.consensus_path.zeroize();
             info.data_chain_path.zeroize();
+            if let Some(ref mut evm_path) = info.evm_path {
+                evm_path.zeroize();
+            }
         }
     }
 }
@@ -333,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sign_with_both_keys() {
+    fn test_sign_with_all_keys() {
         let keys = ValidatorKeys::generate(&mut rand::thread_rng());
         let msg = b"test message";
 
@@ -346,6 +419,30 @@ mod tests {
         assert!(keys
             .data_chain_pubkey()
             .verify(msg, crate::bls::DST_CAR, &bls_sig));
+
+        // Sign with secp256k1
+        let secp_sig = keys.evm.sign(msg);
+        assert!(keys.evm_pubkey().verify(msg, &secp_sig));
+    }
+
+    #[test]
+    fn test_evm_address() {
+        let keys = ValidatorKeys::generate(&mut rand::thread_rng());
+
+        // EVM address should be derived from secp256k1 pubkey
+        let expected_address = keys.evm.evm_address();
+        assert_eq!(keys.evm_address(), expected_address);
+
+        // Should not be zero address
+        assert_ne!(keys.evm_address(), alloy_primitives::Address::ZERO);
+    }
+
+    #[test]
+    fn test_different_keys_different_evm_addresses() {
+        let keys1 = ValidatorKeys::generate(&mut rand::thread_rng());
+        let keys2 = ValidatorKeys::generate(&mut rand::thread_rng());
+
+        assert_ne!(keys1.evm_address(), keys2.evm_address());
     }
 
     #[test]

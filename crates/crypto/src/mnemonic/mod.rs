@@ -41,8 +41,9 @@ mod error;
 mod generate;
 
 pub use derive::{
-    derive_bls_key, derive_ed25519_key, derive_validator_keys, DerivationConfig,
-    CIPHERBFT_COIN_TYPE, DEFAULT_DERIVATION_PATH_BLS, DEFAULT_DERIVATION_PATH_ED25519,
+    derive_bls_key, derive_ed25519_key, derive_secp256k1_key, derive_validator_keys,
+    DerivationConfig, CIPHERBFT_COIN_TYPE, DEFAULT_DERIVATION_PATH_BLS,
+    DEFAULT_DERIVATION_PATH_ED25519, DEFAULT_DERIVATION_PATH_SECP256K1,
 };
 pub use error::{MnemonicError, MnemonicResult};
 pub use generate::Mnemonic;
