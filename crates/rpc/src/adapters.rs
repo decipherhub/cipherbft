@@ -2189,6 +2189,9 @@ impl<P: Provider> EvmExecutionApi<P> {
 
         // Configure chain settings
         ctx.cfg.chain_id = self.chain_id;
+        // For eth_call/eth_estimateGas, disable nonce check
+        // These are simulation calls that shouldn't enforce nonce validity
+        ctx.cfg.disable_nonce_check = true;
 
         // Set up transaction environment
         ctx.tx.caller = from.unwrap_or(Address::ZERO);
@@ -2647,6 +2650,8 @@ where
 
         // Configure chain settings
         ctx.cfg.chain_id = self.chain_id;
+        // For tracing/debug calls, disable nonce check
+        ctx.cfg.disable_nonce_check = true;
 
         // Set up transaction environment
         ctx.tx.caller = from.unwrap_or(Address::ZERO);
@@ -2757,6 +2762,8 @@ where
 
         // Configure chain settings
         ctx.cfg.chain_id = self.chain_id;
+        // For tracing/debug calls, disable nonce check
+        ctx.cfg.disable_nonce_check = true;
 
         // Set up transaction environment
         ctx.tx.caller = from.unwrap_or(Address::ZERO);
