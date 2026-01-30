@@ -27,9 +27,11 @@ use cipherbft_consensus::{
 };
 use cipherbft_crypto::{BlsKeyPair, BlsPublicKey, Ed25519KeyPair, Ed25519PublicKey};
 use cipherbft_data_chain::{
+    error::DclError,
     primary::{Primary, PrimaryConfig, PrimaryEvent},
+    storage::BatchStore as DclBatchStore,
     worker::{Worker, WorkerConfig},
-    Cut, DclMessage, WorkerMessage,
+    Batch, Cut, DclMessage, WorkerMessage,
 };
 use cipherbft_execution::{
     keccak256, Bytes as ExecutionBytes, ChainConfig, InMemoryProvider, Log as ExecutionLog,
@@ -42,6 +44,7 @@ use cipherbft_storage::{
     TransactionStore,
 };
 use cipherbft_types::genesis::Genesis;
+use cipherbft_types::Hash;
 use cipherbft_types::ValidatorId;
 use informalsystems_malachitebft_metrics::SharedRegistry;
 use informalsystems_malachitebft_network::{
@@ -56,6 +59,50 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use cipherbft_metrics;
+
+/// Adapter to bridge DclStore (storage crate) to BatchStore (data-chain crate)
+///
+/// Workers require `BatchStore` from data-chain, but the node uses `DclStore` from storage.
+/// This adapter wraps `DclStore` and implements the `BatchStore` trait, allowing Workers
+/// to persist batches to the same storage used by `ExecutionBridge` for fetching transactions.
+///
+/// Without this adapter, batches created by Workers would only exist in memory and would
+/// not be retrievable when executing Cuts (causing transactions to be skipped).
+struct DclStoreBatchAdapter {
+    inner: Arc<dyn DclStore>,
+}
+
+impl DclStoreBatchAdapter {
+    fn new(store: Arc<dyn DclStore>) -> Self {
+        Self { inner: store }
+    }
+}
+
+#[async_trait::async_trait]
+impl DclBatchStore for DclStoreBatchAdapter {
+    async fn put_batch(&self, batch: Batch) -> Result<Hash, DclError> {
+        let hash = batch.hash();
+        self.inner
+            .put_batch(batch)
+            .await
+            .map_err(|e| DclError::Storage(e.to_string()))?;
+        Ok(hash)
+    }
+
+    async fn get_batch(&self, hash: &Hash) -> Result<Option<Batch>, DclError> {
+        self.inner
+            .get_batch(hash)
+            .await
+            .map_err(|e| DclError::Storage(e.to_string()))
+    }
+
+    async fn has_batch(&self, hash: &Hash) -> Result<bool, DclError> {
+        self.inner
+            .has_batch(hash)
+            .await
+            .map_err(|e| DclError::Storage(e.to_string()))
+    }
+}
 
 /// Validator public key information for both DCL and Consensus layers
 #[derive(Clone, Debug)]
@@ -285,9 +332,9 @@ impl Node {
                 power.max(1) as u64 // Ensure at least 1 voting power
             };
 
-            debug!(
-                "Adding validator {} (stake: {}, voting_power: {})",
-                validator.address, validator.staked_amount, voting_power
+            info!(
+                "Adding validator: genesis_address={}, derived_validator_id={}, ed25519_pubkey={}, voting_power={}",
+                validator.address, validator_id, validator.ed25519_pubkey, voting_power
             );
 
             self.validators.insert(
@@ -507,6 +554,13 @@ impl Node {
                 .map(|(id, info)| (*id, info.bls_public_key.clone()))
                 .collect();
 
+            // Log all known validators for debugging
+            info!(
+                "Primary will know {} validators: {:?}",
+                bls_pubkeys.len(),
+                bls_pubkeys.keys().collect::<Vec<_>>()
+            );
+
             // Load the last finalized cut for Primary state restoration on restart
             // This is CRITICAL for validator restart: without it, a restarted validator
             // would create CARs at position 0, but other validators expect continuity
@@ -557,6 +611,14 @@ impl Node {
             // Wrap receiver in Option so we can move it into worker 0's bridge
             let mut mempool_tx_receiver_opt = Some(mempool_tx_receiver);
 
+            // Create batch storage adapter for Workers to persist batches
+            // This is CRITICAL: Workers must use the same storage as ExecutionBridge
+            // so that batches can be retrieved when executing Cuts.
+            let worker_batch_storage: Option<Arc<dyn DclBatchStore>> = self
+                .dcl_store
+                .clone()
+                .map(|store| Arc::new(DclStoreBatchAdapter::new(store)) as Arc<dyn DclBatchStore>);
+
             // Spawn Workers and wire up channels
             // Workers receive batches from peers and notify Primary when batches are ready
             for (worker_idx, mut from_primary_rx) in worker_rxs.into_iter().enumerate() {
@@ -591,9 +653,20 @@ impl Node {
                     });
                 }
 
-                // Create Worker config and spawn
-                let worker_config = WorkerConfig::new(self.validator_id, worker_id);
-                let mut worker_handle = Worker::spawn(worker_config, Box::new(worker_network));
+                // Create Worker config and spawn with batch storage
+                // Passing the storage adapter ensures batches are persisted and retrievable
+                // during Cut execution (for transaction inclusion in blocks)
+                //
+                // IMPORTANT: flush_interval (50ms) must be shorter than Primary's car_interval (100ms)
+                // to ensure batches are flushed before Cars are created. Without this, there's a race
+                // condition where Primary creates empty Cars before Worker flushes pending batches.
+                let worker_config = WorkerConfig::new(self.validator_id, worker_id)
+                    .with_flush_interval(std::time::Duration::from_millis(50));
+                let mut worker_handle = Worker::spawn_with_storage(
+                    worker_config,
+                    Box::new(worker_network),
+                    worker_batch_storage.clone(),
+                );
 
                 // Combined bridge task: handles all communication with Worker
                 // - Primary -> Worker: forward batch requests
@@ -611,6 +684,15 @@ impl Node {
                 tokio::spawn(async move {
                     // Move mempool_rx into the async block
                     let mut mempool_rx = mempool_rx;
+                    info!(
+                        "Worker {} bridge started (mempool_rx: {})",
+                        worker_id,
+                        if mempool_rx.is_some() {
+                            "enabled"
+                        } else {
+                            "disabled"
+                        }
+                    );
                     loop {
                         // Use a macro-like pattern to handle optional mempool receiver
                         // Worker 0 has mempool_rx, others don't
@@ -660,6 +742,7 @@ impl Node {
                             msg = worker_handle.recv_from_worker() => {
                                 match msg {
                                     Some(m) => {
+                                        info!("Worker {} bridge forwarding {:?} to Primary", worker_id, m);
                                         if primary_worker_sender.send(m).await.is_err() {
                                             warn!("Worker {} send to primary failed", worker_id);
                                             break;

@@ -477,6 +477,10 @@ impl Primary {
 
                 // Periodic Car creation
                 _ = car_interval.tick() => {
+                    let pending_count = self.state.pending_digests.len();
+                    if pending_count > 0 {
+                        info!(pending_count, "car_interval tick - has pending digests");
+                    }
                     self.try_create_car().await;
                 }
 
@@ -502,11 +506,12 @@ impl Primary {
                 tx_count,
                 byte_size,
             } => {
-                trace!(
+                info!(
                     worker_id,
                     tx_count,
                     byte_size,
-                    "Received batch digest from Worker"
+                    digest = %digest,
+                    "Primary received batch digest from Worker"
                 );
                 self.state
                     .add_batch_digest(BatchDigest::new(worker_id, digest, tx_count, byte_size));
@@ -516,10 +521,12 @@ impl Primary {
             }
 
             WorkerToPrimary::BatchSynced { digest, success } => {
-                debug!(
+                // DIAGNOSTIC: Log at INFO level to debug batch sync flow
+                info!(
                     digest = %digest,
                     success,
-                    "Batch sync result"
+                    awaiting_cars_count = self.state.cars_awaiting_batches.len(),
+                    "BatchSynced received at Primary"
                 );
 
                 if success {
@@ -528,15 +535,47 @@ impl Primary {
 
                     // Check if any waiting Cars are now ready
                     let ready_cars = self.state.get_ready_cars();
+
+                    // DIAGNOSTIC: Log ready cars count
+                    info!(
+                        digest = %digest,
+                        ready_count = ready_cars.len(),
+                        remaining_awaiting = self.state.cars_awaiting_batches.len(),
+                        "Checked for ready Cars after batch sync"
+                    );
                     for car in ready_cars {
-                        debug!(
+                        // IMPORTANT: The Car was already validated when first received
+                        // (position check, signature, parent_ref all passed). We queued
+                        // it only because batches were missing. Now that batches are
+                        // available, we directly create the attestation without re-running
+                        // validation (which would fail position check since subsequent
+                        // Cars have already advanced the position counter).
+                        info!(
                             proposer = %car.proposer,
                             position = car.position,
-                            "Processing Car that was waiting for batches"
+                            batch_count = car.batch_digests.len(),
+                            "Creating attestation after batch sync completed"
                         );
-                        // Re-process the Car now that batches are available
-                        // Use a dummy validator since we already have the Car
-                        self.handle_received_car(car.proposer, car).await;
+
+                        // Create attestation directly (skip position re-validation)
+                        let attestation = self.core.create_attestation(&car);
+
+                        // Track attestation sent metric
+                        DCL_ATTESTATIONS_SENT.inc();
+
+                        // Send attestation to proposer
+                        self.network
+                            .send_attestation(car.proposer, &attestation)
+                            .await;
+
+                        // Emit event
+                        let _ = self
+                            .event_sender
+                            .send(PrimaryEvent::AttestationGenerated {
+                                car_proposer: car.proposer,
+                                attestation,
+                            })
+                            .await;
                     }
                 }
             }
@@ -740,25 +779,44 @@ impl Primary {
                     "Batch response received"
                 );
             }
+
+            DclMessage::CarWithAttestation { car, attestation } => {
+                self.handle_received_car_with_attestation(peer, car, *attestation)
+                    .await;
+            }
         }
     }
 
     /// Handle a received Car
     async fn handle_received_car(&mut self, from: ValidatorId, car: Car) {
-        debug!(
-            from = %from,
-            proposer = %car.proposer,
-            position = car.position,
-            "Received Car"
-        );
+        // DIAGNOSTIC: Log at INFO level for batched Cars to trace attestation flow
+        let batch_count = car.batch_digests.len();
+        if batch_count > 0 {
+            info!(
+                from = %from,
+                proposer = %car.proposer,
+                position = car.position,
+                batch_count,
+                "Received BATCHED Car from peer"
+            );
+        } else {
+            debug!(
+                from = %from,
+                proposer = %car.proposer,
+                position = car.position,
+                "Received Car"
+            );
+        }
 
         // Check batch availability (T097)
         let (has_all_batches, missing_digests) = self.state.check_batch_availability(&car);
 
         if !has_all_batches {
-            debug!(
+            // DIAGNOSTIC: Log at INFO to trace batch sync trigger
+            info!(
                 proposer = %car.proposer,
                 position = car.position,
+                batch_count,
                 missing_count = missing_digests.len(),
                 "Car missing batches, triggering sync"
             );
@@ -769,6 +827,15 @@ impl Primary {
                 // Add to awaiting queue (T098)
                 self.state
                     .add_car_awaiting_batches(car.clone(), missing_digests.clone());
+
+                // DIAGNOSTIC: Confirm Car added to awaiting queue
+                info!(
+                    proposer = %car.proposer,
+                    position = car.position,
+                    car_hash = %car_hash,
+                    awaiting_count = self.state.cars_awaiting_batches.len(),
+                    "Car added to awaiting queue"
+                );
 
                 // Track sync request metric
                 DCL_SYNC_REQUESTS.inc();
@@ -887,10 +954,10 @@ impl Primary {
 
     /// Handle a received attestation
     async fn handle_received_attestation(&mut self, attestation: Attestation) {
-        debug!(
+        info!(
             attester = %attestation.attester,
             car_hash = %attestation.car_hash,
-            "Received attestation"
+            "Received attestation from peer"
         );
 
         // Track attestation received metric
@@ -910,10 +977,10 @@ impl Primary {
         match self.attestation_collector.add_attestation(attestation) {
             Ok(Some(aggregated)) => {
                 // Threshold reached - Car is ready for Cut
-                debug!(
+                info!(
                     car_hash = %aggregated.car_hash,
                     count = aggregated.count(),
-                    "Attestation threshold reached"
+                    "Attestation threshold reached - Car ready for Cut"
                 );
 
                 // Track quorum reached metric
@@ -950,6 +1017,32 @@ impl Primary {
         if let Some(pending) = self.state.remove_pending_car(&aggregated.car_hash) {
             let car = pending.car;
 
+            info!(
+                position = car.position,
+                batch_count = car.batch_digests.len(),
+                car_hash = %aggregated.car_hash,
+                attestation_count = aggregated.count(),
+                "Car marked as attested - broadcasting to peers"
+            );
+
+            // CRITICAL FIX: Broadcast CarWithAttestation to all peers
+            //
+            // This ensures that ALL validators know about this attested Car, not just
+            // the proposer who collected attestations. Without this broadcast, when
+            // another validator is the consensus proposer, their Cut would not include
+            // this Car because it's not in their attested_cars.
+            //
+            // Flow:
+            // 1. This validator (Car proposer) collects 2f+1 attestations
+            // 2. Broadcast (Car, AggregatedAttestation) to all peers
+            // 3. Peers receive and verify, then add to their attested_cars
+            // 4. Now ALL validators can include this Car in their Cut
+            let broadcast_msg = DclMessage::CarWithAttestation {
+                car: car.clone(),
+                attestation: Box::new(aggregated.clone()),
+            };
+            self.network.broadcast(&broadcast_msg).await;
+
             // Mark as attested with the aggregated attestation (contains BLS aggregate signature)
             self.state.mark_attested(car.clone(), aggregated);
 
@@ -958,26 +1051,161 @@ impl Primary {
 
             // Try to form a Cut
             self.try_form_cut().await;
+        } else {
+            warn!(
+                car_hash = %aggregated.car_hash,
+                "Threshold reached but Car not found in pending state"
+            );
         }
+    }
+
+    /// Handle a received CarWithAttestation broadcast
+    ///
+    /// This is called when another validator broadcasts that their Car has reached
+    /// the attestation threshold. We verify the attestation and add the Car to our
+    /// attested_cars so it can be included in our Cut.
+    async fn handle_received_car_with_attestation(
+        &mut self,
+        from: ValidatorId,
+        car: Car,
+        attestation: AggregatedAttestation,
+    ) {
+        let car_hash = car.hash();
+
+        // DIAGNOSTIC: Log at entry to confirm message was received
+        info!(
+            from = %from,
+            proposer = %car.proposer,
+            position = car.position,
+            batch_count = car.batch_digests.len(),
+            attestation_count = attestation.count(),
+            "Received CarWithAttestation broadcast"
+        );
+
+        // Skip if this is our own Car (we already have it from attestation collection)
+        if car.proposer == self.config.validator_id {
+            trace!(
+                car_hash = %car_hash,
+                "Ignoring CarWithAttestation for our own Car"
+            );
+            return;
+        }
+
+        // Check if we should skip this Car
+        // IMPORTANT: Don't skip if the incoming Car has batches and existing is empty!
+        // This ensures batched Cars are always preferred over empty Cars.
+        if self.state.attested_cars.contains_key(&car.proposer) {
+            let existing = &self.state.attested_cars[&car.proposer];
+            let existing_has_batches = !existing.0.batch_digests.is_empty();
+            let incoming_has_batches = !car.batch_digests.is_empty();
+
+            // Only skip if:
+            // 1. We already have a batched Car (preserve batched Cars)
+            // 2. OR both are empty/batched and existing has higher/equal position
+            let should_skip = existing_has_batches
+                || (!incoming_has_batches && existing.0.position >= car.position);
+
+            if should_skip {
+                trace!(
+                    proposer = %car.proposer,
+                    position = car.position,
+                    existing_position = existing.0.position,
+                    existing_has_batches,
+                    incoming_has_batches,
+                    "Skipping CarWithAttestation (existing preferred)"
+                );
+                return;
+            }
+
+            // Incoming has batches but existing is empty - will replace!
+            info!(
+                proposer = %car.proposer,
+                incoming_position = car.position,
+                incoming_batches = car.batch_digests.len(),
+                existing_position = existing.0.position,
+                "Replacing empty Car with batched Car from peer"
+            );
+        }
+
+        // Verify the attestation using Core's pubkey lookup
+        let core = &self.core;
+        if !attestation.verify(|idx| core.get_pubkey_by_index(idx)) {
+            warn!(
+                from = %from,
+                car_hash = %car_hash,
+                "Invalid aggregated attestation signature"
+            );
+            return;
+        }
+
+        // Verify the attestation count meets threshold
+        if attestation.count() < self.core.attestation_threshold() {
+            warn!(
+                from = %from,
+                car_hash = %car_hash,
+                count = attestation.count(),
+                threshold = self.core.attestation_threshold(),
+                "Attestation count below threshold"
+            );
+            return;
+        }
+
+        info!(
+            from = %from,
+            proposer = %car.proposer,
+            position = car.position,
+            batch_count = car.batch_digests.len(),
+            attestation_count = attestation.count(),
+            "Received valid CarWithAttestation from peer"
+        );
+
+        // Persist attestation to storage if available
+        if let Some(ref storage) = self.storage {
+            if let Err(e) = storage.put_attestation(attestation.clone()).await {
+                error!(
+                    car_hash = %car_hash,
+                    error = %e,
+                    "Failed to persist received attestation to storage"
+                );
+            }
+        }
+
+        // Add to attested_cars (this enables Cut formation)
+        self.state.mark_attested(car.clone(), attestation);
+
+        // Track total attested CARs (DAG certificates)
+        DCL_DAG_CERTIFICATES.set(self.state.attested_cars.len() as f64);
+
+        // Try to form a Cut with this newly attested Car
+        self.try_form_cut().await;
     }
 
     /// Try to create a new Car
     async fn try_create_car(&mut self) {
         let pending_digests = self.state.take_pending_digests();
         let is_empty = pending_digests.is_empty();
+        let digest_count = pending_digests.len();
 
         // Check empty car policy
         if is_empty && !self.state.can_create_empty_car(self.config.max_empty_cars) {
-            // Skip this round
+            // Skip this round - no digests to restore since is_empty
             return;
         }
 
         let position = self.state.our_position;
         let parent_ref = self.state.last_car_hash;
 
+        // Log state before Car creation attempt for debugging
+        info!(
+            position,
+            has_parent_ref = parent_ref.is_some(),
+            digest_count,
+            "Attempting to create Car"
+        );
+
         match self.proposer.create_car(
             position,
-            pending_digests,
+            pending_digests.clone(),
             parent_ref,
             self.state.empty_car_count,
         ) {
@@ -995,11 +1223,11 @@ impl Primary {
                     self.cut_start_time = Some(Instant::now());
                 }
 
-                debug!(
+                info!(
                     position = car.position,
                     batch_count = car.batch_digests.len(),
                     hash = %car_hash,
-                    "Created Car"
+                    "Created Car successfully"
                 );
 
                 // Persist to storage if available (T091)
@@ -1038,11 +1266,27 @@ impl Primary {
 
             Ok(None) => {
                 // Cannot create empty Car (policy)
+                // Restore digests so they aren't lost
+                for digest in pending_digests {
+                    self.state.add_batch_digest(digest);
+                }
                 trace!("Skipping Car creation (empty car policy)");
             }
 
             Err(e) => {
-                error!(error = %e, "Failed to create Car");
+                // CRITICAL FIX: Restore pending digests on error
+                // Without this, transactions would be lost when Car creation fails
+                // (e.g., due to missing parent_ref when position > 0)
+                for digest in pending_digests {
+                    self.state.add_batch_digest(digest);
+                }
+                error!(
+                    error = %e,
+                    position,
+                    has_parent_ref = parent_ref.is_some(),
+                    digest_count,
+                    "Failed to create Car - digests restored"
+                );
             }
         }
     }
@@ -1052,22 +1296,41 @@ impl Primary {
         let timed_out = self.attestation_collector.check_timeouts();
 
         for (hash, car) in timed_out {
+            let has_batches = !car.batch_digests.is_empty();
+
             // Apply backoff
             if self.attestation_collector.apply_backoff(&hash) {
                 debug!(
                     hash = %hash,
                     position = car.position,
+                    has_batches,
                     "Applying attestation timeout backoff"
                 );
                 // Could re-broadcast Car here
             } else {
-                warn!(
-                    hash = %hash,
-                    position = car.position,
-                    "Car attestation failed after max retries"
-                );
-                self.attestation_collector.remove(&hash);
-                self.state.remove_pending_car(&hash);
+                // IMPORTANT: Don't timeout Cars with batches!
+                // Peers need extra time to sync batch data before they can attest.
+                // Without this, batched Cars timeout before peers finish syncing,
+                // causing attestations to be rejected with UnknownCar error.
+                if has_batches {
+                    // Reset the timeout without losing existing attestations
+                    info!(
+                        hash = %hash,
+                        position = car.position,
+                        batch_count = car.batch_digests.len(),
+                        attestation_count = self.attestation_collector.attestation_count(&hash).unwrap_or(0),
+                        "Extending timeout for batched Car - peers may still be syncing"
+                    );
+                    self.attestation_collector.reset_timeout(&hash);
+                } else {
+                    warn!(
+                        hash = %hash,
+                        position = car.position,
+                        "Car attestation failed after max retries"
+                    );
+                    self.attestation_collector.remove(&hash);
+                    self.state.remove_pending_car(&hash);
+                }
             }
         }
     }
@@ -1119,9 +1382,13 @@ impl Primary {
                             .observe(start.elapsed().as_secs_f64());
                     }
 
-                    debug!(
+                    // Calculate total batches in this Cut for diagnostics
+                    let total_batches: usize =
+                        cut.cars.values().map(|c| c.batch_digests.len()).sum();
+                    info!(
                         height = cut.height,
                         validators = cut.validator_count(),
+                        total_batches,
                         "Formed Cut"
                     );
 

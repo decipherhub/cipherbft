@@ -1533,9 +1533,10 @@ impl ChannelMempoolApi {
 #[async_trait]
 impl MempoolApi for ChannelMempoolApi {
     async fn submit_transaction(&self, tx_bytes: Bytes) -> RpcResult<B256> {
-        debug!(
-            "ChannelMempoolApi::submit_transaction({} bytes)",
-            tx_bytes.len()
+        info!(
+            "ChannelMempoolApi::submit_transaction received {} bytes (chain_id={})",
+            tx_bytes.len(),
+            self.chain_id
         );
 
         // Decode the transaction
@@ -1575,6 +1576,11 @@ impl MempoolApi for ChannelMempoolApi {
         }
 
         // Forward to worker via channel
+        info!(
+            "Sending transaction {} to worker channel (capacity: {})",
+            tx_hash,
+            self.tx_sender.capacity()
+        );
         self.tx_sender.send(tx_bytes.to_vec()).await.map_err(|_| {
             warn!("Failed to send transaction to worker - channel closed");
             RpcError::Execution("Transaction submission failed: worker channel closed".to_string())

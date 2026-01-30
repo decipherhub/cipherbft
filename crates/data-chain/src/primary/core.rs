@@ -34,6 +34,14 @@ impl Core {
         let mut validators: Vec<ValidatorId> = validator_pubkeys.keys().cloned().collect();
         validators.sort(); // Deterministic ordering
 
+        // Log what validators Core is initialized with
+        tracing::info!(
+            our_id = %our_id,
+            validator_count = validators.len(),
+            validators = ?validators,
+            "Core initialized with validators"
+        );
+
         let validator_indices: HashMap<_, _> = validators
             .iter()
             .enumerate()
@@ -63,6 +71,14 @@ impl Core {
     ) -> Result<Option<Attestation>, DclError> {
         // 1. Verify Car signature
         let Some(proposer_pubkey) = self.validator_pubkeys.get(&car.proposer) else {
+            // Log what validators we DO know about for debugging
+            let known_validators: Vec<_> = self.validator_pubkeys.keys().collect();
+            tracing::warn!(
+                car_proposer = %car.proposer,
+                known_count = known_validators.len(),
+                known_validators = ?known_validators,
+                "Rejecting Car from unknown validator"
+            );
             return Err(DclError::UnknownValidator {
                 validator: car.proposer,
             });
@@ -200,9 +216,13 @@ impl Core {
         (self.validator_count() - 1) / 3
     }
 
-    /// Calculate attestation threshold (f + 1)
+    /// Calculate attestation threshold (2f + 1)
+    ///
+    /// We require 2f+1 (quorum) attestations before a Car can be included in a Cut.
+    /// This ensures that a majority of honest validators have received and validated
+    /// the Car's batches before consensus decides on it.
     pub fn attestation_threshold(&self) -> usize {
-        self.f() + 1
+        2 * self.f() + 1
     }
 
     /// Get next validator in round-robin order
@@ -343,20 +363,20 @@ mod tests {
 
     #[test]
     fn test_threshold_calculation() {
-        // n=4, f=1, threshold=2
+        // n=4, f=1, threshold=2f+1=3
         let (core, _, _) = make_test_setup(4);
         assert_eq!(core.f(), 1);
-        assert_eq!(core.attestation_threshold(), 2);
-
-        // n=7, f=2, threshold=3
-        let (core, _, _) = make_test_setup(7);
-        assert_eq!(core.f(), 2);
         assert_eq!(core.attestation_threshold(), 3);
 
-        // n=21, f=6, threshold=7
+        // n=7, f=2, threshold=2f+1=5
+        let (core, _, _) = make_test_setup(7);
+        assert_eq!(core.f(), 2);
+        assert_eq!(core.attestation_threshold(), 5);
+
+        // n=21, f=6, threshold=2f+1=13
         let (core, _, _) = make_test_setup(21);
         assert_eq!(core.f(), 6);
-        assert_eq!(core.attestation_threshold(), 7);
+        assert_eq!(core.attestation_threshold(), 13);
     }
 
     #[test]

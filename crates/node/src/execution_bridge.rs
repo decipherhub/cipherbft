@@ -235,9 +235,17 @@ impl ExecutionBridge {
         &self,
         consensus_cut: cipherbft_data_chain::Cut,
     ) -> anyhow::Result<BlockExecutionResult> {
-        debug!(
+        // Count total batch digests across all cars
+        let total_batches: usize = consensus_cut
+            .cars
+            .values()
+            .map(|car| car.batch_digests.len())
+            .sum();
+
+        info!(
             height = consensus_cut.height,
             cars = consensus_cut.cars.len(),
+            total_batches,
             "Executing Cut"
         );
 
@@ -316,13 +324,28 @@ impl ExecutionBridge {
         // Convert Cars from HashMap to sorted Vec
         let mut execution_cars = Vec::new();
 
+        // Track batch fetch statistics for diagnostics
+        let mut batches_expected = 0usize;
+        let mut batches_found = 0usize;
+        let mut total_txs = 0usize;
+
         for (validator_id, car) in consensus_cut.ordered_cars() {
             // Extract transactions from batches by fetching from storage
             let mut transactions = Vec::new();
             for batch_digest in &car.batch_digests {
+                batches_expected += 1;
                 // Fetch the actual batch from storage using its digest
                 match self.dcl_store.get_batch(&batch_digest.digest).await {
                     Ok(Some(batch)) => {
+                        batches_found += 1;
+                        let tx_count = batch.transactions.len();
+                        total_txs += tx_count;
+                        debug!(
+                            digest = %batch_digest.digest,
+                            worker_id = batch_digest.worker_id,
+                            tx_count,
+                            "Batch found in storage"
+                        );
                         // Convert each transaction (Vec<u8>) to Bytes
                         for tx in batch.transactions {
                             transactions.push(Bytes::from(tx));
@@ -332,14 +355,14 @@ impl ExecutionBridge {
                         warn!(
                             digest = %batch_digest.digest,
                             worker_id = batch_digest.worker_id,
-                            "Batch not found in storage, skipping"
+                            "Batch not found in storage, skipping - TRANSACTIONS WILL BE LOST"
                         );
                     }
                     Err(e) => {
                         warn!(
                             digest = %batch_digest.digest,
                             error = %e,
-                            "Failed to fetch batch from storage"
+                            "Failed to fetch batch from storage - TRANSACTIONS WILL BE LOST"
                         );
                     }
                 }
@@ -351,6 +374,18 @@ impl ExecutionBridge {
             };
 
             execution_cars.push(execution_car);
+        }
+
+        // Log summary at INFO level for easy diagnosis
+        if batches_expected > 0 {
+            info!(
+                height = consensus_cut.height,
+                batches_expected,
+                batches_found,
+                batches_missing = batches_expected - batches_found,
+                total_txs,
+                "convert_cut batch fetch summary"
+            );
         }
 
         // Read the parent hash from the last executed block

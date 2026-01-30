@@ -6,7 +6,7 @@
 //! The [`decode`] and [`decode_bounded`] methods enforce size limits defined
 //! in the [`crate::error`] module.
 
-use crate::attestation::Attestation;
+use crate::attestation::{AggregatedAttestation, Attestation};
 use crate::batch::Batch;
 use crate::car::Car;
 use crate::error::{MAX_MESSAGE_SIZE, MAX_RESPONSE_DATA_SIZE, MAX_SYNC_DIGESTS};
@@ -196,6 +196,18 @@ pub enum DclMessage {
         #[serde(deserialize_with = "deserialize_bounded_bytes")]
         data: Option<Vec<u8>>,
     },
+
+    /// Broadcast when Car reaches attestation threshold
+    ///
+    /// Contains the Car and its aggregated attestation (with 2f+1 signatures).
+    /// Allows all validators to include this Car in their Cut, even if they
+    /// weren't the Car proposer and didn't collect attestations for it.
+    CarWithAttestation {
+        /// The Car that reached attestation threshold
+        car: Car,
+        /// Aggregated attestation with 2f+1 signatures (boxed to reduce enum size)
+        attestation: Box<AggregatedAttestation>,
+    },
 }
 
 impl DclMessage {
@@ -208,6 +220,7 @@ impl DclMessage {
             DclMessage::CarResponse(_) => 0x04,
             DclMessage::BatchRequest { .. } => 0x05,
             DclMessage::BatchResponse { .. } => 0x06,
+            DclMessage::CarWithAttestation { .. } => 0x07,
         }
     }
 
@@ -249,6 +262,7 @@ impl DclMessage {
             DclMessage::CarResponse(_) => "CarResponse",
             DclMessage::BatchRequest { .. } => "BatchRequest",
             DclMessage::BatchResponse { .. } => "BatchResponse",
+            DclMessage::CarWithAttestation { .. } => "CarWithAttestation",
         }
     }
 }

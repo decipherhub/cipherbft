@@ -136,6 +136,9 @@ pub struct PrimaryState {
     pub preserved_attested_cars: HashMap<ValidatorId, (Car, AggregatedAttestation)>,
     /// Last finalized height
     pub last_finalized_height: u64,
+    /// Last Car position included in a decided Cut, per validator
+    /// Used to determine if an attested Car has already been "used"
+    pub last_included_positions: HashMap<ValidatorId, u64>,
 }
 
 impl PrimaryState {
@@ -162,6 +165,7 @@ impl PrimaryState {
             cars_awaiting_gap_sync: HashMap::new(),
             pending_car_requests: HashMap::new(),
             attested_cars: HashMap::new(),
+            last_included_positions: HashMap::new(),
             last_attested_idx: 0,
             equivocations: HashMap::new(),
             equivocation_retention,
@@ -207,6 +211,10 @@ impl PrimaryState {
         for (validator, car) in &cut.cars {
             state.last_seen_positions.insert(*validator, car.position);
             state.last_seen_car_hashes.insert(*validator, car.hash());
+            // Track positions included in the cut (used for batch preservation logic)
+            state
+                .last_included_positions
+                .insert(*validator, car.position);
 
             // If this is our own CAR, restore our position state
             if *validator == our_id {
@@ -286,6 +294,12 @@ impl PrimaryState {
     ///
     /// This method updates `last_seen_positions` and `last_seen_car_hashes` for
     /// each CAR in the decided Cut if the position is higher than what we've seen.
+    ///
+    /// IMPORTANT: Also syncs our own position from finalized cuts to prevent drift.
+    /// During sync, a validator creates Cars at regular intervals that fail attestation
+    /// (peers haven't caught up yet), but our_position keeps incrementing. When sync
+    /// completes, our_position has drifted far ahead of what peers expect. By resetting
+    /// our_position from the finalized cut containing our Car, we re-sync with the network.
     pub fn sync_positions_from_cut(&mut self, cut: &Cut) {
         for (validator, car) in &cut.cars {
             let current_pos = self.last_seen_positions.get(validator).copied();
@@ -293,6 +307,48 @@ impl PrimaryState {
             if current_pos.is_none_or(|p| car.position > p) {
                 self.last_seen_positions.insert(*validator, car.position);
                 self.last_seen_car_hashes.insert(*validator, car.hash());
+            }
+            // Track which positions have been included in decided Cuts
+            // This is used by mark_attested to determine if a Car with batches
+            // has already been "used" and can be safely replaced
+            let old_last_included = self.last_included_positions.get(validator).copied();
+            if old_last_included.is_none_or(|p| car.position > p) {
+                self.last_included_positions
+                    .insert(*validator, car.position);
+            }
+
+            // CRITICAL: Remove attested Cars that were included in this Cut
+            // This prevents the same Car from being included in subsequent Cuts.
+            // Only remove if the attested Car's position matches what was included;
+            // if a newer Car arrived while consensus was deciding, it has a higher
+            // position and should be preserved for the next Cut.
+            if let Some((attested_car, _)) = self.attested_cars.get(validator) {
+                if attested_car.position == car.position {
+                    self.attested_cars.remove(validator);
+                }
+            }
+
+            // Also sync our own position from finalized cuts to prevent position drift
+            // This is critical for validators catching up during sync:
+            // - While syncing, we create Cars that fail attestation (position mismatch)
+            // - our_position increments on creation, not finalization
+            // - By sync completion, our_position has drifted ahead of peers' expectations
+            // - Reset our_position from finalized cut to re-sync with network consensus
+            if *validator == self.our_id {
+                let finalized_next = car.position + 1;
+                // Only reset if the finalized position is behind our current position
+                // This handles the case where we're catching up and need to re-sync
+                if finalized_next <= self.our_position && self.our_position > 0 {
+                    tracing::info!(
+                        validator = %self.our_id,
+                        old_position = self.our_position,
+                        finalized_position = car.position,
+                        new_position = finalized_next,
+                        "Resetting our_position from finalized cut (position drift correction)"
+                    );
+                    self.our_position = finalized_next;
+                    self.last_car_hash = Some(car.hash());
+                }
             }
         }
     }
@@ -328,8 +384,53 @@ impl PrimaryState {
     /// # Arguments
     /// * `car` - The Car that has been attested
     /// * `aggregated` - The aggregated attestation with BLS aggregate signature
+    ///
+    /// # Note
+    /// This implements a policy to preserve Cars with batches (transactions):
+    /// - A Car with batches will always be stored
+    /// - An empty Car will only overwrite if:
+    ///   - The existing Car is also empty, OR
+    ///   - The existing Car's position has been included in a decided Cut
+    /// - This prevents the race condition where empty Cars get attested faster
+    ///   than Cars with batches (due to batch sync delays), causing transactions
+    ///   to be lost from Cuts.
     pub fn mark_attested(&mut self, car: Car, aggregated: AggregatedAttestation) {
         let validator = car.proposer;
+        let new_has_batches = !car.batch_digests.is_empty();
+
+        // Check if we should replace the existing attested Car
+        if let Some((existing_car, _)) = self.attested_cars.get(&validator) {
+            let existing_has_batches = !existing_car.batch_digests.is_empty();
+            let last_included = self
+                .last_included_positions
+                .get(&validator)
+                .copied()
+                .unwrap_or(0);
+
+            // Don't replace a Car with batches with an empty Car, UNLESS the
+            // existing Car's position has already been included in a decided Cut
+            if existing_has_batches
+                && !new_has_batches
+                && car.position > existing_car.position
+                && existing_car.position > last_included
+            {
+                tracing::info!(
+                    validator = %validator,
+                    existing_position = existing_car.position,
+                    existing_batches = existing_car.batch_digests.len(),
+                    new_position = car.position,
+                    last_included,
+                    "Preserving Car with batches, deferring empty Car"
+                );
+                return;
+            }
+
+            // Allow replacement if:
+            // 1. New Car has batches (prioritize transactions)
+            // 2. Both are empty (normal progression)
+            // 3. Existing Car was already included in a Cut (position <= last_included)
+        }
+
         self.attested_cars.insert(validator, (car, aggregated));
     }
 
@@ -403,8 +504,20 @@ impl PrimaryState {
     // =========================================================
 
     /// Add Car to awaiting batches queue
+    ///
+    /// IMPORTANT: We update position tracking immediately even though batches aren't ready.
+    /// This allows subsequent Cars from the same proposer to be validated (sequential position
+    /// check) and their parent_ref to be verified (requires knowing the parent hash).
+    ///
+    /// When batch sync completes, we generate the attestation directly without re-validating
+    /// position (since we already did that when the Car first arrived).
     pub fn add_car_awaiting_batches(&mut self, car: Car, missing_digests: Vec<Hash>) {
         let car_hash = car.hash();
+
+        // Update position tracking so subsequent Cars can be validated
+        // This is safe because we've already verified this Car's position is sequential
+        self.update_last_seen(car.proposer, car.position, car_hash);
+
         self.cars_awaiting_batches.insert(
             car_hash,
             CarAwaitingBatches {
@@ -423,7 +536,21 @@ impl PrimaryState {
         let mut ready_hashes = Vec::new();
 
         for (hash, awaiting) in &self.cars_awaiting_batches {
-            let (has_all, _) = self.check_batch_availability(&awaiting.car);
+            let (has_all, missing) = self.check_batch_availability(&awaiting.car);
+
+            // DIAGNOSTIC: Log each awaiting Car's status
+            if !has_all {
+                tracing::debug!(
+                    car_hash = %hash,
+                    proposer = %awaiting.car.proposer,
+                    position = awaiting.car.position,
+                    car_batch_count = awaiting.car.batch_digests.len(),
+                    still_missing = missing.len(),
+                    available_batches_count = self.available_batches.len(),
+                    "Car still waiting for batches"
+                );
+            }
+
             if has_all {
                 ready.push(awaiting.car.clone());
                 ready_hashes.push(*hash);
@@ -1572,5 +1699,241 @@ mod tests {
 
         // Other validator's position is tracked
         assert_eq!(state.expected_position(&validator_b), 26);
+    }
+
+    // =========================================================
+    // Position Drift Correction Tests
+    // =========================================================
+
+    /// Test that sync_positions_from_cut corrects position drift during sync.
+    ///
+    /// This is the fix for Car attestation failures after validator restart:
+    /// - While syncing, validator creates Cars at 100ms intervals
+    /// - All Cars fail attestation (peers haven't caught up yet)
+    /// - But our_position increments on creation, not finalization
+    /// - By sync completion, our_position has drifted far ahead
+    /// - sync_positions_from_cut must reset our_position from finalized cuts
+    #[test]
+    fn test_sync_positions_corrects_our_position_drift() {
+        use crate::car::Car;
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let mut state = PrimaryState::new(our_id, 1000);
+
+        // Simulate position drift during sync:
+        // - We created Cars at positions 0, 1, 2, ... 100 that all failed attestation
+        // - Our position is now 101 (next to create)
+        state.our_position = 101;
+        state.last_car_hash = Some(Hash::compute(b"our_car100"));
+
+        // But consensus only decided on our Car at position 50
+        // (the last one that actually got attested before we fell behind)
+        let mut decided_cut = Cut::new(10);
+        let car_at_50 = Car::new(our_id, 50, vec![], Some(Hash::compute(b"our_car49")));
+        decided_cut.cars.insert(our_id, car_at_50.clone());
+
+        // Before sync, our_position is drifted ahead
+        assert_eq!(state.our_position, 101);
+
+        // Sync from finalized cut
+        state.sync_positions_from_cut(&decided_cut);
+
+        // After sync, our_position should be reset to 51 (finalized 50 + 1)
+        assert_eq!(
+            state.our_position, 51,
+            "our_position should be reset from finalized cut to correct drift"
+        );
+        assert_eq!(
+            state.last_car_hash,
+            Some(car_at_50.hash()),
+            "last_car_hash should be updated to finalized Car"
+        );
+    }
+
+    /// Test that sync_positions_from_cut does NOT reset position if we're ahead legitimately.
+    ///
+    /// This ensures the fix doesn't break normal operation where our_position
+    /// is ahead because we've successfully created and had Cars attested.
+    #[test]
+    fn test_sync_positions_does_not_reset_if_finalized_is_behind() {
+        use crate::car::Car;
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let mut state = PrimaryState::new(our_id, 1000);
+
+        // Normal operation: we're at position 10 and properly synced
+        state.our_position = 10;
+        state.last_car_hash = Some(Hash::compute(b"our_car9"));
+
+        // Receive a cut containing our Car at position 9 (the previous one)
+        // This is normal - we created position 10 but it's not in this cut yet
+        let mut decided_cut = Cut::new(5);
+        let car_at_9 = Car::new(our_id, 9, vec![], Some(Hash::compute(b"our_car8")));
+        decided_cut.cars.insert(our_id, car_at_9.clone());
+
+        // Sync from cut
+        state.sync_positions_from_cut(&decided_cut);
+
+        // our_position should remain 10 - we don't want to go backwards
+        // in normal operation when we're just one step ahead
+        assert_eq!(
+            state.our_position, 10,
+            "our_position should not be reset when legitimately ahead"
+        );
+    }
+
+    /// Test position drift correction with position 0 edge case.
+    #[test]
+    fn test_sync_positions_handles_zero_position() {
+        use crate::car::Car;
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let mut state = PrimaryState::new(our_id, 1000);
+
+        // Start fresh at position 0
+        assert_eq!(state.our_position, 0);
+
+        // Receive cut with our Car at position 0
+        let mut decided_cut = Cut::new(1);
+        let car_at_0 = Car::new(our_id, 0, vec![], None);
+        decided_cut.cars.insert(our_id, car_at_0.clone());
+
+        // Sync from cut
+        state.sync_positions_from_cut(&decided_cut);
+
+        // Position 0 finalized means next is 1, but we're also at 0
+        // The condition `finalized_next <= our_position && our_position > 0` is false
+        // so we don't reset (correct behavior - we're not drifted)
+        assert_eq!(state.our_position, 0);
+    }
+
+    /// Test sync_positions_from_cut when our validator is NOT in the cut.
+    #[test]
+    fn test_sync_positions_our_validator_not_in_cut() {
+        use crate::car::Car;
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let validator_b = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
+        let mut state = PrimaryState::new(our_id, 1000);
+
+        // We have drifted position
+        state.our_position = 50;
+
+        // Cut doesn't contain our validator
+        let mut decided_cut = Cut::new(10);
+        let car_b = Car::new(validator_b, 20, vec![], None);
+        decided_cut.cars.insert(validator_b, car_b);
+
+        // Sync from cut
+        state.sync_positions_from_cut(&decided_cut);
+
+        // our_position unchanged since we're not in the cut
+        assert_eq!(
+            state.our_position, 50,
+            "our_position should not change if we're not in the cut"
+        );
+
+        // But other validator's position is updated
+        assert_eq!(state.expected_position(&validator_b), 21);
+    }
+
+    // =========================================================
+    // Attested Cars Clearing After Cut Decision Tests
+    // =========================================================
+
+    /// Test that attested Cars are cleared after being included in a decided Cut.
+    ///
+    /// This prevents the same Car from being included in multiple Cuts, which
+    /// would cause duplicate transaction execution attempts.
+    #[test]
+    fn test_attested_cars_cleared_after_cut_decision() {
+        use crate::car::Car;
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let mut state = PrimaryState::new(our_id, 1000);
+
+        let validator = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
+
+        // Create and attest a Car at position 5
+        let car_at_5 = Car::new(validator, 5, vec![], None);
+        let agg = create_aggregated_attestation(&car_at_5, &[0, 1], 4);
+        state.mark_attested(car_at_5.clone(), agg);
+
+        // Verify the Car is in attested_cars
+        assert!(
+            state.attested_cars.contains_key(&validator),
+            "Car should be in attested_cars before cut decision"
+        );
+        assert_eq!(state.attested_cars.get(&validator).unwrap().0.position, 5);
+
+        // Consensus decides with this Car
+        let mut decided_cut = Cut::new(1);
+        decided_cut.cars.insert(validator, car_at_5.clone());
+
+        // Sync from the decided cut
+        state.sync_positions_from_cut(&decided_cut);
+
+        // Attested Car should be CLEARED because it was included in the cut
+        assert!(
+            !state.attested_cars.contains_key(&validator),
+            "Attested Car should be cleared after being included in a decided Cut"
+        );
+
+        // Position tracking should be updated
+        assert_eq!(state.expected_position(&validator), 6);
+        assert_eq!(
+            state.last_included_positions.get(&validator),
+            Some(&5),
+            "last_included_positions should track the included position"
+        );
+    }
+
+    /// Test that newer attested Cars are NOT cleared after cut decision.
+    ///
+    /// If a newer Car arrives while consensus is deciding, it should be preserved
+    /// for inclusion in the next Cut.
+    #[test]
+    fn test_newer_attested_car_preserved_after_cut_decision() {
+        use crate::car::Car;
+        use crate::cut::Cut;
+
+        let our_id = ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]);
+        let mut state = PrimaryState::new(our_id, 1000);
+
+        let validator = ValidatorId::from_bytes([2u8; VALIDATOR_ID_SIZE]);
+
+        // Create and attest a Car at position 6 (newer than what will be in the cut)
+        let car_at_6 = Car::new(validator, 6, vec![], Some(Hash::compute(b"car5")));
+        let agg = create_aggregated_attestation(&car_at_6, &[0, 1], 4);
+        state.mark_attested(car_at_6.clone(), agg);
+
+        // Verify the Car is in attested_cars
+        assert_eq!(state.attested_cars.get(&validator).unwrap().0.position, 6);
+
+        // Consensus decides with an OLDER Car at position 5
+        // (this simulates a newer Car arriving while consensus was deciding)
+        let mut decided_cut = Cut::new(1);
+        let car_at_5 = Car::new(validator, 5, vec![], None);
+        decided_cut.cars.insert(validator, car_at_5);
+
+        // Sync from the decided cut
+        state.sync_positions_from_cut(&decided_cut);
+
+        // Attested Car at position 6 should be PRESERVED (not cleared)
+        // because it's newer than what was included
+        assert!(
+            state.attested_cars.contains_key(&validator),
+            "Newer attested Car should be preserved"
+        );
+        assert_eq!(
+            state.attested_cars.get(&validator).unwrap().0.position,
+            6,
+            "The preserved Car should still be at position 6"
+        );
     }
 }

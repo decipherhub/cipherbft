@@ -358,6 +358,12 @@ impl Worker {
         let mut sync_check_interval = interval(Duration::from_millis(500));
         sync_check_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+        info!(
+            worker_id = self.config.worker_id,
+            flush_interval_ms = self.config.flush_interval.as_millis(),
+            "Worker entering main loop"
+        );
+
         while !self.shutdown {
             // Handle peer receiver if available
             let peer_msg = async {
@@ -369,24 +375,39 @@ impl Worker {
             };
 
             tokio::select! {
+                biased;  // Use biased to ensure deterministic branch selection
+
+                // Time-based flush - HIGHEST PRIORITY
+                _ = flush_interval.tick() => {
+                    self.check_time_flush().await;
+                }
+
                 // Handle incoming transactions
-                Some(tx) = self.tx_receiver.recv() => {
-                    self.handle_transaction(tx).await;
+                tx = self.tx_receiver.recv() => {
+                    if let Some(tx) = tx {
+                        self.handle_transaction(tx).await;
+                    } else {
+                        warn!(worker_id = self.config.worker_id, "tx_receiver closed");
+                        self.shutdown = true;
+                    }
                 }
 
                 // Handle messages from Primary
-                Some(msg) = self.from_primary.recv() => {
-                    self.handle_primary_message(msg).await;
+                msg = self.from_primary.recv() => {
+                    if let Some(msg) = msg {
+                        self.handle_primary_message(msg).await;
+                    } else {
+                        warn!(worker_id = self.config.worker_id, "from_primary closed");
+                        self.shutdown = true;
+                    }
                 }
 
                 // Handle messages from peer Workers (T074)
-                Some((peer, msg)) = peer_msg => {
-                    self.handle_peer_message(peer, msg).await;
-                }
-
-                // Time-based flush
-                _ = flush_interval.tick() => {
-                    self.check_time_flush().await;
+                msg = peer_msg => {
+                    if let Some((peer, msg)) = msg {
+                        self.handle_peer_message(peer, msg).await;
+                    }
+                    // If None, channel closed - just continue (peer channel is optional)
                 }
 
                 // Check sync timeouts
@@ -667,11 +688,29 @@ impl Worker {
 
     /// Check if we should flush due to time threshold
     async fn check_time_flush(&mut self) {
-        if self
+        let should_flush = self
             .batch_maker
-            .should_flush_by_time(self.config.flush_interval)
-            && self.batch_maker.has_pending()
-        {
+            .should_flush_by_time(self.config.flush_interval);
+        let has_pending = self.batch_maker.has_pending();
+        let elapsed = self.batch_maker.time_since_batch_start();
+
+        // Log every call so we can see the tick is working
+        if has_pending {
+            info!(
+                worker_id = self.config.worker_id,
+                should_flush,
+                has_pending,
+                elapsed_ms = elapsed.map(|e| e.as_millis()).unwrap_or(0),
+                "check_time_flush called"
+            );
+        }
+
+        if should_flush && has_pending {
+            info!(
+                worker_id = self.config.worker_id,
+                pending_txs = self.batch_maker.pending_count(),
+                "Time flush triggered, creating batch"
+            );
             if let Some(batch) = self.batch_maker.flush() {
                 self.process_batch(batch).await;
             }
@@ -732,7 +771,7 @@ impl Worker {
                 .observe(elapsed.as_secs_f64());
         }
 
-        debug!(
+        info!(
             worker_id = self.config.worker_id,
             tx_count = batch.transactions.len(),
             byte_size = digest.byte_size,
@@ -742,25 +781,56 @@ impl Worker {
 
         // Persist to storage if available (T069)
         if let Some(ref storage) = self.storage {
-            if let Err(e) = storage.put_batch(batch.clone()).await {
-                error!(
-                    worker_id = self.config.worker_id,
-                    digest = %digest.digest,
-                    error = %e,
-                    "Failed to persist batch to storage"
-                );
-                // Continue anyway - in-memory state will still have it
+            match storage.put_batch(batch.clone()).await {
+                Ok(_) => {
+                    info!(
+                        worker_id = self.config.worker_id,
+                        digest = %digest.digest,
+                        tx_count = batch.transactions.len(),
+                        "Batch persisted to storage"
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        worker_id = self.config.worker_id,
+                        digest = %digest.digest,
+                        error = %e,
+                        "Failed to persist batch to storage"
+                    );
+                    // Continue anyway - in-memory state will still have it
+                }
             }
+        } else {
+            warn!(
+                worker_id = self.config.worker_id,
+                digest = %digest.digest,
+                "No storage configured - batch will only be in memory"
+            );
         }
 
         // Store in local memory
         self.state.store_batch(batch.clone());
 
         // Broadcast to peer Workers
+        info!(
+            worker_id = self.config.worker_id,
+            digest = %digest.digest,
+            "Broadcasting batch to peer Workers..."
+        );
         self.network.broadcast_batch(&batch).await;
+        info!(
+            worker_id = self.config.worker_id,
+            digest = %digest.digest,
+            "Broadcast complete"
+        );
 
         // Report to Primary
-        let _ = self
+        info!(
+            worker_id = self.config.worker_id,
+            digest = %digest.digest,
+            "Sending BatchDigest to Primary"
+        );
+        if self
             .to_primary
             .send(WorkerToPrimary::BatchDigest {
                 worker_id: self.config.worker_id,
@@ -768,7 +838,19 @@ impl Worker {
                 tx_count: digest.tx_count,
                 byte_size: digest.byte_size,
             })
-            .await;
+            .await
+            .is_err()
+        {
+            error!(
+                worker_id = self.config.worker_id,
+                "Failed to send BatchDigest to Primary - channel closed"
+            );
+        } else {
+            info!(
+                worker_id = self.config.worker_id,
+                "BatchDigest sent to Primary successfully"
+            );
+        }
     }
 
     /// Force flush any pending transactions
