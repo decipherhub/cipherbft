@@ -22,7 +22,7 @@ pub use config::{
     DEFAULT_KEYRING_BACKEND, DEFAULT_KEYS_DIR, DEFAULT_KEY_NAME, DEFAULT_METRICS_PORT,
     DEFAULT_RPC_HTTP_PORT, DEFAULT_RPC_WS_PORT,
 };
-pub use execution_bridge::{create_default_bridge, ExecutionBridge};
+pub use execution_bridge::ExecutionBridge;
 pub use genesis_bootstrap::{
     GeneratedValidator, GenesisGenerationResult, GenesisGenerator, GenesisGeneratorConfig,
     GenesisLoader, ValidatorKeyFile,

@@ -35,7 +35,7 @@ use cipherbft_data_chain::{
     Batch, Cut, DclMessage, WorkerMessage,
 };
 use cipherbft_execution::{
-    keccak256, Bytes as ExecutionBytes, ChainConfig, InMemoryProvider, Log as ExecutionLog,
+    keccak256, Bytes as ExecutionBytes, ChainConfig, Log as ExecutionLog,
     TransactionReceipt as ExecutionReceipt, U256,
 };
 use cipherbft_storage::{
@@ -408,7 +408,8 @@ impl Node {
     /// Must be called before `run()` to enable Cut execution.
     ///
     /// # Note
-    /// This creates an execution layer with an in-memory store (for testing).
+    /// This creates an execution layer with an in-memory DCL store (for testing),
+    /// but uses persistent MDBX storage for EVM state in the node's data directory.
     /// For production use, prefer `with_execution_layer_from_genesis` to
     /// initialize the staking state from the genesis file and enable
     /// persistent storage for consensus sync support.
@@ -417,7 +418,9 @@ impl Node {
         let chain_config = ChainConfig::default();
         let dcl_store: Arc<dyn DclStore> = Arc::new(InMemoryStore::new());
         self.dcl_store = Some(dcl_store.clone());
-        let bridge = ExecutionBridge::new(chain_config, dcl_store)?;
+        // Ensure data directory exists for EVM storage
+        std::fs::create_dir_all(&self.config.data_dir)?;
+        let bridge = ExecutionBridge::new(chain_config, dcl_store, &self.config.data_dir)?;
         self.execution_bridge = Some(Arc::new(bridge));
         Ok(self)
     }
@@ -460,7 +463,8 @@ impl Node {
         // Store the dcl_store for later use in spawn_host (consensus sync)
         self.dcl_store = Some(dcl_store.clone());
 
-        let bridge = ExecutionBridge::from_genesis(chain_config, dcl_store, genesis)?;
+        let bridge =
+            ExecutionBridge::from_genesis(chain_config, dcl_store, genesis, &self.config.data_dir)?;
         self.execution_bridge = Some(Arc::new(bridge));
 
         // Store epoch block reward from genesis for reward distribution at epoch boundaries
@@ -1083,9 +1087,9 @@ impl Node {
 
         // RPC storage reference - used to update block number when consensus decides
         // Moved outside the `if` block so it can be passed to run_event_loop
+        use cipherbft_execution::MdbxProvider;
         use cipherbft_rpc::{MdbxRpcStorage, StubDebugExecutionApi};
-        let rpc_storage: Option<Arc<MdbxRpcStorage<InMemoryProvider>>> = if self.config.rpc_enabled
-        {
+        let rpc_storage: Option<Arc<MdbxRpcStorage<MdbxProvider>>> = if self.config.rpc_enabled {
             // Create MDBX database for block/receipt storage
             let db_path = self.config.data_dir.join("rpc_storage");
             let db_config = DatabaseConfig::new(&db_path);
@@ -1105,10 +1109,13 @@ impl Node {
             let provider = if let Some(ref bridge) = self.execution_bridge {
                 bridge.provider().await
             } else {
-                // Fallback: create new provider if no execution bridge is configured
-                // (e.g., for tests or minimal node configurations)
-                warn!("RPC enabled but no execution bridge configured - creating empty provider");
-                Arc::new(InMemoryProvider::new())
+                // Execution bridge is required for RPC to function properly.
+                // The MdbxProvider is needed to share EVM state with the RPC layer.
+                anyhow::bail!(
+                    "RPC enabled but no execution bridge configured. \
+                     Call with_execution_layer() or with_execution_layer_from_genesis() \
+                     before enabling RPC."
+                );
             };
 
             // Create MdbxRpcStorage with chain ID and transaction store.
@@ -1183,32 +1190,30 @@ impl Node {
 
         // Create RPC executor before the RPC setup block so it can be shared
         // with the event loop for updating latest_block on consensus decisions
-        use cipherbft_execution::StakingPrecompile;
         use cipherbft_rpc::EvmExecutionApi;
-        let rpc_executor: Option<Arc<EvmExecutionApi<InMemoryProvider>>> =
-            if self.config.rpc_enabled {
-                let (exec_provider, staking_precompile) = if let Some(ref bridge) =
-                    self.execution_bridge
-                {
+        let rpc_executor: Option<Arc<EvmExecutionApi<MdbxProvider>>> = if self.config.rpc_enabled {
+            let (exec_provider, staking_precompile) =
+                if let Some(ref bridge) = self.execution_bridge {
                     // Get the provider and staking precompile from the execution bridge
                     // to ensure RPC queries see the same state as the execution layer
                     (bridge.provider().await, bridge.staking_precompile().await)
                 } else {
-                    warn!("RPC execution using empty provider - eth_call may not work correctly");
-                    (
-                        Arc::new(InMemoryProvider::new()),
-                        Arc::new(StakingPrecompile::new()),
-                    )
+                    // Execution bridge is required for RPC to function properly
+                    anyhow::bail!(
+                        "RPC enabled but no execution bridge configured. \
+                         Call with_execution_layer() or with_execution_layer_from_genesis() \
+                         before enabling RPC."
+                    );
                 };
-                let chain_id = 85300u64;
-                Some(Arc::new(EvmExecutionApi::new(
-                    exec_provider,
-                    chain_id,
-                    staking_precompile,
-                )))
-            } else {
-                None
-            };
+            let chain_id = 85300u64;
+            Some(Arc::new(EvmExecutionApi::new(
+                exec_provider,
+                chain_id,
+                staking_precompile,
+            )))
+        } else {
+            None
+        };
 
         // Start RPC server if enabled
         if let (Some(ref storage), Some(ref debug_executor), Some(ref sub_mgr)) =
@@ -1358,10 +1363,12 @@ impl Node {
         decided_rx: &mut mpsc::Receiver<(ConsensusHeight, Cut)>,
         cut_advance_tx: mpsc::Sender<()>,
         execution_bridge: Option<Arc<ExecutionBridge>>,
-        rpc_storage: Option<Arc<cipherbft_rpc::MdbxRpcStorage<InMemoryProvider>>>,
+        rpc_storage: Option<Arc<cipherbft_rpc::MdbxRpcStorage<cipherbft_execution::MdbxProvider>>>,
         subscription_manager: Option<Arc<cipherbft_rpc::SubscriptionManager>>,
         rpc_debug_executor: Option<Arc<cipherbft_rpc::StubDebugExecutionApi>>,
-        rpc_executor: Option<Arc<cipherbft_rpc::EvmExecutionApi<InMemoryProvider>>>,
+        rpc_executor: Option<
+            Arc<cipherbft_rpc::EvmExecutionApi<cipherbft_execution::MdbxProvider>>,
+        >,
         epoch_config: EpochConfig,
         epoch_block_reward: U256,
         gas_limit: u64,
