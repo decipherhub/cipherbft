@@ -5,6 +5,7 @@
 
 use crate::attestation::AggregatedAttestation;
 use crate::car::Car;
+use alloy_primitives::Address;
 use cipherbft_crypto::BlsPublicKey;
 use cipherbft_types::{Hash, ValidatorId};
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,12 @@ pub struct Cut {
     pub cars: HashMap<ValidatorId, Car>,
     /// Aggregated attestations for each Car (keyed by Car hash)
     pub attestations: HashMap<Hash, AggregatedAttestation>,
+    /// Proposer's ValidatorId (who created this Cut)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposer_id: Option<ValidatorId>,
+    /// Proposer's Ethereum address (secp256k1) for block beneficiary
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposer_address: Option<Address>,
 }
 
 impl Cut {
@@ -33,7 +40,30 @@ impl Cut {
             height,
             cars: HashMap::new(),
             attestations: HashMap::new(),
+            proposer_id: None,
+            proposer_address: None,
         }
+    }
+
+    /// Create a new empty Cut with proposer information.
+    pub fn new_with_proposer(
+        height: u64,
+        proposer_id: ValidatorId,
+        proposer_address: Address,
+    ) -> Self {
+        Self {
+            height,
+            cars: HashMap::new(),
+            attestations: HashMap::new(),
+            proposer_id: Some(proposer_id),
+            proposer_address: Some(proposer_address),
+        }
+    }
+
+    /// Set the proposer information on an existing Cut.
+    pub fn set_proposer(&mut self, proposer_id: ValidatorId, proposer_address: Address) {
+        self.proposer_id = Some(proposer_id);
+        self.proposer_address = Some(proposer_address);
     }
 
     /// Compute deterministic hash for this Cut (for Malachite Value::id())
@@ -47,11 +77,17 @@ impl Cut {
     /// - For each Car in ValidatorId order:
     ///   - Car hash (32 bytes)
     ///   - Car position (8 bytes)
+    /// - Proposer ValidatorId (20 bytes, if present)
+    /// - Proposer Address (20 bytes, if present)
     ///
     /// Note: Attestations are not included in the hash since they are metadata
     /// for verification, not part of the consensus value.
+    ///
+    /// Note: Including proposer fields ensures the beneficiary attribution is
+    /// tamper-proof once consensus decides on a Cut.
     pub fn hash(&self) -> Hash {
-        let mut data = Vec::with_capacity(12 + self.cars.len() * 40);
+        // Calculate capacity: height(8) + num_cars(4) + cars + proposer_id(20) + proposer_addr(20)
+        let mut data = Vec::with_capacity(12 + self.cars.len() * 40 + 40);
 
         // Height
         data.extend_from_slice(&self.height.to_be_bytes());
@@ -64,6 +100,14 @@ impl Cut {
             // Include Car hash and position
             data.extend_from_slice(car.hash().as_bytes());
             data.extend_from_slice(&car.position.to_be_bytes());
+        }
+
+        // Include proposer information in hash for integrity
+        if let Some(proposer_id) = &self.proposer_id {
+            data.extend_from_slice(proposer_id.as_bytes());
+        }
+        if let Some(proposer_address) = &self.proposer_address {
+            data.extend_from_slice(proposer_address.as_slice());
         }
 
         Hash::compute(&data)
@@ -226,6 +270,8 @@ impl Cut {
             round,
             proposer,
             car_count: self.cars.len() as u32,
+            proposer_id: self.proposer_id,
+            proposer_address: self.proposer_address,
         };
 
         let car_parts = self.ordered_cars().filter_map(move |(_, car)| {
@@ -260,10 +306,16 @@ pub enum CutPart {
         height: u64,
         /// Consensus round
         round: u32,
-        /// Validator proposing this Cut
+        /// Validator proposing this Cut (Malachite consensus)
         proposer: ValidatorId,
         /// Number of Cars in this Cut
         car_count: u32,
+        /// Cut's proposer_id for beneficiary attribution (may differ from consensus proposer)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        proposer_id: Option<ValidatorId>,
+        /// Proposer's Ethereum address for block beneficiary
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        proposer_address: Option<Address>,
     },
     /// Individual Car with its aggregated attestation
     CarData {
@@ -299,8 +351,12 @@ pub struct CutAssembler {
     height: Option<u64>,
     /// Expected round (from Init)
     round: Option<u32>,
-    /// Proposer (from Init)
+    /// Malachite consensus proposer (from Init)
     proposer: Option<ValidatorId>,
+    /// Cut's proposer_id for beneficiary attribution (from Init)
+    beneficiary_proposer_id: Option<ValidatorId>,
+    /// Proposer's Ethereum address (from Init)
+    proposer_address: Option<Address>,
     /// Expected car count (from Init)
     expected_count: Option<u32>,
     /// Cars collected so far
@@ -320,6 +376,8 @@ impl CutAssembler {
             height: None,
             round: None,
             proposer: None,
+            beneficiary_proposer_id: None,
+            proposer_address: None,
             expected_count: None,
             cars: HashMap::new(),
             attestations: HashMap::new(),
@@ -341,6 +399,8 @@ impl CutAssembler {
                 round,
                 proposer,
                 car_count,
+                proposer_id,
+                proposer_address,
             } => {
                 if self.height.is_some() {
                     return Err(CutAssemblyError::DuplicateInit);
@@ -348,6 +408,8 @@ impl CutAssembler {
                 self.height = Some(height);
                 self.round = Some(round);
                 self.proposer = Some(proposer);
+                self.beneficiary_proposer_id = proposer_id;
+                self.proposer_address = proposer_address;
                 self.expected_count = Some(car_count);
                 Ok(None)
             }
@@ -397,6 +459,8 @@ impl CutAssembler {
             height,
             cars: self.cars.clone(),
             attestations: self.attestations.clone(),
+            proposer_id: self.beneficiary_proposer_id,
+            proposer_address: self.proposer_address,
         };
 
         // Verify hash
@@ -708,6 +772,7 @@ mod tests {
                 round,
                 proposer: p,
                 car_count,
+                ..
             } => {
                 assert_eq!(*height, 1);
                 assert_eq!(*round, 0);
@@ -806,6 +871,8 @@ mod tests {
             round: 0,
             proposer,
             car_count: 0,
+            proposer_id: None,
+            proposer_address: None,
         });
         assert!(result.is_ok());
 
@@ -815,6 +882,8 @@ mod tests {
             round: 1,
             proposer,
             car_count: 0,
+            proposer_id: None,
+            proposer_address: None,
         });
         assert!(matches!(result, Err(CutAssemblyError::DuplicateInit)));
     }
@@ -831,6 +900,8 @@ mod tests {
                 round: 0,
                 proposer,
                 car_count: 0,
+                proposer_id: None,
+                proposer_address: None,
             })
             .unwrap();
 
@@ -850,6 +921,8 @@ mod tests {
             round: 0,
             proposer,
             car_count: 0,
+            proposer_id: None,
+            proposer_address: None,
         };
         assert_eq!(init.get_type(), "init");
 
@@ -857,5 +930,80 @@ mod tests {
             cut_hash: Hash::compute(b"test"),
         };
         assert_eq!(fin.get_type(), "fin");
+    }
+
+    #[test]
+    fn test_cut_with_proposer() {
+        use alloy_primitives::Address;
+
+        let proposer_id = ValidatorId::from_bytes([0x01; VALIDATOR_ID_SIZE]);
+        let proposer_address = Address::from([0xab; 20]);
+
+        let cut = Cut::new_with_proposer(1, proposer_id, proposer_address);
+
+        assert_eq!(cut.height, 1);
+        assert_eq!(cut.proposer_id, Some(proposer_id));
+        assert_eq!(cut.proposer_address, Some(proposer_address));
+    }
+
+    #[test]
+    fn test_cut_hash_includes_proposer() {
+        use alloy_primitives::Address;
+
+        let proposer_id = ValidatorId::from_bytes([0x01; VALIDATOR_ID_SIZE]);
+        let proposer_address = Address::from([0xab; 20]);
+
+        // Two cuts with same content but different proposers should have different hashes
+        let mut cut1 = Cut::new(1);
+        cut1.set_proposer(proposer_id, proposer_address);
+
+        let mut cut2 = Cut::new(1);
+        cut2.set_proposer(
+            ValidatorId::from_bytes([0x02; VALIDATOR_ID_SIZE]),
+            Address::from([0xcd; 20]),
+        );
+
+        assert_ne!(cut1.hash(), cut2.hash());
+
+        // Cut without proposer should have different hash than cut with proposer
+        let cut3 = Cut::new(1);
+        assert_ne!(cut1.hash(), cut3.hash());
+    }
+
+    #[test]
+    fn test_cut_assembler_with_proposer_info() {
+        use alloy_primitives::Address;
+
+        let kp = BlsKeyPair::generate(&mut rand::thread_rng());
+        let car = make_test_car(&kp, 0);
+        let att = make_test_agg_attestation(&kp, &car);
+
+        // Create a Cut with proposer info (beneficiary)
+        let proposer_id = ValidatorId::from_bytes([0x01; VALIDATOR_ID_SIZE]);
+        let proposer_address = Address::from([0xab; 20]);
+
+        let mut cut = Cut::new_with_proposer(1, proposer_id, proposer_address);
+        cut.add_car(car, att);
+
+        // Use a different Malachite consensus proposer
+        let malachite_proposer = ValidatorId::from_bytes([0xff; VALIDATOR_ID_SIZE]);
+
+        // Stream and reassemble - the Cut's proposer_id/address should survive
+        let mut assembler = CutAssembler::new();
+        for part in cut.stream_parts(malachite_proposer, 0) {
+            if let Ok(Some(assembled)) = assembler.add_part(part) {
+                // Verify hash matches (this was the bug - proposer_id wasn't preserved)
+                assert_eq!(assembled.hash(), cut.hash());
+
+                // Verify proposer info is preserved
+                assert_eq!(assembled.proposer_id, Some(proposer_id));
+                assert_eq!(assembled.proposer_address, Some(proposer_address));
+
+                // Verify the Malachite proposer is captured correctly
+                assert_eq!(assembler.proposer(), Some(malachite_proposer));
+                return;
+            }
+        }
+        panic!("cut was not assembled");
     }
 }

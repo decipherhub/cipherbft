@@ -226,6 +226,7 @@ impl<P: Provider + Clone> ExecutionLayer<P> {
                 .collect(),
             gas_limit: cut.gas_limit,
             base_fee_per_gas: cut.base_fee_per_gas,
+            beneficiary: Address::ZERO,
         };
 
         self.engine.execute_block(block_input)
@@ -559,6 +560,7 @@ mod tests {
             parent_hash: B256::ZERO,
             gas_limit: 30_000_000,
             base_fee_per_gas: Some(1_000_000_000),
+            beneficiary: Address::ZERO,
         };
 
         let result = execution_layer.execute_block(input).unwrap();
@@ -577,6 +579,7 @@ mod tests {
             transactions: vec![],
             gas_limit: 30_000_000,
             base_fee_per_gas: Some(1_000_000_000),
+            beneficiary: Address::ZERO,
         };
 
         let execution_result = ExecutionResult {

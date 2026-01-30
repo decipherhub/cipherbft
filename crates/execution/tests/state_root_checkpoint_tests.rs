@@ -3,7 +3,7 @@
 //! These tests verify that state roots are computed at the correct intervals
 //! (every 100 blocks by default) and that they are deterministic.
 
-use alloy_primitives::B256;
+use alloy_primitives::{Address, B256};
 use cipherbft_execution::{
     BlockInput, ChainConfig, ExecutionEngine, ExecutionLayerTrait, InMemoryProvider,
 };
@@ -27,6 +27,7 @@ fn test_state_root_computed_at_block_100() {
             parent_hash: B256::ZERO,
             gas_limit: 30_000_000,
             base_fee_per_gas: Some(1_000_000_000),
+            beneficiary: Address::ZERO,
         };
 
         let result = engine.execute_block(input).unwrap();
@@ -48,6 +49,7 @@ fn test_state_root_computed_at_block_100() {
         parent_hash: B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let result = engine.execute_block(input).unwrap();
@@ -80,6 +82,7 @@ fn test_state_root_computed_at_block_200() {
             parent_hash: B256::ZERO,
             gas_limit: 30_000_000,
             base_fee_per_gas: Some(1_000_000_000),
+            beneficiary: Address::ZERO,
         };
 
         let result = engine.execute_block(input).unwrap();
@@ -105,6 +108,7 @@ fn test_state_root_computed_at_block_200() {
         parent_hash: B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let result = engine.execute_block(input).unwrap();
@@ -138,6 +142,7 @@ fn test_state_root_checkpoints_at_intervals() {
             parent_hash: B256::ZERO,
             gas_limit: 30_000_000,
             base_fee_per_gas: Some(1_000_000_000),
+            beneficiary: Address::ZERO,
         };
 
         let result = engine.execute_block(input).unwrap();
@@ -203,6 +208,7 @@ fn test_state_root_consistent_across_checkpoint_blocks() {
             parent_hash: B256::ZERO,
             gas_limit: 30_000_000,
             base_fee_per_gas: Some(1_000_000_000),
+            beneficiary: Address::ZERO,
         };
 
         engine.execute_block(input).unwrap();
@@ -221,6 +227,7 @@ fn test_state_root_consistent_across_checkpoint_blocks() {
             parent_hash: B256::ZERO,
             gas_limit: 30_000_000,
             base_fee_per_gas: Some(1_000_000_000),
+            beneficiary: Address::ZERO,
         };
 
         let result = engine.execute_block(input).unwrap();
@@ -241,6 +248,7 @@ fn test_state_root_consistent_across_checkpoint_blocks() {
             parent_hash: B256::ZERO,
             gas_limit: 30_000_000,
             base_fee_per_gas: Some(1_000_000_000),
+            beneficiary: Address::ZERO,
         };
 
         let result = engine.execute_block(input).unwrap();
@@ -273,6 +281,7 @@ fn test_state_root_progression() {
             parent_hash: B256::ZERO,
             gas_limit: 30_000_000,
             base_fee_per_gas: Some(1_000_000_000),
+            beneficiary: Address::ZERO,
         };
 
         let result = engine.execute_block(input).unwrap();

@@ -115,6 +115,7 @@ fn test_execution_result_completeness_50_transactions() {
         parent_hash: alloy_primitives::B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let result = engine.execute_block(input).unwrap();
@@ -273,6 +274,7 @@ fn test_execution_result_with_mixed_transaction_types() {
         parent_hash: alloy_primitives::B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let result = engine.execute_block(input).unwrap();
@@ -356,6 +358,7 @@ fn test_execution_result_determinism() {
         parent_hash: alloy_primitives::B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let input2 = BlockInput {
@@ -365,6 +368,7 @@ fn test_execution_result_determinism() {
         parent_hash: alloy_primitives::B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let result1 = engine1.execute_block(input1).unwrap();

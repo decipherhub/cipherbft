@@ -186,6 +186,7 @@ fn test_simple_eth_transfer() {
         parent_hash: alloy_primitives::B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let result = engine.execute_block(input).unwrap();
@@ -264,6 +265,7 @@ fn test_multiple_transfers_in_block() {
         parent_hash: alloy_primitives::B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let result = engine.execute_block(input).unwrap();
@@ -315,6 +317,7 @@ fn test_legacy_transaction() {
         parent_hash: alloy_primitives::B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let result = engine.execute_block(input).unwrap();
@@ -350,6 +353,7 @@ fn test_contract_deployment() {
         parent_hash: alloy_primitives::B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let result = engine.execute_block(input).unwrap();
@@ -396,6 +400,7 @@ fn test_transaction_with_data() {
         parent_hash: alloy_primitives::B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let result = engine.execute_block(input).unwrap();
@@ -436,6 +441,7 @@ fn test_sequential_blocks_with_nonce() {
         parent_hash: alloy_primitives::B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let result1 = engine.execute_block(input1).unwrap();
@@ -462,6 +468,7 @@ fn test_sequential_blocks_with_nonce() {
         parent_hash: result1.block_hash,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let result2 = engine.execute_block(input2).unwrap();
@@ -488,6 +495,7 @@ fn test_sequential_blocks_with_nonce() {
         parent_hash: result2.block_hash,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let result3 = engine.execute_block(input3).unwrap();
@@ -525,6 +533,7 @@ fn test_receipts_root_with_real_transactions() {
         parent_hash: alloy_primitives::B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let result = engine.execute_block(input).unwrap();
@@ -564,6 +573,7 @@ fn test_gas_usage_accuracy() {
         parent_hash: alloy_primitives::B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let result1 = engine.execute_block(input1).unwrap();
