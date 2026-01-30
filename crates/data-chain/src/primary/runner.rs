@@ -1000,6 +1000,46 @@ impl Primary {
                     "Position gap detected, initiating gap recovery"
                 );
 
+                // CRITICAL FIX: Update position tracking when we're behind
+                //
+                // If actual > expected, we've fallen behind this validator's position.
+                // The Car signature was already validated by core.handle_car(), so we
+                // know this is a legitimate Car. Update tracking to prevent death spiral:
+                //
+                // Without this fix:
+                // 1. We miss some Cars from validator X
+                // 2. New Cars from X trigger position gap errors
+                // 3. We never attest to X's new Cars
+                // 4. X's Cars never reach quorum
+                // 5. Transactions stuck forever
+                //
+                // With this fix:
+                // - We update tracking to actual position
+                // - Next Car from X (at actual+1) will be attested normally
+                // - Network recovers quickly
+                if actual > expected {
+                    let car_hash = car.hash();
+                    info!(
+                        proposer = %validator,
+                        expected,
+                        actual,
+                        car_hash = %car_hash,
+                        "Updating position tracking to recover from gap - signature was valid"
+                    );
+                    self.state.update_last_seen(validator, actual, car_hash);
+
+                    // Also generate attestation since signature is valid and we're syncing
+                    // This helps the network reach quorum faster
+                    let attestation = self.core.create_attestation(&car);
+                    DCL_ATTESTATIONS_SENT.inc();
+                    self.network.send_attestation(car.proposer, &attestation).await;
+                    info!(
+                        proposer = %validator,
+                        position = actual,
+                        "Generated attestation after position gap recovery"
+                    );
+                }
+
                 // Queue the out-of-order Car for later processing
                 if !self.state.is_awaiting_gap_sync(&validator, actual) {
                     self.state.queue_car_awaiting_gap(car.clone(), expected);
