@@ -198,6 +198,33 @@ impl ExecutionBridge {
         self.gas_limit
     }
 
+    /// Set the initial block hash for chain connectivity.
+    ///
+    /// This must be called after the genesis block is created in storage to ensure
+    /// that block 1's parent_hash correctly references the genesis block hash.
+    /// If not called, block 1 would have parent_hash = 0x000...000 (the default).
+    ///
+    /// # Arguments
+    ///
+    /// * `genesis_hash` - The hash of the genesis block (block 0)
+    pub fn set_genesis_block_hash(&self, genesis_hash: B256) {
+        match self.last_block_hash.write() {
+            Ok(mut guard) => {
+                *guard = genesis_hash;
+                debug!(
+                    genesis_hash = %genesis_hash,
+                    "Execution bridge initialized with genesis block hash"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "Failed to set genesis block hash - lock poisoned, block 1 may have incorrect parent_hash"
+                );
+            }
+        }
+    }
+
     /// Validate a transaction for mempool CheckTx
     ///
     /// This is called by workers before accepting transactions into batches.
@@ -696,6 +723,26 @@ mod tests {
             last_hash,
             B256::ZERO,
             "Initial last_block_hash should be B256::ZERO"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_genesis_block_hash() {
+        let bridge = create_default_bridge().unwrap();
+
+        // Initially should be B256::ZERO
+        let initial_hash = bridge.last_block_hash.read().map(|guard| *guard).unwrap();
+        assert_eq!(initial_hash, B256::ZERO);
+
+        // Set genesis hash
+        let genesis_hash = B256::from([0x42u8; 32]);
+        bridge.set_genesis_block_hash(genesis_hash);
+
+        // Should now be updated
+        let updated_hash = bridge.last_block_hash.read().map(|guard| *guard).unwrap();
+        assert_eq!(
+            updated_hash, genesis_hash,
+            "set_genesis_block_hash should update last_block_hash"
         );
     }
 
