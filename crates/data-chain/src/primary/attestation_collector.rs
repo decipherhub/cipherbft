@@ -234,6 +234,20 @@ impl AttestationCollector {
         self.pending.remove(car_hash).map(|p| p.car)
     }
 
+    /// Reset timeout for a Car without losing existing attestations
+    ///
+    /// Used for batched Cars that need extra time for peers to sync batch data.
+    /// Returns true if the Car was found and reset, false otherwise.
+    pub fn reset_timeout(&mut self, car_hash: &Hash) -> bool {
+        if let Some(pending) = self.pending.get_mut(car_hash) {
+            pending.started_at = std::time::Instant::now();
+            pending.current_backoff = self.base_timeout;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Get current attestation count for a Car
     pub fn attestation_count(&self, car_hash: &Hash) -> Option<usize> {
         self.pending.get(car_hash).map(|p| p.attestations.len() + 1) // +1 for self

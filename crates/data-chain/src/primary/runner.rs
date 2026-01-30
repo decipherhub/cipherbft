@@ -1286,22 +1286,41 @@ impl Primary {
         let timed_out = self.attestation_collector.check_timeouts();
 
         for (hash, car) in timed_out {
+            let has_batches = !car.batch_digests.is_empty();
+
             // Apply backoff
             if self.attestation_collector.apply_backoff(&hash) {
                 debug!(
                     hash = %hash,
                     position = car.position,
+                    has_batches,
                     "Applying attestation timeout backoff"
                 );
                 // Could re-broadcast Car here
             } else {
-                warn!(
-                    hash = %hash,
-                    position = car.position,
-                    "Car attestation failed after max retries"
-                );
-                self.attestation_collector.remove(&hash);
-                self.state.remove_pending_car(&hash);
+                // IMPORTANT: Don't timeout Cars with batches!
+                // Peers need extra time to sync batch data before they can attest.
+                // Without this, batched Cars timeout before peers finish syncing,
+                // causing attestations to be rejected with UnknownCar error.
+                if has_batches {
+                    // Reset the timeout without losing existing attestations
+                    info!(
+                        hash = %hash,
+                        position = car.position,
+                        batch_count = car.batch_digests.len(),
+                        attestation_count = self.attestation_collector.attestation_count(&hash).unwrap_or(0),
+                        "Extending timeout for batched Car - peers may still be syncing"
+                    );
+                    self.attestation_collector.reset_timeout(&hash);
+                } else {
+                    warn!(
+                        hash = %hash,
+                        position = car.position,
+                        "Car attestation failed after max retries"
+                    );
+                    self.attestation_collector.remove(&hash);
+                    self.state.remove_pending_car(&hash);
+                }
             }
         }
     }
