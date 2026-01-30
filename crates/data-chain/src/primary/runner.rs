@@ -1377,20 +1377,39 @@ impl Primary {
                 );
                 // Could re-broadcast Car here
             } else {
-                // IMPORTANT: Don't timeout Cars with batches!
-                // Peers need extra time to sync batch data before they can attest.
-                // Without this, batched Cars timeout before peers finish syncing,
-                // causing attestations to be rejected with UnknownCar error.
+                // Max backoff exceeded
                 if has_batches {
-                    // Reset the timeout without losing existing attestations
-                    info!(
-                        hash = %hash,
-                        position = car.position,
-                        batch_count = car.batch_digests.len(),
-                        attestation_count = self.attestation_collector.attestation_count(&hash).unwrap_or(0),
-                        "Extending timeout for batched Car - peers may still be syncing"
-                    );
-                    self.attestation_collector.reset_timeout(&hash);
+                    // Try to extend timeout for batched Cars that need more time.
+                    // reset_timeout() returns false if max resets exceeded.
+                    let reset_count = self.attestation_collector.reset_count(&hash).unwrap_or(0);
+                    if self.attestation_collector.reset_timeout(&hash) {
+                        info!(
+                            hash = %hash,
+                            position = car.position,
+                            batch_count = car.batch_digests.len(),
+                            attestation_count = self.attestation_collector.attestation_count(&hash).unwrap_or(0),
+                            reset_count = reset_count + 1,
+                            "Extending timeout for batched Car - peers may still be syncing"
+                        );
+                    } else {
+                        // Max resets exceeded - drop the Car and restore batches
+                        warn!(
+                            hash = %hash,
+                            position = car.position,
+                            batch_count = car.batch_digests.len(),
+                            attestation_count = self.attestation_collector.attestation_count(&hash).unwrap_or(0),
+                            reset_count,
+                            "Batched Car exceeded max timeout resets - dropping and restoring batches"
+                        );
+                        self.attestation_collector.remove(&hash);
+                        self.state.remove_pending_car(&hash);
+
+                        // Restore batch digests to pending so they can be re-batched
+                        // This ensures transactions are not lost
+                        for digest in &car.batch_digests {
+                            self.state.add_batch_digest(digest.clone());
+                        }
+                    }
                 } else {
                     warn!(
                         hash = %hash,
