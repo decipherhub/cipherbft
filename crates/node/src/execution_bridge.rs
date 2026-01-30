@@ -7,10 +7,11 @@ use cipherbft_data_chain::worker::TransactionValidator;
 use cipherbft_execution::{
     keccak256, Address, BlockInput, Bytes, Car as ExecutionCar, ChainConfig, Cut as ExecutionCut,
     ExecutionEngine, ExecutionLayerTrait, ExecutionResult, GenesisInitializer,
-    GenesisValidatorData, InMemoryProvider, StakingPrecompile, B256, U256,
+    GenesisValidatorData, MdbxProvider, StakingPrecompile, B256, U256,
 };
-use cipherbft_storage::DclStore;
+use cipherbft_storage::{Database, DatabaseConfig, DclStore, EvmStore, MdbxEvmStore};
 use cipherbft_types::genesis::Genesis;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
 use tokio::sync::RwLock;
@@ -42,9 +43,12 @@ pub struct BlockExecutionResult {
 ///
 /// Maintains the connection between the consensus layer and the execution layer,
 /// tracking block hashes to ensure proper chain connectivity.
+///
+/// Uses `MdbxProvider` for persistent EVM state storage, ensuring state
+/// survives node restarts.
 pub struct ExecutionBridge {
-    /// Execution layer instance
-    execution: Arc<RwLock<ExecutionEngine<InMemoryProvider>>>,
+    /// Execution layer instance with persistent MDBX storage
+    execution: Arc<RwLock<ExecutionEngine<MdbxProvider>>>,
     /// DCL storage for batch lookups
     dcl_store: Arc<dyn DclStore>,
     /// Hash of the last executed block (used as parent hash for the next block)
@@ -58,20 +62,36 @@ pub struct ExecutionBridge {
 }
 
 impl ExecutionBridge {
-    /// Create a new execution bridge
+    /// Create a new execution bridge with persistent MDBX storage.
     ///
     /// # Arguments
     ///
     /// * `config` - Chain configuration for the execution layer
     /// * `dcl_store` - DCL storage for batch lookups
+    /// * `data_dir` - Directory for persistent EVM state storage
     ///
     /// # Note
     /// This creates an execution bridge with an empty staking state.
     /// For production use, prefer `from_genesis` to initialize the staking
     /// state from the genesis file.
-    pub fn new(config: ChainConfig, dcl_store: Arc<dyn DclStore>) -> anyhow::Result<Self> {
+    pub fn new(
+        config: ChainConfig,
+        dcl_store: Arc<dyn DclStore>,
+        data_dir: &Path,
+    ) -> anyhow::Result<Self> {
         let gas_limit = config.block_gas_limit;
-        let provider = InMemoryProvider::new();
+
+        // Create MDBX database for EVM state persistence
+        let evm_db_path = data_dir.join("evm_storage");
+        std::fs::create_dir_all(&evm_db_path)?;
+        let evm_db_config = DatabaseConfig::new(&evm_db_path);
+        let evm_database =
+            Database::open(evm_db_config).map_err(|e| anyhow::anyhow!("Failed to open EVM storage database: {}", e))?;
+        let evm_store = MdbxEvmStore::new(Arc::clone(evm_database.env()));
+        let provider = MdbxProvider::new(evm_store);
+
+        info!("Created persistent EVM store at {}", evm_db_path.display());
+
         let execution = ExecutionEngine::new(config, provider);
 
         Ok(Self {
@@ -83,32 +103,37 @@ impl ExecutionBridge {
         })
     }
 
-    /// Create a new execution bridge initialized from genesis.
+    /// Create a new execution bridge initialized from genesis with persistent MDBX storage.
     ///
     /// This is the primary constructor for production use. It initializes the
     /// staking precompile with the validator set from the genesis file, ensuring
     /// the validator state is correctly populated on node startup.
+    ///
+    /// The EVM state is persisted to MDBX, ensuring state survives node restarts.
     ///
     /// # Arguments
     ///
     /// * `config` - Chain configuration for the execution layer
     /// * `dcl_store` - DCL storage for batch lookups
     /// * `genesis` - Genesis configuration containing validator set
+    /// * `data_dir` - Directory for persistent EVM state storage
     ///
     /// # Returns
     ///
-    /// A new `ExecutionBridge` with staking state initialized from genesis validators.
+    /// A new `ExecutionBridge` with staking state initialized from genesis validators
+    /// and persistent EVM storage.
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// let genesis = GenesisLoader::load_and_validate(path)?;
-    /// let bridge = ExecutionBridge::from_genesis(config, dcl_store, &genesis)?;
+    /// let bridge = ExecutionBridge::from_genesis(config, dcl_store, &genesis, &data_dir)?;
     /// ```
     pub fn from_genesis(
         config: ChainConfig,
         dcl_store: Arc<dyn DclStore>,
         genesis: &Genesis,
+        data_dir: &Path,
     ) -> anyhow::Result<Self> {
         // Convert genesis validators to execution layer format
         let genesis_validators: Vec<GenesisValidatorData> = genesis
@@ -158,28 +183,59 @@ impl ExecutionBridge {
             validator_count = genesis_validators.len(),
             total_stake = %genesis.total_staked(),
             gas_limit = gas_limit,
-            "Initializing execution layer from genesis"
+            "Initializing execution layer from genesis with persistent storage"
         );
 
-        // Create provider and initialize genesis state (account balances, contracts, etc.)
-        let provider = InMemoryProvider::new();
-        let provider_arc = Arc::new(provider.clone());
+        // Create MDBX database for EVM state persistence
+        let evm_db_path = data_dir.join("evm_storage");
+        std::fs::create_dir_all(&evm_db_path)?;
+        let evm_db_config = DatabaseConfig::new(&evm_db_path);
+        let evm_database = Database::open(evm_db_config)
+            .map_err(|e| anyhow::anyhow!("Failed to open EVM storage database: {}", e))?;
+        let evm_store = MdbxEvmStore::new(Arc::clone(evm_database.env()));
 
-        // Initialize genesis allocations (balances, contracts, storage)
-        // This must be done BEFORE creating the ExecutionEngine so that
-        // eth_getBalance and other RPC queries can see the initial state.
-        let initializer = GenesisInitializer::new(provider_arc);
-        let bootstrap_result = initializer
-            .initialize(genesis)
-            .map_err(|e| anyhow::anyhow!("Failed to initialize genesis state: {}", e))?;
+        // Check if this is a fresh database or a restart by checking for existing state.
+        // If current_block is already set, the database has state from previous execution
+        // and we should NOT re-initialize genesis (which would overwrite all state).
+        let needs_genesis_init = evm_store
+            .get_current_block()
+            .map(|opt| opt.is_none())
+            .unwrap_or(true);
 
-        info!(
-            accounts = bootstrap_result.account_count,
-            validators = bootstrap_result.validator_count,
-            total_staked = %bootstrap_result.total_staked,
-            genesis_hash = %bootstrap_result.genesis_hash,
-            "Genesis state initialized"
-        );
+        let provider = MdbxProvider::new(evm_store);
+
+        info!("Created persistent EVM store at {}", evm_db_path.display());
+
+        // Create Arc wrapper for provider (needed for GenesisInitializer)
+        let provider_arc = Arc::new(provider);
+
+        if needs_genesis_init {
+            // Initialize genesis allocations (balances, contracts, storage)
+            // This must be done BEFORE creating the ExecutionEngine so that
+            // eth_getBalance and other RPC queries can see the initial state.
+            let initializer = GenesisInitializer::new(Arc::clone(&provider_arc));
+            let bootstrap_result = initializer
+                .initialize(genesis)
+                .map_err(|e| anyhow::anyhow!("Failed to initialize genesis state: {}", e))?;
+
+            info!(
+                accounts = bootstrap_result.account_count,
+                validators = bootstrap_result.validator_count,
+                total_staked = %bootstrap_result.total_staked,
+                genesis_hash = %bootstrap_result.genesis_hash,
+                "Genesis state initialized to persistent storage"
+            );
+        } else {
+            // Database already has state - this is a node restart
+            info!(
+                "Existing EVM state found, skipping genesis initialization (node restart)"
+            );
+        }
+
+        // Unwrap the Arc to get ownership of the provider for ExecutionEngine
+        // This is safe because we just created the Arc and initializer is done
+        let provider = Arc::try_unwrap(provider_arc)
+            .map_err(|_| anyhow::anyhow!("Failed to unwrap provider Arc - unexpected reference"))?;
 
         let execution =
             ExecutionEngine::with_genesis_validators(config, provider, genesis_validators);
@@ -489,9 +545,9 @@ impl ExecutionBridge {
     ///
     /// This allows sharing the provider with the RPC layer so that queries
     /// like `eth_getBalance` can see the same state as the execution layer.
-    /// Since `InMemoryProvider` uses `Arc<DashMap>` internally, cloning the
-    /// returned `Arc` shares the underlying data.
-    pub async fn provider(&self) -> Arc<InMemoryProvider> {
+    /// The provider uses MDBX for persistent storage, ensuring state survives
+    /// node restarts.
+    pub async fn provider(&self) -> Arc<MdbxProvider> {
         let execution = self.execution.read().await;
         execution.provider()
     }
@@ -549,11 +605,16 @@ fn compute_block_hash(
 
 /// Create a default execution bridge for testing/development
 ///
-/// Uses default chain configuration and in-memory storage.
-pub fn create_default_bridge() -> anyhow::Result<ExecutionBridge> {
+/// Uses default chain configuration and persistent MDBX storage in a temporary directory.
+/// The temporary directory is returned alongside the bridge so it persists for the
+/// lifetime of the test.
+#[cfg(test)]
+fn create_default_bridge() -> anyhow::Result<(ExecutionBridge, tempfile::TempDir)> {
     let config = ChainConfig::default();
     let dcl_store: Arc<dyn DclStore> = Arc::new(cipherbft_storage::InMemoryStore::new());
-    ExecutionBridge::new(config, dcl_store)
+    let temp_dir = tempfile::tempdir()?;
+    let bridge = ExecutionBridge::new(config, dcl_store, temp_dir.path())?;
+    Ok((bridge, temp_dir))
 }
 
 /// Implement TransactionValidator trait for ExecutionBridge
@@ -572,13 +633,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_bridge() {
-        let bridge = create_default_bridge();
-        assert!(bridge.is_ok());
+        let result = create_default_bridge();
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_check_tx_placeholder() {
-        let bridge = create_default_bridge().unwrap();
+        let (bridge, _temp_dir) = create_default_bridge().unwrap();
 
         // Currently returns error since validate_transaction is not implemented
         let result = bridge.check_tx(&[0x01, 0x02, 0x03]).await;
@@ -589,7 +650,7 @@ mod tests {
     async fn test_transaction_validator_trait() {
         use cipherbft_data_chain::worker::TransactionValidator;
 
-        let bridge = create_default_bridge().unwrap();
+        let (bridge, _temp_dir) = create_default_bridge().unwrap();
 
         // Test TransactionValidator trait implementation
         let result = bridge.validate_transaction(&[0x01, 0x02, 0x03]).await;
@@ -683,7 +744,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_last_block_hash_initialized_to_zero() {
-        let bridge = create_default_bridge().unwrap();
+        let (bridge, _temp_dir) = create_default_bridge().unwrap();
 
         // The last_block_hash should be initialized to B256::ZERO
         let last_hash = bridge
@@ -701,7 +762,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_gas_limit_from_config() {
-        let bridge = create_default_bridge().unwrap();
+        let (bridge, _temp_dir) = create_default_bridge().unwrap();
 
         // Default gas limit from ChainConfig should be 30_000_000
         assert_eq!(bridge.gas_limit(), 30_000_000);
@@ -716,7 +777,8 @@ mod tests {
             ..Default::default()
         };
         let dcl_store: Arc<dyn DclStore> = Arc::new(InMemoryStore::new());
-        let bridge = ExecutionBridge::new(config, dcl_store).unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let bridge = ExecutionBridge::new(config, dcl_store, temp_dir.path()).unwrap();
 
         assert_eq!(bridge.gas_limit(), 50_000_000);
     }

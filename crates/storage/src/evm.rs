@@ -144,6 +144,25 @@ pub trait EvmStore: Send + Sync {
     /// * `number` - Block number
     /// * `hash` - 32-byte block hash
     fn set_block_hash(&self, number: u64, hash: [u8; 32]) -> EvmStoreResult<()>;
+
+    /// Get the current block number (last executed block).
+    ///
+    /// This method retrieves the persisted block number for execution engine recovery.
+    /// Returns `None` if no block has been executed yet (first startup).
+    ///
+    /// # Returns
+    /// * `Ok(Some(block_number))` - The last executed block number
+    /// * `Ok(None)` - No block has been executed yet
+    fn get_current_block(&self) -> EvmStoreResult<Option<u64>>;
+
+    /// Set the current block number (last executed block).
+    ///
+    /// This method persists the block number after each block execution to enable
+    /// proper recovery after node restart.
+    ///
+    /// # Arguments
+    /// * `block_number` - The block number to persist
+    fn set_current_block(&self, block_number: u64) -> EvmStoreResult<()>;
 }
 
 #[cfg(test)]

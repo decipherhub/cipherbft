@@ -100,6 +100,25 @@ pub trait Provider: Send + Sync {
     /// # Returns
     /// A BTreeMap of all storage slots (slot -> value) for the account.
     fn get_all_storage(&self, address: Address) -> Result<BTreeMap<U256, U256>>;
+
+    /// Get the current block number (last executed block).
+    ///
+    /// This method retrieves the persisted block number for execution engine recovery.
+    /// Returns `None` if no block has been executed yet (first startup).
+    ///
+    /// # Returns
+    /// * `Ok(Some(block_number))` - The last executed block number
+    /// * `Ok(None)` - No block has been executed yet
+    fn get_current_block(&self) -> Result<Option<u64>>;
+
+    /// Set the current block number (last executed block).
+    ///
+    /// This method persists the block number after each block execution to enable
+    /// proper recovery after node restart.
+    ///
+    /// # Arguments
+    /// * `block_number` - The block number to persist
+    fn set_current_block(&self, block_number: u64) -> Result<()>;
 }
 
 /// In-memory provider for testing and development.
@@ -112,6 +131,8 @@ pub struct InMemoryProvider {
     code: Arc<DashMap<B256, Bytecode>>,
     storage: Arc<DashMap<(Address, U256), U256>>,
     block_hashes: Arc<DashMap<u64, B256>>,
+    /// Current block number (last executed block). Uses RwLock for atomic u64 access.
+    current_block: Arc<RwLock<Option<u64>>>,
 }
 
 impl InMemoryProvider {
@@ -122,6 +143,7 @@ impl InMemoryProvider {
             code: Arc::new(DashMap::new()),
             storage: Arc::new(DashMap::new()),
             block_hashes: Arc::new(DashMap::new()),
+            current_block: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -204,6 +226,15 @@ impl Provider for InMemoryProvider {
         }
         Ok(result)
     }
+
+    fn get_current_block(&self) -> Result<Option<u64>> {
+        Ok(*self.current_block.read())
+    }
+
+    fn set_current_block(&self, block_number: u64) -> Result<()> {
+        *self.current_block.write() = Some(block_number);
+        Ok(())
+    }
 }
 
 /// Blanket implementation of Provider for Arc<P> where P: Provider.
@@ -253,6 +284,14 @@ impl<P: Provider> Provider for Arc<P> {
 
     fn get_all_storage(&self, address: Address) -> Result<BTreeMap<U256, U256>> {
         (**self).get_all_storage(address)
+    }
+
+    fn get_current_block(&self) -> Result<Option<u64>> {
+        (**self).get_current_block()
+    }
+
+    fn set_current_block(&self, block_number: u64) -> Result<()> {
+        (**self).set_current_block(block_number)
     }
 }
 
@@ -779,6 +818,22 @@ mod tests {
         // Verify cache contains the entry
         assert!(db.cache_accounts.write().contains(&addr));
     }
+
+    #[test]
+    fn test_in_memory_provider_current_block() {
+        let provider = InMemoryProvider::new();
+
+        // Initially no current block
+        assert!(provider.get_current_block().unwrap().is_none());
+
+        // Set current block
+        provider.set_current_block(100).unwrap();
+        assert_eq!(provider.get_current_block().unwrap(), Some(100));
+
+        // Update current block
+        provider.set_current_block(200).unwrap();
+        assert_eq!(provider.get_current_block().unwrap(), Some(200));
+    }
 }
 
 // =============================================================================
@@ -798,6 +853,7 @@ pub mod mdbx_provider {
     ///
     /// This provider wraps `MdbxEvmStore` from the storage layer and implements
     /// the `Provider` trait to integrate with the execution layer.
+    #[derive(Clone)]
     pub struct MdbxProvider {
         store: MdbxEvmStore,
     }
@@ -921,6 +977,18 @@ pub mod mdbx_provider {
                         })
                         .collect()
                 })
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
+        }
+
+        fn get_current_block(&self) -> Result<Option<u64>> {
+            self.store
+                .get_current_block()
+                .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
+        }
+
+        fn set_current_block(&self, block_number: u64) -> Result<()> {
+            self.store
+                .set_current_block(block_number)
                 .map_err(|e| DatabaseError::mdbx(e.to_string()).into())
         }
     }

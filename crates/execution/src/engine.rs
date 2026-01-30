@@ -166,6 +166,10 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
     /// staking precompile with the validator set from the genesis file, ensuring
     /// the validator state is correctly populated on node startup.
     ///
+    /// The engine will attempt to restore `current_block` from persistent storage
+    /// to survive node restarts. If no persisted state exists (first startup),
+    /// it defaults to 0.
+    ///
     /// # Arguments
     /// * `chain_config` - Chain configuration parameters
     /// * `provider` - Storage provider (factory pattern)
@@ -184,6 +188,29 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
             chain_config.block_gas_limit,
             chain_config.base_fee_per_gas,
         );
+
+        // Restore current_block from persistent storage if available
+        // This is critical for correct block validation after node restart
+        let current_block = match provider.get_current_block() {
+            Ok(Some(block)) => {
+                tracing::info!(
+                    current_block = block,
+                    "Restored current block from persistent storage"
+                );
+                block
+            }
+            Ok(None) => {
+                tracing::info!("No persisted current block found, starting from 0");
+                0
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to read current block from storage, starting from 0"
+                );
+                0
+            }
+        };
 
         let database = CipherBftDatabase::new(provider.clone());
         let state_manager = StateManager::new(provider);
@@ -209,7 +236,7 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
             evm_config,
             staking_precompile,
             block_hashes: RwLock::new(lru::LruCache::new(BLOCK_HASH_CACHE_SIZE)),
-            current_block: 0,
+            current_block,
         }
     }
 
@@ -505,8 +532,19 @@ impl<P: Provider + Clone> ExecutionLayer for ExecutionEngine<P> {
                 .unwrap_or(B256::ZERO)
         };
 
-        // Update current block number
+        // Update current block number and persist to storage
         self.current_block = input.block_number;
+
+        // Persist current_block to storage for recovery after restart
+        if let Err(e) = self.database.provider().set_current_block(input.block_number) {
+            tracing::error!(
+                block_number = input.block_number,
+                error = %e,
+                "Failed to persist current block number"
+            );
+            // Continue execution - we don't want to fail the block for persistence errors
+            // The worst case is having to re-execute some blocks after restart
+        }
 
         tracing::info!(
             block_number = input.block_number,
