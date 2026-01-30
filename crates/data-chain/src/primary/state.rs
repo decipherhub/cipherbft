@@ -504,8 +504,20 @@ impl PrimaryState {
     // =========================================================
 
     /// Add Car to awaiting batches queue
+    ///
+    /// IMPORTANT: We update position tracking immediately even though batches aren't ready.
+    /// This allows subsequent Cars from the same proposer to be validated (sequential position
+    /// check) and their parent_ref to be verified (requires knowing the parent hash).
+    ///
+    /// When batch sync completes, we generate the attestation directly without re-validating
+    /// position (since we already did that when the Car first arrived).
     pub fn add_car_awaiting_batches(&mut self, car: Car, missing_digests: Vec<Hash>) {
         let car_hash = car.hash();
+
+        // Update position tracking so subsequent Cars can be validated
+        // This is safe because we've already verified this Car's position is sequential
+        self.update_last_seen(car.proposer, car.position, car_hash);
+
         self.cars_awaiting_batches.insert(
             car_hash,
             CarAwaitingBatches {

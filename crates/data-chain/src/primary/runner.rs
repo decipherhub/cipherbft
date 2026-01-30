@@ -534,14 +534,38 @@ impl Primary {
                     // Check if any waiting Cars are now ready
                     let ready_cars = self.state.get_ready_cars();
                     for car in ready_cars {
-                        debug!(
+                        // IMPORTANT: The Car was already validated when first received
+                        // (position check, signature, parent_ref all passed). We queued
+                        // it only because batches were missing. Now that batches are
+                        // available, we directly create the attestation without re-running
+                        // validation (which would fail position check since subsequent
+                        // Cars have already advanced the position counter).
+                        info!(
                             proposer = %car.proposer,
                             position = car.position,
-                            "Processing Car that was waiting for batches"
+                            batch_count = car.batch_digests.len(),
+                            "Creating attestation after batch sync completed"
                         );
-                        // Re-process the Car now that batches are available
-                        // Use a dummy validator since we already have the Car
-                        self.handle_received_car(car.proposer, car).await;
+
+                        // Create attestation directly (skip position re-validation)
+                        let attestation = self.core.create_attestation(&car);
+
+                        // Track attestation sent metric
+                        DCL_ATTESTATIONS_SENT.inc();
+
+                        // Send attestation to proposer
+                        self.network
+                            .send_attestation(car.proposer, &attestation)
+                            .await;
+
+                        // Emit event
+                        let _ = self
+                            .event_sender
+                            .send(PrimaryEvent::AttestationGenerated {
+                                car_proposer: car.proposer,
+                                attestation,
+                            })
+                            .await;
                     }
                 }
             }
