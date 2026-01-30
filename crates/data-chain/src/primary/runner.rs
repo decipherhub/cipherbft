@@ -571,6 +571,15 @@ impl Primary {
                         "Checked for ready Cars after batch sync"
                     );
                     for car in ready_cars {
+                        // Skip if this is our own Car (defensive check)
+                        if car.proposer == self.config.validator_id {
+                            trace!(
+                                position = car.position,
+                                "Skipping attestation for our own Car in batch sync"
+                            );
+                            continue;
+                        }
+
                         // IMPORTANT: The Car was already validated when first received
                         // (position check, signature, parent_ref all passed). We queued
                         // it only because batches were missing. Now that batches are
@@ -858,6 +867,15 @@ impl Primary {
 
     /// Handle a received Car
     async fn handle_received_car(&mut self, from: ValidatorId, car: Car) {
+        // Skip if this is our own Car (we handle our own Cars through attestation collection)
+        if car.proposer == self.config.validator_id {
+            trace!(
+                position = car.position,
+                "Ignoring received Car for our own Car"
+            );
+            return;
+        }
+
         // DIAGNOSTIC: Log at INFO level for batched Cars to trace attestation flow
         let batch_count = car.batch_digests.len();
         if batch_count > 0 {
@@ -1227,6 +1245,30 @@ impl Primary {
             attestation_count = attestation.count(),
             "Received valid CarWithAttestation from peer"
         );
+
+        // CRITICAL FIX: Update position tracking from attested Car broadcasts
+        //
+        // Without this, validators can fall into a position gap death spiral:
+        // 1. Validator A's Cars don't reach quorum (for whatever reason)
+        // 2. Other validators' last_seen_positions[A] becomes stale
+        // 3. When A broadcasts new Cars, others detect a "position gap"
+        // 4. No attestations are generated, A's Cars never reach quorum
+        // 5. The gap grows forever
+        //
+        // By updating position tracking when we receive a valid CarWithAttestation
+        // (which has quorum verification), we stay in sync even if we missed
+        // some intermediate Cars. This breaks the death spiral.
+        let current_pos = self.state.last_seen_positions.get(&car.proposer).copied();
+        if current_pos.is_none_or(|p| car.position > p) {
+            self.state
+                .update_last_seen(car.proposer, car.position, car_hash);
+            info!(
+                proposer = %car.proposer,
+                old_position = current_pos,
+                new_position = car.position,
+                "Updated position tracking from CarWithAttestation broadcast"
+            );
+        }
 
         // Persist attestation to storage if available
         if let Some(ref storage) = self.storage {
