@@ -521,10 +521,12 @@ impl Primary {
             }
 
             WorkerToPrimary::BatchSynced { digest, success } => {
-                debug!(
+                // DIAGNOSTIC: Log at INFO level to debug batch sync flow
+                info!(
                     digest = %digest,
                     success,
-                    "Batch sync result"
+                    awaiting_cars_count = self.state.cars_awaiting_batches.len(),
+                    "BatchSynced received at Primary"
                 );
 
                 if success {
@@ -533,6 +535,14 @@ impl Primary {
 
                     // Check if any waiting Cars are now ready
                     let ready_cars = self.state.get_ready_cars();
+
+                    // DIAGNOSTIC: Log ready cars count
+                    info!(
+                        digest = %digest,
+                        ready_count = ready_cars.len(),
+                        remaining_awaiting = self.state.cars_awaiting_batches.len(),
+                        "Checked for ready Cars after batch sync"
+                    );
                     for car in ready_cars {
                         // IMPORTANT: The Car was already validated when first received
                         // (position check, signature, parent_ref all passed). We queued
@@ -779,20 +789,34 @@ impl Primary {
 
     /// Handle a received Car
     async fn handle_received_car(&mut self, from: ValidatorId, car: Car) {
-        debug!(
-            from = %from,
-            proposer = %car.proposer,
-            position = car.position,
-            "Received Car"
-        );
+        // DIAGNOSTIC: Log at INFO level for batched Cars to trace attestation flow
+        let batch_count = car.batch_digests.len();
+        if batch_count > 0 {
+            info!(
+                from = %from,
+                proposer = %car.proposer,
+                position = car.position,
+                batch_count,
+                "Received BATCHED Car from peer"
+            );
+        } else {
+            debug!(
+                from = %from,
+                proposer = %car.proposer,
+                position = car.position,
+                "Received Car"
+            );
+        }
 
         // Check batch availability (T097)
         let (has_all_batches, missing_digests) = self.state.check_batch_availability(&car);
 
         if !has_all_batches {
-            debug!(
+            // DIAGNOSTIC: Log at INFO to trace batch sync trigger
+            info!(
                 proposer = %car.proposer,
                 position = car.position,
+                batch_count,
                 missing_count = missing_digests.len(),
                 "Car missing batches, triggering sync"
             );
@@ -803,6 +827,15 @@ impl Primary {
                 // Add to awaiting queue (T098)
                 self.state
                     .add_car_awaiting_batches(car.clone(), missing_digests.clone());
+
+                // DIAGNOSTIC: Confirm Car added to awaiting queue
+                info!(
+                    proposer = %car.proposer,
+                    position = car.position,
+                    car_hash = %car_hash,
+                    awaiting_count = self.state.cars_awaiting_batches.len(),
+                    "Car added to awaiting queue"
+                );
 
                 // Track sync request metric
                 DCL_SYNC_REQUESTS.inc();

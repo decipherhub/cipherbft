@@ -536,7 +536,21 @@ impl PrimaryState {
         let mut ready_hashes = Vec::new();
 
         for (hash, awaiting) in &self.cars_awaiting_batches {
-            let (has_all, _) = self.check_batch_availability(&awaiting.car);
+            let (has_all, missing) = self.check_batch_availability(&awaiting.car);
+
+            // DIAGNOSTIC: Log each awaiting Car's status
+            if !has_all {
+                tracing::debug!(
+                    car_hash = %hash,
+                    proposer = %awaiting.car.proposer,
+                    position = awaiting.car.position,
+                    car_batch_count = awaiting.car.batch_digests.len(),
+                    still_missing = missing.len(),
+                    available_batches_count = self.available_batches.len(),
+                    "Car still waiting for batches"
+                );
+            }
+
             if has_all {
                 ready.push(awaiting.car.clone());
                 ready_hashes.push(*hash);
