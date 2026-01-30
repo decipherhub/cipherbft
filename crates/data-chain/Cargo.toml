@@ -12,6 +12,9 @@ cipherbft-types = { path = "../types" }
 cipherbft-crypto = { path = "../crypto" }
 cipherbft-metrics = { path = "../metrics" }
 
+# Ethereum types
+alloy-primitives = { workspace = true }
+
 # Async runtime
 tokio = { workspace = true }
 async-trait = { workspace = true }

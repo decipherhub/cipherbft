@@ -18,7 +18,7 @@ use crate::{
     },
 };
 use alloy_consensus::Header as AlloyHeader;
-use alloy_primitives::{Address, Bytes, B256, B64, U256};
+use alloy_primitives::{Bytes, B256, B64, U256};
 use cipherbft_metrics::execution::{
     EXECUTION_BLOCKS_EXECUTED, EXECUTION_BLOCK_TIME, EXECUTION_CONTRACT_CALLS,
     EXECUTION_CONTRACT_DEPLOYMENTS, EXECUTION_GAS_PER_BLOCK, EXECUTION_GAS_UTILIZATION,
@@ -662,7 +662,7 @@ impl<P: Provider + Clone> ExecutionLayer for ExecutionEngine<P> {
         let header = BlockHeader {
             parent_hash: consensus_block.parent_hash,
             ommers_hash: alloy_primitives::keccak256([]), // Empty ommers
-            beneficiary: Address::ZERO,                   // No coinbase in PoS
+            beneficiary: consensus_block.beneficiary,     // Proposer's Ethereum address
             state_root: execution_result.state_root,
             transactions_root: execution_result.transactions_root,
             receipts_root: execution_result.receipts_root,
@@ -722,7 +722,7 @@ impl<P: Provider + Clone> ExecutionLayer for ExecutionEngine<P> {
 mod tests {
     use super::*;
     use crate::database::InMemoryProvider;
-    use alloy_primitives::Bloom;
+    use alloy_primitives::{Address, Bloom};
 
     fn create_test_engine() -> ExecutionEngine<InMemoryProvider> {
         let provider = InMemoryProvider::new();
@@ -749,6 +749,7 @@ mod tests {
             parent_hash: B256::ZERO,
             gas_limit: 30_000_000,
             base_fee_per_gas: Some(1_000_000_000),
+            beneficiary: Address::ZERO,
         };
 
         assert!(engine.validate_block(&input).is_ok());
@@ -767,6 +768,7 @@ mod tests {
             parent_hash: B256::ZERO,
             gas_limit: 30_000_000,
             base_fee_per_gas: Some(1_000_000_000),
+            beneficiary: Address::ZERO,
         };
 
         assert!(engine.validate_block(&input).is_err());
@@ -783,6 +785,7 @@ mod tests {
             parent_hash: B256::ZERO,
             gas_limit: 0,
             base_fee_per_gas: Some(1_000_000_000),
+            beneficiary: Address::ZERO,
         };
 
         assert!(engine.validate_block(&input).is_err());
@@ -799,6 +802,7 @@ mod tests {
             parent_hash: B256::ZERO,
             gas_limit: 30_000_000,
             base_fee_per_gas: Some(1_000_000_000),
+            beneficiary: Address::ZERO,
         };
 
         let result = engine.execute_block(input).unwrap();
@@ -820,6 +824,7 @@ mod tests {
             transactions: vec![],
             gas_limit: 30_000_000,
             base_fee_per_gas: Some(1_000_000_000),
+            beneficiary: Address::ZERO,
         };
 
         let execution_result = ExecutionResult {
@@ -865,5 +870,39 @@ mod tests {
         let engine = create_test_engine();
         let result = engine.get_delayed_block_hash(999);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_seal_block_uses_beneficiary() {
+        let engine = create_test_engine();
+        let beneficiary = Address::from([0xab; 20]);
+
+        let consensus_block = ConsensusBlock {
+            number: 1,
+            timestamp: 1234567890,
+            parent_hash: B256::ZERO,
+            transactions: vec![],
+            gas_limit: 30_000_000,
+            base_fee_per_gas: Some(1_000_000_000),
+            beneficiary,
+        };
+
+        let execution_result = ExecutionResult {
+            block_number: 1,
+            state_root: B256::ZERO,
+            receipts_root: B256::ZERO,
+            transactions_root: B256::ZERO,
+            gas_used: 0,
+            block_hash: B256::ZERO,
+            receipts: vec![],
+            logs_bloom: Bloom::ZERO,
+        };
+
+        let sealed = engine
+            .seal_block(consensus_block, execution_result)
+            .unwrap();
+
+        // Verify beneficiary is set in sealed block header
+        assert_eq!(sealed.header.beneficiary, beneficiary);
     }
 }

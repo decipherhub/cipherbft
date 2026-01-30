@@ -1,6 +1,7 @@
 use std::fmt::{Debug, Display};
 use std::io::{Read, Write};
 
+use alloy_primitives::Address;
 use borsh::{BorshDeserialize, BorshSerialize};
 use cipherbft_crypto::Ed25519PublicKey;
 use cipherbft_types::ValidatorId;
@@ -53,22 +54,42 @@ pub struct ConsensusValidator {
     pub address: ConsensusAddress,
     pub public_key: ConsensusPublicKey,
     pub voting_power: u64,
+    /// Ethereum address (secp256k1) for block beneficiary.
+    #[serde(default)]
+    pub ethereum_address: Address,
 }
 
 impl BorshSerialize for ConsensusValidator {
     fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
         BorshSerialize::serialize(&self.address, writer)?;
         BorshSerialize::serialize(&self.public_key, writer)?;
-        BorshSerialize::serialize(&self.voting_power, writer)
+        BorshSerialize::serialize(&self.voting_power, writer)?;
+        writer.write_all(self.ethereum_address.as_slice())?;
+        Ok(())
     }
 }
 
 impl BorshDeserialize for ConsensusValidator {
     fn deserialize_reader<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let address = ConsensusAddress::deserialize_reader(reader)?;
+        let public_key = ConsensusPublicKey::deserialize_reader(reader)?;
+        let voting_power = u64::deserialize_reader(reader)?;
+
+        // Backward compatibility: try to read ethereum_address, fall back to ZERO if EOF
+        let ethereum_address = {
+            let mut eth_bytes = [0u8; 20];
+            match reader.read_exact(&mut eth_bytes) {
+                Ok(()) => Address::from(eth_bytes),
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Address::ZERO,
+                Err(e) => return Err(e),
+            }
+        };
+
         Ok(Self {
-            address: ConsensusAddress::deserialize_reader(reader)?,
-            public_key: ConsensusPublicKey::deserialize_reader(reader)?,
-            voting_power: u64::deserialize_reader(reader)?,
+            address,
+            public_key,
+            voting_power,
+            ethereum_address,
         })
     }
 }
@@ -79,6 +100,22 @@ impl ConsensusValidator {
             address: ConsensusAddress(address),
             public_key: ConsensusPublicKey(public_key),
             voting_power,
+            ethereum_address: Address::ZERO,
+        }
+    }
+
+    /// Create a new validator with an Ethereum address for beneficiary.
+    pub fn new_with_ethereum_address(
+        address: ValidatorId,
+        public_key: Ed25519PublicKey,
+        voting_power: u64,
+        ethereum_address: Address,
+    ) -> Self {
+        Self {
+            address: ConsensusAddress(address),
+            public_key: ConsensusPublicKey(public_key),
+            voting_power,
+            ethereum_address,
         }
     }
 }
@@ -221,6 +258,16 @@ impl ConsensusValidatorSet {
     pub fn is_empty(&self) -> bool {
         self.validators.is_empty()
     }
+
+    /// Get a validator's Ethereum address by their ValidatorId.
+    ///
+    /// Returns `None` if the validator is not in the set.
+    pub fn get_ethereum_address(&self, validator_id: &ValidatorId) -> Option<Address> {
+        self.validators
+            .iter()
+            .find(|v| v.address.0 == *validator_id)
+            .map(|v| v.ethereum_address)
+    }
 }
 
 #[cfg(feature = "malachite")]
@@ -352,5 +399,51 @@ mod tests {
             MAX_VALIDATORS <= 100_000,
             "MAX_VALIDATORS should not exceed 100,000"
         );
+    }
+
+    #[test]
+    fn test_consensus_validator_with_ethereum_address() {
+        use alloy_primitives::Address;
+
+        let mut rng = rand::thread_rng();
+        let keypair = Ed25519KeyPair::generate(&mut rng);
+        let eth_address = Address::from([0xab; 20]);
+
+        let validator = ConsensusValidator::new_with_ethereum_address(
+            keypair.validator_id(),
+            keypair.public_key,
+            100,
+            eth_address,
+        );
+
+        assert_eq!(validator.ethereum_address, eth_address);
+        assert_eq!(validator.voting_power, 100);
+    }
+
+    #[test]
+    fn test_validator_set_get_ethereum_address() {
+        use alloy_primitives::Address;
+
+        let mut rng = rand::thread_rng();
+        let keypair = Ed25519KeyPair::generate(&mut rng);
+        let eth_address = Address::from([0xab; 20]);
+        let validator_id = keypair.validator_id();
+
+        let validator = ConsensusValidator::new_with_ethereum_address(
+            keypair.validator_id(),
+            keypair.public_key,
+            100,
+            eth_address,
+        );
+
+        let set = ConsensusValidatorSet::new(vec![validator]);
+
+        // Should find the ethereum address
+        let found = set.get_ethereum_address(&validator_id);
+        assert_eq!(found, Some(eth_address));
+
+        // Should return None for unknown validator
+        let unknown_id = ValidatorId::from_bytes([0xff; VALIDATOR_ID_SIZE]);
+        assert_eq!(set.get_ethereum_address(&unknown_id), None);
     }
 }

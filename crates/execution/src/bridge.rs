@@ -23,7 +23,7 @@
 use crate::error::ExecutionError;
 use crate::types::BlockInput;
 use crate::Result;
-use alloy_primitives::{Bytes, B256};
+use alloy_primitives::{Address, Bytes, B256};
 use async_trait::async_trait;
 use cipherbft_data_chain::{Batch, Cut as DclCut};
 use cipherbft_types::Hash;
@@ -143,6 +143,7 @@ impl<S: BatchFetcher> ExecutionBridge<S> {
             parent_hash,
             gas_limit: 30_000_000,
             base_fee_per_gas: Some(1_000_000_000),
+            beneficiary: cut.proposer_address.unwrap_or(Address::ZERO),
         })
     }
 
@@ -198,6 +199,7 @@ impl<S: BatchFetcher> ExecutionBridge<S> {
             parent_hash,
             gas_limit,
             base_fee_per_gas,
+            beneficiary: cut.proposer_address.unwrap_or(Address::ZERO),
         })
     }
 }

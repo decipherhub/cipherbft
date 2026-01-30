@@ -724,7 +724,7 @@ impl Primary {
                 );
 
                 // Update cut former with new validator list
-                self.cut_former = CutFormer::new(validators);
+                self.cut_former = CutFormer::new(validators, self.config.attestation_quorum);
 
                 info!(
                     validator = %self.config.validator_id,

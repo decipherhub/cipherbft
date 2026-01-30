@@ -19,6 +19,7 @@ use crate::config::NodeConfig;
 use crate::execution_bridge::{BlockExecutionResult, ExecutionBridge};
 use crate::network::{TcpPrimaryNetwork, TcpWorkerNetwork};
 use crate::supervisor::NodeSupervisor;
+use alloy_primitives::Address;
 use anyhow::{Context, Result};
 use cipherbft_consensus::{
     create_context, default_consensus_params, default_engine_config_single_part, spawn_host,
@@ -113,6 +114,8 @@ pub struct ValidatorInfo {
     pub ed25519_public_key: Ed25519PublicKey,
     /// Voting power for consensus
     pub voting_power: u64,
+    /// Ethereum address (secp256k1) for block beneficiary
+    pub ethereum_address: Address,
 }
 
 impl ValidatorInfo {
@@ -122,6 +125,7 @@ impl ValidatorInfo {
             bls_public_key,
             ed25519_public_key,
             voting_power: 100, // Default voting power
+            ethereum_address: Address::ZERO,
         }
     }
 
@@ -135,6 +139,22 @@ impl ValidatorInfo {
             bls_public_key,
             ed25519_public_key,
             voting_power,
+            ethereum_address: Address::ZERO,
+        }
+    }
+
+    /// Create validator info with voting power and ethereum address
+    pub fn with_ethereum_address(
+        bls_public_key: BlsPublicKey,
+        ed25519_public_key: Ed25519PublicKey,
+        voting_power: u64,
+        ethereum_address: Address,
+    ) -> Self {
+        Self {
+            bls_public_key,
+            ed25519_public_key,
+            voting_power,
+            ethereum_address,
         }
     }
 }
@@ -343,7 +363,12 @@ impl Node {
 
             self.validators.insert(
                 validator_id,
-                ValidatorInfo::with_voting_power(bls_pubkey, ed25519_pubkey, voting_power),
+                ValidatorInfo::with_ethereum_address(
+                    bls_pubkey,
+                    ed25519_pubkey,
+                    voting_power,
+                    validator.address, // This is the secp256k1 Ethereum address from genesis
+                ),
             );
         }
 
@@ -874,20 +899,29 @@ impl Node {
             .map(|info| info.voting_power)
             .unwrap_or(100);
 
+        // Get our own ethereum address from the validator set (or use ZERO if not found)
+        let our_ethereum_address = self
+            .validators
+            .get(&self.validator_id)
+            .map(|info| info.ethereum_address)
+            .unwrap_or(Address::ZERO);
+
         // Start with ourselves
-        let mut consensus_validators = vec![ConsensusValidator::new(
+        let mut consensus_validators = vec![ConsensusValidator::new_with_ethereum_address(
             self.validator_id,
             ed25519_pubkey,
             our_voting_power,
+            our_ethereum_address,
         )];
 
         // Add all other validators from the known validator set
         for (validator_id, info) in &self.validators {
             if *validator_id != self.validator_id {
-                consensus_validators.push(ConsensusValidator::new(
+                consensus_validators.push(ConsensusValidator::new_with_ethereum_address(
                     *validator_id,
                     info.ed25519_public_key.clone(),
                     info.voting_power,
+                    info.ethereum_address,
                 ));
             }
         }
@@ -1263,7 +1297,6 @@ impl Node {
         let epoch_config = EpochConfig::default();
 
         // Block configuration from genesis
-        let beneficiary = self.beneficiary;
         let gas_limit = self.gas_limit;
 
         // Run the main event loop with graceful shutdown support
@@ -1281,7 +1314,6 @@ impl Node {
             rpc_executor,
             epoch_config,
             self.epoch_block_reward,
-            beneficiary,
             gas_limit,
         )
         .await;
@@ -1332,7 +1364,6 @@ impl Node {
         rpc_executor: Option<Arc<cipherbft_rpc::EvmExecutionApi<InMemoryProvider>>>,
         epoch_config: EpochConfig,
         epoch_block_reward: U256,
-        beneficiary: [u8; 20],
         gas_limit: u64,
     ) -> Result<()> {
         loop {
@@ -1445,6 +1476,13 @@ impl Node {
                     // Execute Cut if execution layer is enabled
                     // Then store the block to MDBX for RPC queries
                     if let Some(ref bridge) = execution_bridge {
+                        // Extract beneficiary from Cut BEFORE execute_cut consumes it
+                        // The proposer_address is the Ethereum address of the validator who built this Cut
+                        let block_beneficiary: [u8; 20] = cut
+                            .proposer_address
+                            .map(|addr| addr.into_array())
+                            .unwrap_or([0u8; 20]);
+
                         match bridge.execute_cut(cut).await {
                             Ok(block_result) => {
                                 info!(
@@ -1461,7 +1499,7 @@ impl Node {
                                 // to prevent orphaned records referencing non-existent blocks.
                                 if let Some(ref storage) = rpc_storage {
                                     // Create and store the block FIRST
-                                    let block = Self::execution_result_to_block(height.0, &block_result, beneficiary, gas_limit);
+                                    let block = Self::execution_result_to_block(height.0, &block_result, block_beneficiary, gas_limit);
                                     if let Err(e) = storage.block_store().put_block(&block).await {
                                         error!("Failed to store block {} (hash: {}) to MDBX: {}", height.0, block_result.block_hash, e);
                                         // Skip all related storage operations - don't create orphaned receipts/txs/logs

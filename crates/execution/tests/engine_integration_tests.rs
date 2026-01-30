@@ -7,7 +7,7 @@
 //! - Block sealing
 //! - Delayed commitment
 
-use alloy_primitives::{Bloom, Bytes, B256};
+use alloy_primitives::{Address, Bloom, Bytes, B256};
 use cipherbft_execution::{
     BlockInput, ChainConfig, ConsensusBlock, ExecutionEngine, ExecutionLayerTrait, InMemoryProvider,
 };
@@ -29,6 +29,7 @@ fn test_execute_empty_block() {
         parent_hash: B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let result = engine.execute_block(input).unwrap();
@@ -51,6 +52,7 @@ fn test_execute_multiple_empty_blocks() {
             parent_hash: B256::ZERO,
             gas_limit: 30_000_000,
             base_fee_per_gas: Some(1_000_000_000),
+            beneficiary: Address::ZERO,
         };
 
         let result = engine.execute_block(input).unwrap();
@@ -71,6 +73,7 @@ fn test_state_root_computation_at_checkpoint() {
             parent_hash: B256::ZERO,
             gas_limit: 30_000_000,
             base_fee_per_gas: Some(1_000_000_000),
+            beneficiary: Address::ZERO,
         };
 
         let result = engine.execute_block(input).unwrap();
@@ -94,6 +97,7 @@ fn test_seal_block() {
         parent_hash: B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let execution_result = engine.execute_block(input).unwrap();
@@ -106,6 +110,7 @@ fn test_seal_block() {
         transactions: vec![],
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let sealed = engine
@@ -136,6 +141,7 @@ fn test_delayed_commitment() {
             },
             gas_limit: 30_000_000,
             base_fee_per_gas: Some(1_000_000_000),
+            beneficiary: Address::ZERO,
         };
 
         let execution_result = engine.execute_block(input.clone()).unwrap();
@@ -148,6 +154,7 @@ fn test_delayed_commitment() {
             transactions: vec![],
             gas_limit: input.gas_limit,
             base_fee_per_gas: input.base_fee_per_gas,
+            beneficiary: Address::ZERO,
         };
 
         let sealed = engine
@@ -174,6 +181,7 @@ fn test_validate_block_sequential() {
         parent_hash: B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     assert!(engine.validate_block(&input1).is_ok());
@@ -187,6 +195,7 @@ fn test_validate_block_sequential() {
         parent_hash: B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     assert!(engine.validate_block(&input2).is_ok());
@@ -204,6 +213,7 @@ fn test_validate_block_non_sequential() {
         parent_hash: B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     engine.execute_block(input1).unwrap();
@@ -216,6 +226,7 @@ fn test_validate_block_non_sequential() {
         parent_hash: B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     assert!(engine.validate_block(&input_invalid).is_err());
@@ -232,6 +243,7 @@ fn test_validate_block_zero_gas_limit() {
         parent_hash: B256::ZERO,
         gas_limit: 0, // Invalid
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     assert!(engine.validate_block(&input).is_err());
@@ -253,6 +265,7 @@ fn test_state_root_retrieval() {
             parent_hash: B256::ZERO,
             gas_limit: 30_000_000,
             base_fee_per_gas: Some(1_000_000_000),
+            beneficiary: Address::ZERO,
         };
 
         engine.execute_block(input).unwrap();
@@ -284,6 +297,7 @@ fn test_complete_block_lifecycle() {
         parent_hash: B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     // 2. Validate block
@@ -303,6 +317,7 @@ fn test_complete_block_lifecycle() {
         transactions: input.transactions,
         gas_limit: input.gas_limit,
         base_fee_per_gas: input.base_fee_per_gas,
+        beneficiary: Address::ZERO,
     };
 
     let sealed = engine
@@ -326,6 +341,7 @@ fn test_receipts_root_computation() {
         parent_hash: B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let result = engine.execute_block(input).unwrap();
@@ -345,6 +361,7 @@ fn test_transactions_root_computation() {
         parent_hash: B256::ZERO,
         gas_limit: 30_000_000,
         base_fee_per_gas: Some(1_000_000_000),
+        beneficiary: Address::ZERO,
     };
 
     let result = engine.execute_block(input).unwrap();
