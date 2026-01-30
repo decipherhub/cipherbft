@@ -19,7 +19,7 @@ use crate::config::NodeConfig;
 use crate::execution_bridge::{BlockExecutionResult, ExecutionBridge};
 use crate::network::{TcpPrimaryNetwork, TcpWorkerNetwork};
 use crate::supervisor::NodeSupervisor;
-use alloy_primitives::Address;
+use alloy_primitives::{Address, B256};
 use anyhow::{Context, Result};
 use cipherbft_consensus::{
     create_context, default_consensus_params, default_engine_config_single_part, spawn_host,
@@ -1133,30 +1133,41 @@ impl Node {
 
             // Ensure genesis block (block 0) exists for Ethereum RPC compatibility
             // Block explorers like Blockscout expect block 0 to exist
-            match storage.block_store().get_block_by_number(0).await {
-                Ok(Some(_)) => {
-                    debug!("Genesis block (block 0) already exists in storage");
-                }
-                Ok(None) => {
-                    // Create and store genesis block
-                    let genesis_timestamp = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-                    let genesis_block =
-                        Self::create_genesis_block(genesis_timestamp, self.gas_limit);
-                    if let Err(e) = storage.block_store().put_block(&genesis_block).await {
-                        error!("Failed to store genesis block: {}", e);
-                    } else {
-                        info!(
-                            "Created genesis block (block 0) with hash 0x{}",
-                            hex::encode(&genesis_block.hash[..8])
-                        );
+            let genesis_hash: Option<[u8; 32]> =
+                match storage.block_store().get_block_by_number(0).await {
+                    Ok(Some(existing_block)) => {
+                        debug!("Genesis block (block 0) already exists in storage");
+                        Some(existing_block.hash)
                     }
-                }
-                Err(e) => {
-                    warn!("Failed to check for genesis block: {}", e);
-                }
+                    Ok(None) => {
+                        // Create and store genesis block
+                        let genesis_timestamp = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        let genesis_block =
+                            Self::create_genesis_block(genesis_timestamp, self.gas_limit);
+                        let hash = genesis_block.hash;
+                        if let Err(e) = storage.block_store().put_block(&genesis_block).await {
+                            error!("Failed to store genesis block: {}", e);
+                            None
+                        } else {
+                            info!(
+                                "Created genesis block (block 0) with hash 0x{}",
+                                hex::encode(&genesis_block.hash[..8])
+                            );
+                            Some(hash)
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to check for genesis block: {}", e);
+                        None
+                    }
+                };
+
+            // Synchronize genesis block hash with execution bridge for correct parent_hash in block 1
+            if let (Some(hash), Some(ref bridge)) = (genesis_hash, &self.execution_bridge) {
+                bridge.set_genesis_block_hash(B256::from(hash));
             }
 
             // Initialize latest_block from storage (important for restart scenarios)
@@ -1515,11 +1526,12 @@ impl Node {
 
                                         // Store receipts for eth_getBlockReceipts queries
                                         if !block_result.execution_result.receipts.is_empty() {
+                                            let block_hash_bytes = block_result.block_hash.0;
                                             let storage_receipts: Vec<StorageReceipt> = block_result
                                                 .execution_result
                                                 .receipts
                                                 .iter()
-                                                .map(Self::execution_receipt_to_storage)
+                                                .map(|r| Self::execution_receipt_to_storage(r, block_hash_bytes))
                                                 .collect();
                                             if let Err(e) = storage.receipt_store().put_receipts(&storage_receipts).await {
                                                 error!("Failed to store {} receipts for block {}: {}", storage_receipts.len(), height.0, e);
@@ -1781,7 +1793,12 @@ impl Node {
     /// Convert an execution TransactionReceipt to a storage Receipt for MDBX persistence.
     ///
     /// This bridges the execution layer receipt format to the storage layer format.
-    fn execution_receipt_to_storage(receipt: &ExecutionReceipt) -> StorageReceipt {
+    /// The block_hash parameter is passed explicitly because the execution receipt
+    /// is created before the block hash is computed, so it contains a placeholder value.
+    fn execution_receipt_to_storage(
+        receipt: &ExecutionReceipt,
+        block_hash: [u8; 32],
+    ) -> StorageReceipt {
         // Convert logs
         let logs: Vec<StorageLog> = receipt
             .logs
@@ -1795,7 +1812,7 @@ impl Node {
         StorageReceipt {
             transaction_hash: receipt.transaction_hash.0,
             block_number: receipt.block_number,
-            block_hash: receipt.block_hash.0,
+            block_hash,
             transaction_index: receipt.transaction_index as u32,
             from: receipt.from.0 .0,
             to: receipt.to.map(|a| a.0 .0),
