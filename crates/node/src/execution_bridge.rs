@@ -85,8 +85,8 @@ impl ExecutionBridge {
         let evm_db_path = data_dir.join("evm_storage");
         std::fs::create_dir_all(&evm_db_path)?;
         let evm_db_config = DatabaseConfig::new(&evm_db_path);
-        let evm_database =
-            Database::open(evm_db_config).map_err(|e| anyhow::anyhow!("Failed to open EVM storage database: {}", e))?;
+        let evm_database = Database::open(evm_db_config)
+            .map_err(|e| anyhow::anyhow!("Failed to open EVM storage database: {}", e))?;
         let evm_store = MdbxEvmStore::new(Arc::clone(evm_database.env()));
         let provider = MdbxProvider::new(evm_store);
 
@@ -227,9 +227,7 @@ impl ExecutionBridge {
             );
         } else {
             // Database already has state - this is a node restart
-            info!(
-                "Existing EVM state found, skipping genesis initialization (node restart)"
-            );
+            info!("Existing EVM state found, skipping genesis initialization (node restart)");
         }
 
         // Unwrap the Arc to get ownership of the provider for ExecutionEngine

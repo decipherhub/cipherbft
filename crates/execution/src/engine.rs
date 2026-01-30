@@ -536,7 +536,11 @@ impl<P: Provider + Clone> ExecutionLayer for ExecutionEngine<P> {
         self.current_block = input.block_number;
 
         // Persist current_block to storage for recovery after restart
-        if let Err(e) = self.database.provider().set_current_block(input.block_number) {
+        if let Err(e) = self
+            .database
+            .provider()
+            .set_current_block(input.block_number)
+        {
             tracing::error!(
                 block_number = input.block_number,
                 error = %e,

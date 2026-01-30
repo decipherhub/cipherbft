@@ -65,9 +65,9 @@ pub mod types;
 
 // Re-export main types for convenience
 pub use bridge::{BatchFetcher, ExecutionBridge};
-pub use database::{Account, CipherBftDatabase, InMemoryProvider, Provider};
 #[cfg(feature = "mdbx")]
 pub use database::MdbxProvider;
+pub use database::{Account, CipherBftDatabase, InMemoryProvider, Provider};
 pub use engine::{ExecutionEngine, ExecutionLayer as ExecutionLayerTrait};
 pub use error::{DatabaseError, ExecutionError, Result};
 pub use evm::{
