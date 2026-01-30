@@ -26,10 +26,14 @@ cipherbft-metrics = { path = "../metrics" }
 alloy-primitives = { version = "1", features = ["serde"] }
 alloy-rlp = { workspace = true }
 alloy-consensus = { workspace = true }
+alloy-eips = { version = "1" }
 
 # Reth primitives (for transaction parsing in block execution)
 reth-primitives = { workspace = true }
 reth-primitives-traits = { workspace = true }
+
+# Reth transaction pool (for WorkerPoolAdapter)
+reth-transaction-pool = { git = "https://github.com/paradigmxyz/reth", tag = "v1.10.0" }
 
 # Async runtime
 tokio = { workspace = true, features = ["full", "signal"] }

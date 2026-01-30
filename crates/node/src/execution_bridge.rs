@@ -787,7 +787,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_genesis_block_hash() {
-        let bridge = create_default_bridge().unwrap();
+        let (bridge, _temp_dir) = create_default_bridge().unwrap();
 
         // Initially should be B256::ZERO
         let initial_hash = bridge.last_block_hash.read().map(|guard| *guard).unwrap();

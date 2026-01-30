@@ -17,6 +17,7 @@
 
 use crate::config::NodeConfig;
 use crate::execution_bridge::{BlockExecutionResult, ExecutionBridge};
+use crate::execution_sync::{ExecutionSyncConfig, ExecutionSyncTracker, SyncAction};
 use crate::network::{TcpPrimaryNetwork, TcpWorkerNetwork};
 use crate::supervisor::NodeSupervisor;
 use alloy_primitives::{Address, B256};
@@ -1384,6 +1385,10 @@ impl Node {
         epoch_block_reward: U256,
         gas_limit: u64,
     ) -> Result<()> {
+        // Initialize execution-consensus sync tracker
+        // This detects when execution falls behind and halts before unrecoverable divergence
+        let sync_tracker = ExecutionSyncTracker::new(ExecutionSyncConfig::default());
+
         loop {
             tokio::select! {
                 biased;
@@ -1503,6 +1508,9 @@ impl Node {
 
                         match bridge.execute_cut(cut).await {
                             Ok(block_result) => {
+                                // Track successful execution for divergence detection
+                                sync_tracker.on_success(height.0);
+
                                 info!(
                                     "Cut executed successfully - state_root: {}, gas_used: {}, block_hash: {}",
                                     block_result.execution_result.state_root,
@@ -1656,7 +1664,25 @@ impl Node {
                                 }
                             }
                             Err(e) => {
-                                error!("Cut execution failed: {}", e);
+                                // Check sync tracker for divergence-based halt decision
+                                let action = sync_tracker.on_failure(height.0, &e.to_string());
+                                match action {
+                                    SyncAction::Continue => {
+                                        // Log error but continue processing
+                                        error!("Cut execution failed at height {}: {}", height.0, e);
+                                    }
+                                    SyncAction::Halt { reason } => {
+                                        // Critical divergence detected - halt node
+                                        error!(
+                                            "CRITICAL: Execution-consensus divergence detected. {}. \
+                                             Halting node to prevent unrecoverable state.",
+                                            reason
+                                        );
+                                        return Err(anyhow::anyhow!(
+                                            "Execution halted due to divergence: {}", reason
+                                        ));
+                                    }
+                                }
                             }
                         }
                     } else {
