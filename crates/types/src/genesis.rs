@@ -421,16 +421,6 @@ impl CipherBftConfig {
             }
         })?;
 
-        // DCL attestation threshold must be valid
-        if self.dcl.attestation_threshold_percent == 0
-            || self.dcl.attestation_threshold_percent > 100
-        {
-            return Err(GenesisError::InvalidField {
-                field: "cipherbft.dcl.attestation_threshold_percent",
-                reason: "must be between 1 and 100".into(),
-            });
-        }
-
         Ok(())
     }
 }
@@ -479,6 +469,45 @@ fn default_timeout_precommit_ms() -> u64 {
     1000
 }
 
+/// Attestation quorum requirement for Car inclusion in Cuts.
+///
+/// Determines how many validators must attest to a Car's data availability
+/// before it can be included in consensus. Higher thresholds provide stronger
+/// data availability guarantees but require more network round-trips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AttestationQuorum {
+    /// f+1 validators (minimum for liveness, weaker DA guarantee)
+    ///
+    /// WARNING: With f+1, a Car could be attested by f Byzantine + 1 honest
+    /// validators before other honest validators have synced the batch data.
+    #[serde(rename = "f+1")]
+    FPlusOne,
+    /// 2f+1 validators (quorum, strong DA guarantee)
+    ///
+    /// Ensures a majority of honest validators have received and validated
+    /// the Car's batches before consensus decides on it.
+    #[serde(rename = "2f+1")]
+    #[default]
+    TwoFPlusOne,
+}
+
+impl AttestationQuorum {
+    /// Compute the actual threshold from validator count.
+    ///
+    /// # Arguments
+    /// * `validator_count` - Total number of validators (n)
+    ///
+    /// # Returns
+    /// The number of attestations required based on the quorum type.
+    pub fn compute_threshold(&self, validator_count: usize) -> usize {
+        let f = (validator_count - 1) / 3; // Byzantine tolerance
+        match self {
+            AttestationQuorum::FPlusOne => f + 1,
+            AttestationQuorum::TwoFPlusOne => 2 * f + 1,
+        }
+    }
+}
+
 /// Data Chain Layer parameters (T011).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DclParams {
@@ -498,9 +527,12 @@ pub struct DclParams {
     #[serde(default = "default_max_batch_bytes")]
     pub max_batch_bytes: u64,
 
-    /// BFT attestation threshold percentage (1-100).
-    #[serde(default = "default_attestation_threshold_percent")]
-    pub attestation_threshold_percent: u8,
+    /// Attestation quorum for Car inclusion in Cuts.
+    ///
+    /// - `"2f+1"` (default): Strong data availability, requires quorum
+    /// - `"f+1"`: Faster but weaker DA guarantee
+    #[serde(default)]
+    pub attestation_quorum: AttestationQuorum,
 }
 
 impl Default for DclParams {
@@ -510,7 +542,7 @@ impl Default for DclParams {
             car_interval_ms: default_car_interval_ms(),
             max_batch_txs: default_max_batch_txs(),
             max_batch_bytes: default_max_batch_bytes(),
-            attestation_threshold_percent: default_attestation_threshold_percent(),
+            attestation_quorum: AttestationQuorum::default(),
         }
     }
 }
@@ -526,9 +558,6 @@ fn default_max_batch_txs() -> u64 {
 }
 fn default_max_batch_bytes() -> u64 {
     1_048_576 // 1 MB
-}
-fn default_attestation_threshold_percent() -> u8 {
-    67
 }
 
 /// Staking system parameters (T012).
@@ -926,7 +955,7 @@ mod tests {
         let params = DclParams::default();
         assert!(params.enabled);
         assert_eq!(params.car_interval_ms, 100);
-        assert_eq!(params.attestation_threshold_percent, 67);
+        assert_eq!(params.attestation_quorum, AttestationQuorum::TwoFPlusOne);
     }
 
     #[test]
@@ -968,5 +997,39 @@ mod tests {
         assert!(json.contains("\"genesis_time\""));
         assert!(json.contains("\"network_id\""));
         assert!(json.contains("\"validators\""));
+    }
+
+    #[test]
+    fn test_attestation_quorum_threshold_calculation() {
+        // n=4, f=1
+        assert_eq!(AttestationQuorum::FPlusOne.compute_threshold(4), 2);     // f+1 = 2
+        assert_eq!(AttestationQuorum::TwoFPlusOne.compute_threshold(4), 3);  // 2f+1 = 3
+
+        // n=7, f=2
+        assert_eq!(AttestationQuorum::FPlusOne.compute_threshold(7), 3);     // f+1 = 3
+        assert_eq!(AttestationQuorum::TwoFPlusOne.compute_threshold(7), 5);  // 2f+1 = 5
+
+        // n=10, f=3
+        assert_eq!(AttestationQuorum::FPlusOne.compute_threshold(10), 4);    // f+1 = 4
+        assert_eq!(AttestationQuorum::TwoFPlusOne.compute_threshold(10), 7); // 2f+1 = 7
+    }
+
+    #[test]
+    fn test_attestation_quorum_serde() {
+        // Test serialization
+        let quorum = AttestationQuorum::TwoFPlusOne;
+        let json = serde_json::to_string(&quorum).unwrap();
+        assert_eq!(json, "\"2f+1\"");
+
+        let quorum = AttestationQuorum::FPlusOne;
+        let json = serde_json::to_string(&quorum).unwrap();
+        assert_eq!(json, "\"f+1\"");
+
+        // Test deserialization
+        let quorum: AttestationQuorum = serde_json::from_str("\"2f+1\"").unwrap();
+        assert_eq!(quorum, AttestationQuorum::TwoFPlusOne);
+
+        let quorum: AttestationQuorum = serde_json::from_str("\"f+1\"").unwrap();
+        assert_eq!(quorum, AttestationQuorum::FPlusOne);
     }
 }

@@ -35,7 +35,7 @@ fn valid_genesis_json() -> &'static str {
             },
             "dcl": {
                 "car_interval_ms": 100,
-                "attestation_threshold_percent": 67
+                "attestation_quorum": "2f+1"
             },
             "staking": {
                 "min_stake_wei": "0xde0b6b3a7640000"

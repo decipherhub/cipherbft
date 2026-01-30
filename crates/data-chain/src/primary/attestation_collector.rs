@@ -276,6 +276,7 @@ impl AttestationCollector {
 mod tests {
     use super::*;
     use cipherbft_crypto::BlsKeyPair;
+    use cipherbft_types::genesis::AttestationQuorum;
     use cipherbft_types::VALIDATOR_ID_SIZE;
 
     /// Helper to derive ValidatorId from BLS public key (for tests only)
@@ -298,8 +299,7 @@ mod tests {
             .collect();
 
         let our_id = validator_id_from_bls_pubkey(&keypairs[0].public_key);
-        let f = (n - 1) / 3;
-        let threshold = 2 * f + 1; // 2f+1 (quorum)
+        let threshold = AttestationQuorum::TwoFPlusOne.compute_threshold(n);
 
         let collector = AttestationCollector::new(
             our_id,

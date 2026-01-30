@@ -399,7 +399,7 @@ impl Primary {
 
         let our_keypair =
             cipherbft_crypto::BlsKeyPair::from_secret_key(config.bls_secret_key.clone());
-        let core = Core::new(config.validator_id, our_keypair, validator_pubkeys.clone());
+        let core = Core::new(config.validator_id, our_keypair, validator_pubkeys.clone(), config.attestation_quorum);
 
         let attestation_collector = AttestationCollector::new(
             config.validator_id,
@@ -410,7 +410,7 @@ impl Primary {
             config.attestation_timeout_max,
         );
 
-        let cut_former = CutFormer::new(validators);
+        let cut_former = CutFormer::new(validators, config.attestation_quorum);
 
         Self {
             config,

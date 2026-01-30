@@ -1,6 +1,7 @@
 //! Primary process configuration
 
 use cipherbft_crypto::BlsSecretKey;
+use cipherbft_types::genesis::AttestationQuorum;
 use cipherbft_types::ValidatorId;
 use std::time::Duration;
 
@@ -33,6 +34,12 @@ pub struct PrimaryConfig {
     /// position 0 CARs may be broadcast when no peers are connected and lost,
     /// causing PositionGap errors when later CARs arrive.
     pub startup_delay: Duration,
+    /// Attestation quorum from genesis configuration.
+    ///
+    /// This is the single source of truth for threshold calculation.
+    /// All components (Core, CutFormer, AttestationCollector) derive
+    /// their threshold from this value.
+    pub attestation_quorum: AttestationQuorum,
 }
 
 impl PrimaryConfig {
@@ -48,6 +55,7 @@ impl PrimaryConfig {
             worker_count: 1,
             equivocation_retention: 1000,
             startup_delay: Duration::from_secs(2),
+            attestation_quorum: AttestationQuorum::default(),
         }
     }
 
@@ -87,6 +95,12 @@ impl PrimaryConfig {
         self.startup_delay = delay;
         self
     }
+
+    /// Set attestation quorum (from genesis)
+    pub fn with_attestation_quorum(mut self, quorum: AttestationQuorum) -> Self {
+        self.attestation_quorum = quorum;
+        self
+    }
 }
 
 impl std::fmt::Debug for PrimaryConfig {
@@ -100,6 +114,7 @@ impl std::fmt::Debug for PrimaryConfig {
             .field("worker_count", &self.worker_count)
             .field("equivocation_retention", &self.equivocation_retention)
             .field("startup_delay", &self.startup_delay)
+            .field("attestation_quorum", &self.attestation_quorum)
             .finish()
     }
 }
