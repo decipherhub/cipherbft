@@ -1024,18 +1024,40 @@ impl Primary {
             return;
         }
 
-        // Skip if we already have this Car attested
+        // Check if we should skip this Car
+        // IMPORTANT: Don't skip if the incoming Car has batches and existing is empty!
+        // This ensures batched Cars are always preferred over empty Cars.
         if self.state.attested_cars.contains_key(&car.proposer) {
             let existing = &self.state.attested_cars[&car.proposer];
-            if existing.0.position >= car.position {
+            let existing_has_batches = !existing.0.batch_digests.is_empty();
+            let incoming_has_batches = !car.batch_digests.is_empty();
+
+            // Only skip if:
+            // 1. We already have a batched Car (preserve batched Cars)
+            // 2. OR both are empty/batched and existing has higher/equal position
+            let should_skip = existing_has_batches
+                || (!incoming_has_batches && existing.0.position >= car.position);
+
+            if should_skip {
                 trace!(
                     proposer = %car.proposer,
                     position = car.position,
                     existing_position = existing.0.position,
-                    "Already have attested Car at same or higher position"
+                    existing_has_batches,
+                    incoming_has_batches,
+                    "Skipping CarWithAttestation (existing preferred)"
                 );
                 return;
             }
+
+            // Incoming has batches but existing is empty - will replace!
+            info!(
+                proposer = %car.proposer,
+                incoming_position = car.position,
+                incoming_batches = car.batch_digests.len(),
+                existing_position = existing.0.position,
+                "Replacing empty Car with batched Car from peer"
+            );
         }
 
         // Verify the attestation using Core's pubkey lookup
