@@ -712,8 +712,11 @@ impl Primary {
                     .map(|(i, v)| (*v, i))
                     .collect();
 
-                self.attestation_collector
-                    .update_validators(new_threshold, new_count, validator_indices);
+                self.attestation_collector.update_validators(
+                    new_threshold,
+                    new_count,
+                    validator_indices,
+                );
 
                 // Update cut former with new validator list
                 self.cut_former = CutFormer::new(validators);
