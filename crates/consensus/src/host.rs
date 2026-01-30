@@ -1031,6 +1031,10 @@ pub struct ChannelValueBuilder {
     network: Option<NetworkRef<CipherBftContext>>,
     /// Our own address (for creating proposal parts)
     our_address: Option<ConsensusAddress>,
+    /// Our ValidatorId for proposer identification
+    our_validator_id: Option<ValidatorId>,
+    /// Validator set manager for looking up Ethereum addresses
+    validator_set_manager: Option<Arc<ValidatorSetManager>>,
 }
 
 impl Default for ChannelValueBuilder {
@@ -1052,6 +1056,8 @@ impl ChannelValueBuilder {
             pending_cuts_retention,
             network: None,
             our_address: None,
+            our_validator_id: None,
+            validator_set_manager: None,
         }
     }
 
@@ -1067,6 +1073,20 @@ impl ChannelValueBuilder {
     ) -> Self {
         self.network = Some(network);
         self.our_address = Some(our_address);
+        self
+    }
+
+    /// Set validator info for proposer identification.
+    ///
+    /// This enables setting the proposer's Ethereum address on Cuts
+    /// when this node builds a proposal.
+    pub fn with_validator_info(
+        mut self,
+        validator_id: ValidatorId,
+        validator_set_manager: Arc<ValidatorSetManager>,
+    ) -> Self {
+        self.our_validator_id = Some(validator_id);
+        self.validator_set_manager = Some(validator_set_manager);
         self
     }
 
@@ -1234,6 +1254,29 @@ impl ValueBuilder for ChannelValueBuilder {
             {
                 let pending = self.pending_cuts.read().await;
                 if let Some(cut) = pending.get(&height).cloned() {
+                    let mut cut = cut;
+
+                    // Set proposer information if we have validator info
+                    if let (Some(validator_id), Some(vsm)) =
+                        (&self.our_validator_id, &self.validator_set_manager)
+                    {
+                        if let Ok(Some(validator_set)) = vsm.get_validator_set_for_height(height) {
+                            if let Some(eth_addr) = validator_set.get_ethereum_address(validator_id)
+                            {
+                                cut.set_proposer(*validator_id, eth_addr);
+                                debug!(
+                                    "ChannelValueBuilder: Set proposer {} with ethereum address {} on cut",
+                                    validator_id, eth_addr
+                                );
+                            } else {
+                                warn!(
+                                    "ChannelValueBuilder: Could not find ethereum address for validator {}",
+                                    validator_id
+                                );
+                            }
+                        }
+                    }
+
                     let value = ConsensusValue::from(cut.clone());
                     let value_id = informalsystems_malachitebft_core_types::Value::id(&value);
 
@@ -1757,11 +1800,15 @@ pub async fn spawn_host(
         );
         Arc::new(
             ChannelValueBuilder::new(config.pending_cuts_retention)
-                .with_network(network_ref, our_address),
+                .with_network(network_ref, our_address)
+                .with_validator_info(our_id, validator_set_manager.clone()),
         )
     } else {
         // ProposalOnly mode: no proposal parts publishing
-        Arc::new(ChannelValueBuilder::new(config.pending_cuts_retention))
+        Arc::new(
+            ChannelValueBuilder::new(config.pending_cuts_retention)
+                .with_validator_info(our_id, validator_set_manager.clone()),
+        )
     };
 
     let decision_handler = {

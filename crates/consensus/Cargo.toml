@@ -36,6 +36,7 @@ bincode = { workspace = true }
 serde = { workspace = true }
 bytes = { workspace = true }
 borsh = { workspace = true }
+alloy-primitives = { workspace = true }
 parking_lot = "0.12"
 ractor = { workspace = true, optional = true }
 

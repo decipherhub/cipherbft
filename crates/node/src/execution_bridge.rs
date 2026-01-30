@@ -5,7 +5,7 @@
 
 use cipherbft_data_chain::worker::TransactionValidator;
 use cipherbft_execution::{
-    keccak256, BlockInput, Bytes, Car as ExecutionCar, ChainConfig, Cut as ExecutionCut,
+    keccak256, Address, BlockInput, Bytes, Car as ExecutionCar, ChainConfig, Cut as ExecutionCut,
     ExecutionEngine, ExecutionLayerTrait, ExecutionResult, GenesisInitializer,
     GenesisValidatorData, InMemoryProvider, StakingPrecompile, B256, U256,
 };
@@ -249,6 +249,21 @@ impl ExecutionBridge {
             "Executing Cut"
         );
 
+        // Extract beneficiary from consensus cut BEFORE conversion (which consumes the Cut)
+        // TODO: Add proposer address verification against validator set to prevent
+        // malicious proposers from setting arbitrary beneficiary addresses.
+        let beneficiary = match consensus_cut.proposer_address {
+            Some(addr) => addr,
+            None => {
+                warn!(
+                    height = consensus_cut.height,
+                    "Cut has no proposer_address, using Address::ZERO as beneficiary. \
+                     Block rewards will be unclaimable."
+                );
+                Address::ZERO
+            }
+        };
+
         // Convert consensus Cut to execution Cut (fetches batches from storage)
         let execution_cut = self.convert_cut(consensus_cut).await?;
 
@@ -273,6 +288,7 @@ impl ExecutionBridge {
             parent_hash: execution_cut.parent_hash,
             gas_limit: execution_cut.gas_limit,
             base_fee_per_gas: execution_cut.base_fee_per_gas,
+            beneficiary,
         };
 
         let mut execution = self.execution.write().await;

@@ -152,6 +152,10 @@ pub struct BlockInput {
 
     /// Base fee per gas (EIP-1559).
     pub base_fee_per_gas: Option<u64>,
+
+    /// Block beneficiary address (proposer's Ethereum address).
+    #[serde(default)]
+    pub beneficiary: Address,
 }
 
 /// Block data from consensus layer (Cut).
@@ -176,6 +180,10 @@ pub struct ConsensusBlock {
 
     /// Base fee per gas.
     pub base_fee_per_gas: Option<u64>,
+
+    /// Block beneficiary address (proposer's Ethereum address).
+    #[serde(default)]
+    pub beneficiary: Address,
 }
 
 /// Block after execution, ready for sealing.
