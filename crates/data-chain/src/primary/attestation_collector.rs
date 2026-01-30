@@ -270,6 +270,34 @@ impl AttestationCollector {
             .map(|p| p.attestations.keys().cloned().collect())
             .unwrap_or_default()
     }
+
+    /// Update validator set (epoch change)
+    ///
+    /// This is called when the consensus layer notifies us of a new validator set.
+    /// We update our threshold and validator indices to reflect the new set.
+    ///
+    /// # Arguments
+    /// * `threshold` - New attestation threshold (2f + 1)
+    /// * `validator_count` - New total validator count
+    /// * `validator_indices` - New mapping of ValidatorId to index
+    pub fn update_validators(
+        &mut self,
+        threshold: usize,
+        validator_count: usize,
+        validator_indices: HashMap<ValidatorId, usize>,
+    ) {
+        tracing::info!(
+            old_threshold = self.threshold,
+            new_threshold = threshold,
+            old_count = self.validator_count,
+            new_count = validator_count,
+            "Updating attestation collector validator set"
+        );
+
+        self.threshold = threshold;
+        self.validator_count = validator_count;
+        self.validator_indices = validator_indices;
+    }
 }
 
 #[cfg(test)]

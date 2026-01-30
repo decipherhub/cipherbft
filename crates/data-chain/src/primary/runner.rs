@@ -63,6 +63,14 @@ pub enum PrimaryCommand {
         /// The Cut that was decided (used to sync positions)
         cut: Cut,
     },
+    /// Update the validator set (epoch change)
+    ///
+    /// This is sent when the consensus layer detects an epoch change with a new
+    /// validator set. The Primary updates its Core to recognize the new validators.
+    UpdateValidators {
+        /// The new validator set with their BLS public keys
+        validator_pubkeys: HashMap<ValidatorId, BlsPublicKey>,
+    },
 }
 
 /// Network interface for Primary-to-Primary communication
@@ -157,6 +165,20 @@ impl PrimaryHandle {
     ) -> Result<(), mpsc::error::SendError<PrimaryCommand>> {
         self.command_sender
             .send(PrimaryCommand::ConsensusDecided { height, cut })
+            .await
+    }
+
+    /// Update the Primary's validator set
+    ///
+    /// This should be called when the consensus layer detects an epoch change
+    /// with a new validator set. The Primary will update its Core to recognize
+    /// the new validators so it can properly validate and attest their Cars.
+    pub async fn update_validators(
+        &self,
+        validator_pubkeys: HashMap<ValidatorId, BlsPublicKey>,
+    ) -> Result<(), mpsc::error::SendError<PrimaryCommand>> {
+        self.command_sender
+            .send(PrimaryCommand::UpdateValidators { validator_pubkeys })
             .await
     }
 }
@@ -662,6 +684,45 @@ impl Primary {
                     new_height = self.state.current_height,
                     last_finalized = self.state.last_finalized_height,
                     "Primary state advanced after consensus decision"
+                );
+            }
+
+            PrimaryCommand::UpdateValidators { validator_pubkeys } => {
+                info!(
+                    validator = %self.config.validator_id,
+                    new_validator_count = validator_pubkeys.len(),
+                    "Received validator set update command"
+                );
+
+                // Update Core's validator set
+                self.core.update_validators(validator_pubkeys.clone());
+
+                // Also update the attestation collector's threshold
+                // The threshold is based on the new validator count: 2f + 1
+                let new_count = validator_pubkeys.len();
+                let new_f = (new_count - 1) / 3;
+                let new_threshold = 2 * new_f + 1;
+
+                // Rebuild validator indices for the attestation collector
+                let mut validators: Vec<ValidatorId> = validator_pubkeys.keys().cloned().collect();
+                validators.sort();
+                let validator_indices: HashMap<_, _> = validators
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| (*v, i))
+                    .collect();
+
+                self.attestation_collector
+                    .update_validators(new_threshold, new_count, validator_indices);
+
+                // Update cut former with new validator list
+                self.cut_former = CutFormer::new(validators);
+
+                info!(
+                    validator = %self.config.validator_id,
+                    new_count,
+                    new_threshold,
+                    "Primary validator set updated successfully"
                 );
             }
         }

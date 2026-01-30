@@ -248,6 +248,53 @@ impl Core {
             .and_then(|v| self.validator_pubkeys.get(v))
             .cloned()
     }
+
+    /// Update the validator set
+    ///
+    /// This is called when the consensus layer notifies us of an epoch change
+    /// with a new validator set. We update our internal state to reflect the
+    /// new validators so we can properly validate Cars from them.
+    ///
+    /// # Arguments
+    /// * `new_validator_pubkeys` - The new validator set with their BLS public keys
+    pub fn update_validators(&mut self, new_validator_pubkeys: HashMap<ValidatorId, BlsPublicKey>) {
+        let mut validators: Vec<ValidatorId> = new_validator_pubkeys.keys().cloned().collect();
+        validators.sort(); // Deterministic ordering
+
+        // Log the validator set change
+        let old_count = self.validators.len();
+        let new_count = validators.len();
+
+        // Find added and removed validators
+        let old_set: std::collections::HashSet<_> = self.validators.iter().collect();
+        let new_set: std::collections::HashSet<_> = validators.iter().collect();
+        let added: Vec<_> = new_set.difference(&old_set).collect();
+        let removed: Vec<_> = old_set.difference(&new_set).collect();
+
+        tracing::info!(
+            our_id = %self.our_id,
+            old_count,
+            new_count,
+            added = ?added,
+            removed = ?removed,
+            "Updating Core validator set"
+        );
+
+        let validator_indices: HashMap<_, _> = validators
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (*v, i))
+            .collect();
+
+        self.validator_pubkeys = new_validator_pubkeys;
+        self.validator_indices = validator_indices;
+        self.validators = validators;
+    }
+
+    /// Check if a validator is known
+    pub fn is_known_validator(&self, validator: &ValidatorId) -> bool {
+        self.validator_pubkeys.contains_key(validator)
+    }
 }
 
 #[cfg(test)]
@@ -400,5 +447,97 @@ mod tests {
         let result = core.handle_car(&car, &mut state, false);
         assert!(result.is_ok());
         assert!(result.unwrap().is_none()); // No attestation generated
+    }
+
+    #[test]
+    fn test_update_validators_adds_new_validator() {
+        let (mut core, keypairs, mut state) = make_test_setup(3);
+
+        // Initially we have 3 validators
+        assert_eq!(core.validator_count(), 3);
+
+        // Car from a new (unknown) validator should fail
+        let new_keypair = BlsKeyPair::generate(&mut rand::thread_rng());
+        let new_car = make_car(&new_keypair, 0, None);
+        let result = core.handle_car(&new_car, &mut state, true);
+        assert!(matches!(result, Err(DclError::UnknownValidator { .. })));
+
+        // Now update validators to include the new one
+        let new_validator_id = validator_id_from_bls_pubkey(&new_keypair.public_key);
+        let mut new_validator_pubkeys: HashMap<_, _> = keypairs
+            .iter()
+            .map(|kp| {
+                let id = validator_id_from_bls_pubkey(&kp.public_key);
+                (id, kp.public_key.clone())
+            })
+            .collect();
+        new_validator_pubkeys.insert(new_validator_id, new_keypair.public_key.clone());
+
+        core.update_validators(new_validator_pubkeys);
+
+        // Now we should have 4 validators
+        assert_eq!(core.validator_count(), 4);
+        assert!(core.is_known_validator(&new_validator_id));
+
+        // Car from the new validator should now be accepted
+        let result = core.handle_car(&new_car, &mut state, true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_update_validators_removes_validator() {
+        let (mut core, keypairs, _state) = make_test_setup(4);
+
+        // Initially we have 4 validators
+        assert_eq!(core.validator_count(), 4);
+
+        // Remove one validator (keep only first 3)
+        let new_validator_pubkeys: HashMap<_, _> = keypairs
+            .iter()
+            .take(3)
+            .map(|kp| {
+                let id = validator_id_from_bls_pubkey(&kp.public_key);
+                (id, kp.public_key.clone())
+            })
+            .collect();
+
+        let removed_id = validator_id_from_bls_pubkey(&keypairs[3].public_key);
+
+        core.update_validators(new_validator_pubkeys);
+
+        // Now we should have 3 validators
+        assert_eq!(core.validator_count(), 3);
+        assert!(!core.is_known_validator(&removed_id));
+    }
+
+    #[test]
+    fn test_update_validators_updates_threshold() {
+        let (mut core, keypairs, _state) = make_test_setup(4);
+
+        // n=4, f=1, threshold=2f+1=3
+        assert_eq!(core.f(), 1);
+        assert_eq!(core.attestation_threshold(), 3);
+
+        // Add 3 more validators to make n=7
+        let mut new_validator_pubkeys: HashMap<_, _> = keypairs
+            .iter()
+            .map(|kp| {
+                let id = validator_id_from_bls_pubkey(&kp.public_key);
+                (id, kp.public_key.clone())
+            })
+            .collect();
+
+        for _ in 0..3 {
+            let kp = BlsKeyPair::generate(&mut rand::thread_rng());
+            let id = validator_id_from_bls_pubkey(&kp.public_key);
+            new_validator_pubkeys.insert(id, kp.public_key);
+        }
+
+        core.update_validators(new_validator_pubkeys);
+
+        // n=7, f=2, threshold=2f+1=5
+        assert_eq!(core.validator_count(), 7);
+        assert_eq!(core.f(), 2);
+        assert_eq!(core.attestation_threshold(), 5);
     }
 }
