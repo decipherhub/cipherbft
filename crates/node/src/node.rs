@@ -1297,7 +1297,6 @@ impl Node {
         let epoch_config = EpochConfig::default();
 
         // Block configuration from genesis
-        let beneficiary = self.beneficiary;
         let gas_limit = self.gas_limit;
 
         // Run the main event loop with graceful shutdown support
@@ -1315,7 +1314,6 @@ impl Node {
             rpc_executor,
             epoch_config,
             self.epoch_block_reward,
-            beneficiary,
             gas_limit,
         )
         .await;
@@ -1366,7 +1364,6 @@ impl Node {
         rpc_executor: Option<Arc<cipherbft_rpc::EvmExecutionApi<InMemoryProvider>>>,
         epoch_config: EpochConfig,
         epoch_block_reward: U256,
-        beneficiary: [u8; 20],
         gas_limit: u64,
     ) -> Result<()> {
         loop {
@@ -1479,6 +1476,13 @@ impl Node {
                     // Execute Cut if execution layer is enabled
                     // Then store the block to MDBX for RPC queries
                     if let Some(ref bridge) = execution_bridge {
+                        // Extract beneficiary from Cut BEFORE execute_cut consumes it
+                        // The proposer_address is the Ethereum address of the validator who built this Cut
+                        let block_beneficiary: [u8; 20] = cut
+                            .proposer_address
+                            .map(|addr| addr.into_array())
+                            .unwrap_or([0u8; 20]);
+
                         match bridge.execute_cut(cut).await {
                             Ok(block_result) => {
                                 info!(
@@ -1495,7 +1499,7 @@ impl Node {
                                 // to prevent orphaned records referencing non-existent blocks.
                                 if let Some(ref storage) = rpc_storage {
                                     // Create and store the block FIRST
-                                    let block = Self::execution_result_to_block(height.0, &block_result, beneficiary, gas_limit);
+                                    let block = Self::execution_result_to_block(height.0, &block_result, block_beneficiary, gas_limit);
                                     if let Err(e) = storage.block_store().put_block(&block).await {
                                         error!("Failed to store block {} (hash: {}) to MDBX: {}", height.0, block_result.block_hash, e);
                                         // Skip all related storage operations - don't create orphaned receipts/txs/logs

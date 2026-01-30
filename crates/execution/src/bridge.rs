@@ -143,7 +143,7 @@ impl<S: BatchFetcher> ExecutionBridge<S> {
             parent_hash,
             gas_limit: 30_000_000,
             base_fee_per_gas: Some(1_000_000_000),
-            beneficiary: Address::ZERO,
+            beneficiary: cut.proposer_address.unwrap_or(Address::ZERO),
         })
     }
 
@@ -199,7 +199,7 @@ impl<S: BatchFetcher> ExecutionBridge<S> {
             parent_hash,
             gas_limit,
             base_fee_per_gas,
-            beneficiary: Address::ZERO,
+            beneficiary: cut.proposer_address.unwrap_or(Address::ZERO),
         })
     }
 }
