@@ -326,6 +326,11 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
     ///
     /// Returns a tuple containing receipts, cumulative gas used, logs, and total fees.
     /// See [`ProcessTransactionsResult`] for details.
+    ///
+    /// **Important**: Transactions are sorted by (sender, nonce) before execution to ensure
+    /// correct nonce ordering. This prevents "NonceTooLow" errors when transactions from
+    /// the same sender arrive in different batches/Cars and would otherwise be executed
+    /// out of order.
     fn process_transactions(
         &mut self,
         transactions: &[Bytes],
@@ -333,10 +338,67 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
         timestamp: u64,
         parent_hash: B256,
     ) -> Result<ProcessTransactionsResult> {
+        use alloy_consensus::{Transaction, TxEnvelope};
+        use alloy_eips::Decodable2718;
+
         let mut receipts = Vec::new();
         let mut cumulative_gas_used = 0u64;
         let mut all_logs = Vec::new();
         let mut total_fees = U256::ZERO;
+
+        // Sort transactions by (sender, nonce) to ensure correct execution order
+        // This prevents NonceTooLow errors when txs from same sender arrive out of order
+        let mut sorted_txs: Vec<(usize, &Bytes)> = transactions.iter().enumerate().collect();
+        sorted_txs.sort_by(|(_, a), (_, b)| {
+            let parse_tx =
+                |tx_bytes: &Bytes| -> Option<(alloy_primitives::Address, u64)> {
+                    let tx_envelope = TxEnvelope::decode_2718(&mut tx_bytes.as_ref()).ok()?;
+                    let nonce = tx_envelope.nonce();
+
+                    // Recover sender from signature
+                    let sender = match &tx_envelope {
+                        TxEnvelope::Legacy(signed) => signed
+                            .signature()
+                            .recover_address_from_prehash(&signed.signature_hash())
+                            .ok(),
+                        TxEnvelope::Eip2930(signed) => signed
+                            .signature()
+                            .recover_address_from_prehash(&signed.signature_hash())
+                            .ok(),
+                        TxEnvelope::Eip1559(signed) => signed
+                            .signature()
+                            .recover_address_from_prehash(&signed.signature_hash())
+                            .ok(),
+                        TxEnvelope::Eip4844(signed) => signed
+                            .signature()
+                            .recover_address_from_prehash(&signed.signature_hash())
+                            .ok(),
+                        TxEnvelope::Eip7702(signed) => signed
+                            .signature()
+                            .recover_address_from_prehash(&signed.signature_hash())
+                            .ok(),
+                    }?;
+
+                    Some((sender, nonce))
+                };
+
+            match (parse_tx(a), parse_tx(b)) {
+                (Some((sender_a, nonce_a)), Some((sender_b, nonce_b))) => {
+                    // Sort by sender first, then by nonce
+                    sender_a.cmp(&sender_b).then(nonce_a.cmp(&nonce_b))
+                }
+                // Keep unparseable transactions in original order
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+        });
+
+        tracing::debug!(
+            block_number,
+            tx_count = transactions.len(),
+            "Sorted transactions by (sender, nonce) for execution"
+        );
 
         // Scope for EVM execution to ensure it's dropped before commit
         let state_changes = {
@@ -349,7 +411,7 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
                 Arc::clone(&self.staking_precompile),
             );
 
-            for (tx_index, tx_bytes) in transactions.iter().enumerate() {
+            for (tx_index, (_original_index, tx_bytes)) in sorted_txs.into_iter().enumerate() {
                 let tx_start = Instant::now();
 
                 // Execute transaction
