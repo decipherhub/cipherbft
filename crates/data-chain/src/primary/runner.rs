@@ -1032,7 +1032,9 @@ impl Primary {
                     // This helps the network reach quorum faster
                     let attestation = self.core.create_attestation(&car);
                     DCL_ATTESTATIONS_SENT.inc();
-                    self.network.send_attestation(car.proposer, &attestation).await;
+                    self.network
+                        .send_attestation(car.proposer, &attestation)
+                        .await;
                     info!(
                         proposer = %validator,
                         position = actual,
