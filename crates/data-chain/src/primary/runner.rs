@@ -1072,6 +1072,16 @@ impl Primary {
     ) {
         let car_hash = car.hash();
 
+        // DIAGNOSTIC: Log at entry to confirm message was received
+        info!(
+            from = %from,
+            proposer = %car.proposer,
+            position = car.position,
+            batch_count = car.batch_digests.len(),
+            attestation_count = attestation.count(),
+            "Received CarWithAttestation broadcast"
+        );
+
         // Skip if this is our own Car (we already have it from attestation collection)
         if car.proposer == self.config.validator_id {
             trace!(

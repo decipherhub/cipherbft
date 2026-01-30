@@ -201,7 +201,35 @@ impl TcpPrimaryNetwork {
                         let from = match dcl_msg.as_ref() {
                             DclMessage::Car(car) => car.proposer,
                             DclMessage::Attestation(att) => att.attester,
-                            _ => continue,
+                            DclMessage::CarWithAttestation { car, .. } => car.proposer,
+                            // For request/response messages, we still need to forward them
+                            // The Primary runner handles these messages correctly
+                            DclMessage::CarRequest { validator, .. } => *validator,
+                            DclMessage::CarResponse(_) => {
+                                // Response messages don't have a clear "from" - skip tracking peer
+                                // but still forward the message
+                                if self
+                                    .incoming_tx
+                                    .send((ValidatorId::default(), *dcl_msg))
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                                continue;
+                            }
+                            DclMessage::BatchRequest { .. } | DclMessage::BatchResponse { .. } => {
+                                // Batch request/response - skip tracking but forward
+                                if self
+                                    .incoming_tx
+                                    .send((ValidatorId::default(), *dcl_msg))
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                                continue;
+                            }
                         };
 
                         // Store connection if not already
@@ -317,7 +345,12 @@ impl TcpPrimaryNetwork {
                         let from = match dcl_msg.as_ref() {
                             DclMessage::Car(car) => car.proposer,
                             DclMessage::Attestation(att) => att.attester,
-                            _ => continue,
+                            DclMessage::CarWithAttestation { car, .. } => car.proposer,
+                            DclMessage::CarRequest { validator, .. } => *validator,
+                            // Response/request messages still need to be forwarded
+                            DclMessage::CarResponse(_)
+                            | DclMessage::BatchRequest { .. }
+                            | DclMessage::BatchResponse { .. } => ValidatorId::default(),
                         };
 
                         // Forward to handler
