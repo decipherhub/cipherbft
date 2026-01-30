@@ -94,7 +94,12 @@ impl PrimaryDcl {
             proposer::Proposer::new(our_id, keypair.secret_key.clone(), config.max_empty_cars);
 
         // Create core message processor
-        let core = core::Core::new(our_id, keypair.clone(), validator_pubkeys.clone(), config.attestation_quorum);
+        let core = core::Core::new(
+            our_id,
+            keypair.clone(),
+            validator_pubkeys.clone(),
+            config.attestation_quorum,
+        );
 
         // Create attestation collector
         let attestation_collector = attestation_collector::AttestationCollector::new(
@@ -107,7 +112,8 @@ impl PrimaryDcl {
         );
 
         // Create cut former
-        let cut_former = cut_former::CutFormer::new(sorted_validators.clone(), config.attestation_quorum);
+        let cut_former =
+            cut_former::CutFormer::new(sorted_validators.clone(), config.attestation_quorum);
 
         // Create state
         let state = state::PrimaryState::new(our_id, config.equivocation_retention);
@@ -215,7 +221,9 @@ impl DataChainLayer for PrimaryDcl {
     }
 
     fn attestation_threshold(&self) -> usize {
-        self.config.attestation_quorum.compute_threshold(self.validator_pubkeys.len())
+        self.config
+            .attestation_quorum
+            .compute_threshold(self.validator_pubkeys.len())
     }
 
     fn is_car_attested(&self, car_hash: &Hash) -> bool {

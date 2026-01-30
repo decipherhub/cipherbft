@@ -226,7 +226,8 @@ impl Core {
     /// This delegates to `AttestationQuorum::compute_threshold()` to ensure
     /// all threshold calculations use the same source of truth.
     pub fn attestation_threshold(&self) -> usize {
-        self.attestation_quorum.compute_threshold(self.validator_count())
+        self.attestation_quorum
+            .compute_threshold(self.validator_count())
     }
 
     /// Get next validator in round-robin order
@@ -283,7 +284,12 @@ mod tests {
             .collect();
 
         let our_id = validator_id_from_bls_pubkey(&keypairs[0].public_key);
-        let core = Core::new(our_id, keypairs[0].clone(), validator_pubkeys, AttestationQuorum::TwoFPlusOne);
+        let core = Core::new(
+            our_id,
+            keypairs[0].clone(),
+            validator_pubkeys,
+            AttestationQuorum::TwoFPlusOne,
+        );
         let state = PrimaryState::new(our_id, 1000);
 
         (core, keypairs, state)

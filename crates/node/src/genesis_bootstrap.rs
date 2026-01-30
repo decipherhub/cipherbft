@@ -1214,7 +1214,10 @@ mod tests {
 
         // Default DCL params
         assert!(template.cipherbft.dcl.car_interval_ms > 0);
-        assert_eq!(template.cipherbft.dcl.attestation_quorum, AttestationQuorum::TwoFPlusOne);
+        assert_eq!(
+            template.cipherbft.dcl.attestation_quorum,
+            AttestationQuorum::TwoFPlusOne
+        );
 
         // Default staking params
         assert!(template.cipherbft.staking.min_stake_wei > U256::ZERO);

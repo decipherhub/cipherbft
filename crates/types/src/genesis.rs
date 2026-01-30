@@ -1002,15 +1002,15 @@ mod tests {
     #[test]
     fn test_attestation_quorum_threshold_calculation() {
         // n=4, f=1
-        assert_eq!(AttestationQuorum::FPlusOne.compute_threshold(4), 2);     // f+1 = 2
-        assert_eq!(AttestationQuorum::TwoFPlusOne.compute_threshold(4), 3);  // 2f+1 = 3
+        assert_eq!(AttestationQuorum::FPlusOne.compute_threshold(4), 2); // f+1 = 2
+        assert_eq!(AttestationQuorum::TwoFPlusOne.compute_threshold(4), 3); // 2f+1 = 3
 
         // n=7, f=2
-        assert_eq!(AttestationQuorum::FPlusOne.compute_threshold(7), 3);     // f+1 = 3
-        assert_eq!(AttestationQuorum::TwoFPlusOne.compute_threshold(7), 5);  // 2f+1 = 5
+        assert_eq!(AttestationQuorum::FPlusOne.compute_threshold(7), 3); // f+1 = 3
+        assert_eq!(AttestationQuorum::TwoFPlusOne.compute_threshold(7), 5); // 2f+1 = 5
 
         // n=10, f=3
-        assert_eq!(AttestationQuorum::FPlusOne.compute_threshold(10), 4);    // f+1 = 4
+        assert_eq!(AttestationQuorum::FPlusOne.compute_threshold(10), 4); // f+1 = 4
         assert_eq!(AttestationQuorum::TwoFPlusOne.compute_threshold(10), 7); // 2f+1 = 7
     }
 
