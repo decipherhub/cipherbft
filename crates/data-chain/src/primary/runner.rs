@@ -771,7 +771,7 @@ impl Primary {
             }
 
             DclMessage::CarWithAttestation { car, attestation } => {
-                self.handle_received_car_with_attestation(peer, car, attestation)
+                self.handle_received_car_with_attestation(peer, car, *attestation)
                     .await;
             }
         }
@@ -1006,7 +1006,7 @@ impl Primary {
             // 4. Now ALL validators can include this Car in their Cut
             let broadcast_msg = DclMessage::CarWithAttestation {
                 car: car.clone(),
-                attestation: aggregated.clone(),
+                attestation: Box::new(aggregated.clone()),
             };
             self.network.broadcast(&broadcast_msg).await;
 

@@ -205,8 +205,8 @@ pub enum DclMessage {
     CarWithAttestation {
         /// The Car that reached attestation threshold
         car: Car,
-        /// Aggregated attestation with 2f+1 signatures
-        attestation: AggregatedAttestation,
+        /// Aggregated attestation with 2f+1 signatures (boxed to reduce enum size)
+        attestation: Box<AggregatedAttestation>,
     },
 }
 
