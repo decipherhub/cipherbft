@@ -623,8 +623,8 @@ mod tests {
     use super::*;
     use alloy_primitives::{Address, U256};
     use cipherbft_types::genesis::{
-        CipherBftConfig, ConsensusParams, DclParams, GenesisValidator, NativeTokenConfig,
-        StakingParams,
+        AttestationQuorum, CipherBftConfig, ConsensusParams, DclParams, GenesisValidator,
+        NativeTokenConfig, StakingParams,
     };
     use cipherbft_types::geth::{AllocEntry, GethConfig};
     use std::collections::HashMap;
@@ -694,7 +694,7 @@ mod tests {
                 },
                 "dcl": {
                     "car_interval_ms": 100,
-                    "attestation_threshold_percent": 67
+                    "attestation_quorum": "2f+1"
                 },
                 "staking": {
                     "min_stake_wei": "1000000000000000000"
@@ -1214,7 +1214,10 @@ mod tests {
 
         // Default DCL params
         assert!(template.cipherbft.dcl.car_interval_ms > 0);
-        assert!(template.cipherbft.dcl.attestation_threshold_percent > 0);
+        assert_eq!(
+            template.cipherbft.dcl.attestation_quorum,
+            AttestationQuorum::TwoFPlusOne
+        );
 
         // Default staking params
         assert!(template.cipherbft.staking.min_stake_wei > U256::ZERO);

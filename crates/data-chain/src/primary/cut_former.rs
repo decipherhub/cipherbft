@@ -6,6 +6,7 @@ use crate::attestation::AggregatedAttestation;
 use crate::car::Car;
 use crate::cut::Cut;
 use crate::error::DclError;
+use cipherbft_types::genesis::AttestationQuorum;
 use cipherbft_types::ValidatorId;
 use std::collections::HashMap;
 
@@ -15,29 +16,24 @@ pub struct CutFormer {
     validators: Vec<ValidatorId>,
     /// Byzantine tolerance (f)
     f: usize,
-    /// Attestation threshold for Cut inclusion (2f+1)
+    /// Attestation threshold for Cut inclusion
     ///
-    /// We require 2f+1 attestations (quorum) before including a Car in a Cut.
-    /// This ensures that a majority of honest validators have received and
-    /// validated the Car's batches before consensus decides on it.
-    ///
-    /// With only f+1, a Car could be attested by f byzantine + 1 honest validators
-    /// before other honest validators have synced the batch data, causing the
-    /// batched Car to be replaced by an empty Car in the final decision.
+    /// Computed from genesis `attestation_quorum` config at construction time.
+    /// We require attestations meeting this threshold before including a Car in a Cut.
+    /// This ensures that a sufficient number of honest validators have received
+    /// and validated the Car's batches before consensus decides on it.
     threshold: usize,
 }
 
 impl CutFormer {
     /// Create a new CutFormer
-    pub fn new(validators: Vec<ValidatorId>) -> Self {
+    pub fn new(validators: Vec<ValidatorId>, attestation_quorum: AttestationQuorum) -> Self {
         let mut validators = validators;
         validators.sort(); // Ensure deterministic ordering
 
         let n = validators.len();
         let f = (n - 1) / 3;
-        // Use 2f+1 (quorum) threshold for Cut inclusion
-        // This ensures enough honest validators have synced batch data
-        let threshold = 2 * f + 1;
+        let threshold = attestation_quorum.compute_threshold(n);
 
         Self {
             validators,
@@ -60,9 +56,9 @@ impl CutFormer {
     ) -> Result<Cut, DclError> {
         let mut cut = Cut::new(height);
 
-        // Add all attested Cars that meet the 2f+1 threshold
+        // Add all attested Cars that meet the quorum threshold
         for (validator, (car, attestation)) in attested_cars {
-            // Verify 2f+1 threshold is met
+            // Verify quorum threshold is met
             if attestation.count() < self.threshold {
                 tracing::debug!(
                     validator = %validator,
@@ -70,7 +66,7 @@ impl CutFormer {
                     batches = car.batch_digests.len(),
                     attestations = attestation.count(),
                     threshold = self.threshold,
-                    "Skipping Car - below 2f+1 attestation threshold"
+                    "Skipping Car - below attestation threshold"
                 );
                 continue;
             }
@@ -205,6 +201,7 @@ impl CutFormer {
 mod tests {
     use super::*;
     use cipherbft_crypto::BlsKeyPair;
+    use cipherbft_types::genesis::AttestationQuorum;
     use cipherbft_types::VALIDATOR_ID_SIZE;
 
     fn make_validators(n: usize) -> Vec<ValidatorId> {
@@ -248,7 +245,7 @@ mod tests {
     #[test]
     fn test_form_cut_basic() {
         let validators = make_validators(4);
-        let former = CutFormer::new(validators.clone());
+        let former = CutFormer::new(validators.clone(), AttestationQuorum::TwoFPlusOne);
 
         // For n=4: f=1, threshold=2f+1=3
         let mut attested_cars = HashMap::new();
@@ -263,7 +260,7 @@ mod tests {
     #[test]
     fn test_form_cut_skips_insufficient_attestations() {
         let validators = make_validators(4);
-        let former = CutFormer::new(validators.clone());
+        let former = CutFormer::new(validators.clone(), AttestationQuorum::TwoFPlusOne);
 
         let mut attested_cars = HashMap::new();
 
@@ -285,7 +282,7 @@ mod tests {
     #[test]
     fn test_monotonicity_violation() {
         let validators = make_validators(4);
-        let former = CutFormer::new(validators.clone());
+        let former = CutFormer::new(validators.clone(), AttestationQuorum::TwoFPlusOne);
 
         // Last cut had position 5
         let mut last_cut = Cut::new(1);
@@ -307,7 +304,7 @@ mod tests {
     #[test]
     fn test_anti_censorship_pass() {
         let validators = make_validators(4);
-        let former = CutFormer::new(validators.clone());
+        let former = CutFormer::new(validators.clone(), AttestationQuorum::TwoFPlusOne);
 
         // f=1 for n=4, so we can exclude at most 1 validator
         let mut cut = Cut::new(1);
@@ -324,7 +321,7 @@ mod tests {
     #[test]
     fn test_anti_censorship_fail() {
         let validators = make_validators(4);
-        let former = CutFormer::new(validators.clone());
+        let former = CutFormer::new(validators.clone(), AttestationQuorum::TwoFPlusOne);
 
         // f=1, but we exclude 2 validators
         let mut cut = Cut::new(1);
@@ -344,7 +341,7 @@ mod tests {
     #[test]
     fn test_select_highest_cars() {
         let validators = make_validators(4);
-        let former = CutFormer::new(validators.clone());
+        let former = CutFormer::new(validators.clone(), AttestationQuorum::TwoFPlusOne);
 
         let mut candidates = HashMap::new();
 
@@ -368,7 +365,7 @@ mod tests {
             ValidatorId::from_bytes([1u8; VALIDATOR_ID_SIZE]),
             ValidatorId::from_bytes([3u8; VALIDATOR_ID_SIZE]),
         ];
-        let former = CutFormer::new(validators);
+        let former = CutFormer::new(validators, AttestationQuorum::TwoFPlusOne);
 
         let ordered = former.ordered_validators();
         assert!(ordered[0] < ordered[1]);

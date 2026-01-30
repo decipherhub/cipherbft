@@ -7,6 +7,7 @@ use crate::car::Car;
 use crate::error::DclError;
 use crate::primary::state::PrimaryState;
 use cipherbft_crypto::{BlsKeyPair, BlsPublicKey};
+use cipherbft_types::genesis::AttestationQuorum;
 use cipherbft_types::ValidatorId;
 use std::collections::HashMap;
 
@@ -22,6 +23,8 @@ pub struct Core {
     validator_indices: HashMap<ValidatorId, usize>,
     /// Ordered list of validators (for round-robin)
     validators: Vec<ValidatorId>,
+    /// Attestation quorum (from genesis config)
+    attestation_quorum: AttestationQuorum,
 }
 
 impl Core {
@@ -30,6 +33,7 @@ impl Core {
         our_id: ValidatorId,
         keypair: BlsKeyPair,
         validator_pubkeys: HashMap<ValidatorId, BlsPublicKey>,
+        attestation_quorum: AttestationQuorum,
     ) -> Self {
         let mut validators: Vec<ValidatorId> = validator_pubkeys.keys().cloned().collect();
         validators.sort(); // Deterministic ordering
@@ -54,6 +58,7 @@ impl Core {
             validator_pubkeys,
             validator_indices,
             validators,
+            attestation_quorum,
         }
     }
 
@@ -216,13 +221,13 @@ impl Core {
         (self.validator_count() - 1) / 3
     }
 
-    /// Calculate attestation threshold (2f + 1)
+    /// Calculate attestation threshold from genesis quorum config
     ///
-    /// We require 2f+1 (quorum) attestations before a Car can be included in a Cut.
-    /// This ensures that a majority of honest validators have received and validated
-    /// the Car's batches before consensus decides on it.
+    /// This delegates to `AttestationQuorum::compute_threshold()` to ensure
+    /// all threshold calculations use the same source of truth.
     pub fn attestation_threshold(&self) -> usize {
-        2 * self.f() + 1
+        self.attestation_quorum
+            .compute_threshold(self.validator_count())
     }
 
     /// Get next validator in round-robin order
@@ -301,6 +306,7 @@ impl Core {
 mod tests {
     use super::*;
     use cipherbft_crypto::BlsKeyPair;
+    use cipherbft_types::genesis::AttestationQuorum;
     use cipherbft_types::{Hash, VALIDATOR_ID_SIZE};
 
     /// Helper to derive ValidatorId from BLS public key (for tests only)
@@ -325,7 +331,12 @@ mod tests {
             .collect();
 
         let our_id = validator_id_from_bls_pubkey(&keypairs[0].public_key);
-        let core = Core::new(our_id, keypairs[0].clone(), validator_pubkeys);
+        let core = Core::new(
+            our_id,
+            keypairs[0].clone(),
+            validator_pubkeys,
+            AttestationQuorum::TwoFPlusOne,
+        );
         let state = PrimaryState::new(our_id, 1000);
 
         (core, keypairs, state)

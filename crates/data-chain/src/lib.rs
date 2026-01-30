@@ -12,7 +12,7 @@
 //!
 //! - [`Car`]: Certified Available Record - a validator's contribution containing batch digests
 //! - [`Attestation`]: Data availability confirmation from a validator
-//! - [`AggregatedAttestation`]: BLS-aggregated attestations (f+1 threshold)
+//! - [`AggregatedAttestation`]: BLS-aggregated attestations (configurable quorum threshold)
 //! - [`Cut`]: Snapshot of highest attested Cars for consensus
 //!
 //! # DataChainLayer Trait
@@ -89,9 +89,9 @@ pub trait DataChainLayer {
 
     /// Add a received attestation
     ///
-    /// Collects attestations for Cars we proposed. When f+1 attestations
-    /// (including our self-attestation) are collected, the Car becomes
-    /// eligible for Cut inclusion.
+    /// Collects attestations for Cars we proposed. When attestations reach
+    /// the configured quorum threshold (including our self-attestation),
+    /// the Car becomes eligible for Cut inclusion.
     ///
     /// # Arguments
     /// * `attestation` - The attestation to add
@@ -108,7 +108,7 @@ pub trait DataChainLayer {
     /// Get the highest attested Car for a validator
     ///
     /// Returns the most recent Car from the validator that has
-    /// received f+1 attestations.
+    /// received attestations meeting the configured quorum threshold.
     ///
     /// # Arguments
     /// * `validator` - The validator ID
@@ -127,13 +127,15 @@ pub trait DataChainLayer {
     /// - `None` if no attested Cars are available
     fn form_cut(&self, height: u64) -> Option<Cut>;
 
-    /// Get the attestation threshold (2f+1)
+    /// Get the attestation threshold
     ///
     /// Returns the number of attestations required for a Car to be
-    /// considered valid for Cut inclusion. This is 2f+1 (quorum) where f is
-    /// the maximum number of Byzantine validators. Requiring quorum ensures
-    /// that a majority of honest validators have synced the Car's batches
-    /// before consensus decides on it.
+    /// considered valid for Cut inclusion. The threshold is determined by
+    /// the `attestation_quorum` setting in genesis.json:
+    /// - `"2f+1"` (default): Quorum threshold for strong data availability
+    /// - `"f+1"`: Minimum threshold for faster attestation collection
+    ///
+    /// Where f = (n-1)/3 is the Byzantine tolerance for n validators.
     fn attestation_threshold(&self) -> usize;
 
     /// Check if a Car has sufficient attestations

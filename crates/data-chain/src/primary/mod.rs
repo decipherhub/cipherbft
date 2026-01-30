@@ -77,9 +77,8 @@ impl PrimaryDcl {
         config: PrimaryConfig,
     ) -> Self {
         let validator_count = validator_pubkeys.len();
-        let f = (validator_count - 1) / 3;
-        // Use 2f+1 (quorum) threshold for attestation collection
-        let threshold = 2 * f + 1;
+        // Calculate threshold from genesis quorum config
+        let threshold = config.attestation_quorum.compute_threshold(validator_count);
 
         // Create validator indices
         let mut sorted_validators: Vec<_> = validator_pubkeys.keys().cloned().collect();
@@ -95,7 +94,12 @@ impl PrimaryDcl {
             proposer::Proposer::new(our_id, keypair.secret_key.clone(), config.max_empty_cars);
 
         // Create core message processor
-        let core = core::Core::new(our_id, keypair.clone(), validator_pubkeys.clone());
+        let core = core::Core::new(
+            our_id,
+            keypair.clone(),
+            validator_pubkeys.clone(),
+            config.attestation_quorum,
+        );
 
         // Create attestation collector
         let attestation_collector = attestation_collector::AttestationCollector::new(
@@ -108,7 +112,8 @@ impl PrimaryDcl {
         );
 
         // Create cut former
-        let cut_former = cut_former::CutFormer::new(sorted_validators.clone());
+        let cut_former =
+            cut_former::CutFormer::new(sorted_validators.clone(), config.attestation_quorum);
 
         // Create state
         let state = state::PrimaryState::new(our_id, config.equivocation_retention);
@@ -216,8 +221,9 @@ impl DataChainLayer for PrimaryDcl {
     }
 
     fn attestation_threshold(&self) -> usize {
-        let f = (self.validator_pubkeys.len() - 1) / 3;
-        2 * f + 1
+        self.config
+            .attestation_quorum
+            .compute_threshold(self.validator_pubkeys.len())
     }
 
     fn is_car_attested(&self, car_hash: &Hash) -> bool {

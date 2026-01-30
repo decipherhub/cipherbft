@@ -101,7 +101,7 @@ pub static DCL_ATTESTATION_COLLECTION: Lazy<HistogramVec> = Lazy::new(|| {
     HistogramVec::new(
         prometheus::histogram_opts!(
             "cipherbft_dcl_attestation_collection_seconds",
-            "Time to collect f+1 attestations",
+            "Time to collect quorum attestations",
             vec![0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
         ),
         &[],

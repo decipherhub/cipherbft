@@ -43,7 +43,7 @@ use cipherbft_storage::{
     Receipt as StorageReceipt, ReceiptStore, StoredLog, Transaction as StorageTransaction,
     TransactionStore,
 };
-use cipherbft_types::genesis::Genesis;
+use cipherbft_types::genesis::{AttestationQuorum, Genesis};
 use cipherbft_types::Hash;
 use cipherbft_types::ValidatorId;
 use informalsystems_malachitebft_metrics::SharedRegistry;
@@ -170,6 +170,9 @@ pub struct Node {
     beneficiary: [u8; 20],
     /// Block gas limit from genesis configuration.
     gas_limit: u64,
+    /// Attestation quorum for DCL Cars (from genesis).
+    /// Determines how many validators must attest before a Car can be included.
+    attestation_quorum: AttestationQuorum,
 }
 
 impl Node {
@@ -211,6 +214,7 @@ impl Node {
             epoch_block_reward: U256::from(2_000_000_000_000_000_000u128), // Default: 2 CPH
             gas_limit: DEFAULT_GAS_LIMIT, // Default, overridden by genesis
             beneficiary: [0u8; 20], // Default zero, overridden by genesis
+            attestation_quorum: AttestationQuorum::default(), // Default 2f+1, overridden by genesis
         })
     }
 
@@ -353,6 +357,13 @@ impl Node {
         if !self.dcl_enabled {
             info!("DCL (Data Chain Layer) is DISABLED - consensus will proceed without data availability attestations");
         }
+
+        // Set attestation quorum from genesis DCL params
+        self.attestation_quorum = genesis.cipherbft.dcl.attestation_quorum;
+        info!(
+            "Attestation quorum set from genesis: {:?}",
+            self.attestation_quorum
+        );
 
         // Set beneficiary address from genesis coinbase (if specified)
         if let Some(coinbase) = genesis.coinbase {
@@ -545,7 +556,8 @@ impl Node {
             let primary_config =
                 PrimaryConfig::new(self.validator_id, self.bls_keypair.secret_key.clone())
                     .with_car_interval(Duration::from_millis(self.config.car_interval_ms))
-                    .with_max_empty_cars(u32::MAX);
+                    .with_max_empty_cars(u32::MAX)
+                    .with_attestation_quorum(self.attestation_quorum);
 
             // Extract BLS public keys for DCL layer (Primary uses BLS for threshold signatures)
             let bls_pubkeys: HashMap<ValidatorId, BlsPublicKey> = self
