@@ -1059,6 +1059,7 @@ impl Node {
             Some(decided_tx),
             Some(network.clone()),
             self.dcl_store.clone(),
+            self.config.wait_for_cut_timeout_ms,
         )
         .await?;
 
