@@ -1563,7 +1563,7 @@ impl ChannelMempoolApi {
         }
 
         if retried > 0 {
-            info!("Retried {} pending transactions for re-processing", retried);
+            debug!("Retried {} pending transactions for re-processing", retried);
         }
 
         retried
@@ -3318,6 +3318,94 @@ mod tests {
 
         network.set_listening(false);
         assert!(!network.is_listening().await.unwrap());
+    }
+
+    // ===== ChannelMempoolApi tests =====
+
+    #[tokio::test]
+    async fn test_channel_mempool_retry_pending_with_empty_executed_hashes() {
+        use tokio::sync::mpsc;
+
+        // Create channel and mempool
+        let (tx_sender, mut rx) = mpsc::channel(100);
+        let mempool = ChannelMempoolApi::new(tx_sender, 1);
+
+        // Add a pending transaction manually
+        let tx_hash = B256::repeat_byte(0x01);
+        let sender = Address::repeat_byte(0x02);
+        let tx_bytes = vec![0x01, 0x02, 0x03];
+        {
+            let mut pending = mempool.pending.write();
+            pending.insert(tx_hash, (sender, tx_bytes.clone()));
+        }
+
+        // Retry with empty executed list - should retry ALL pending transactions
+        // This is the key behavior: when no transactions were executed in a block,
+        // we still want to retry all pending transactions
+        let retried = mempool.retry_pending(&[]).await;
+        assert_eq!(retried, 1, "Should retry the one pending transaction");
+
+        // Verify transaction was re-sent to the channel
+        let received = rx.try_recv().expect("Should have received the retried transaction");
+        assert_eq!(received, tx_bytes, "Retried transaction should match original");
+
+        // Pending map should still contain the transaction (not removed by retry)
+        let pending = mempool.pending.read();
+        assert!(
+            pending.contains_key(&tx_hash),
+            "Pending transaction should still be in the map after retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_channel_mempool_retry_pending_excludes_executed() {
+        use tokio::sync::mpsc;
+
+        // Create channel and mempool
+        let (tx_sender, mut rx) = mpsc::channel(100);
+        let mempool = ChannelMempoolApi::new(tx_sender, 1);
+
+        // Add two pending transactions
+        let tx_hash_1 = B256::repeat_byte(0x01);
+        let tx_hash_2 = B256::repeat_byte(0x02);
+        let sender = Address::repeat_byte(0x03);
+        let tx_bytes_1 = vec![0x01];
+        let tx_bytes_2 = vec![0x02];
+        {
+            let mut pending = mempool.pending.write();
+            pending.insert(tx_hash_1, (sender, tx_bytes_1.clone()));
+            pending.insert(tx_hash_2, (sender, tx_bytes_2.clone()));
+        }
+
+        // Retry with tx_hash_1 as executed - should only retry tx_hash_2
+        let retried = mempool.retry_pending(&[tx_hash_1]).await;
+        assert_eq!(retried, 1, "Should retry only the non-executed transaction");
+
+        // Verify only tx_bytes_2 was re-sent
+        let received = rx.try_recv().expect("Should have received the retried transaction");
+        assert_eq!(received, tx_bytes_2, "Should only retry non-executed transaction");
+
+        // No more transactions in channel
+        assert!(
+            rx.try_recv().is_err(),
+            "Should not have retried the executed transaction"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_channel_mempool_retry_pending_empty_pending_map() {
+        use tokio::sync::mpsc;
+
+        // Create channel and mempool with no pending transactions
+        let (tx_sender, mut rx) = mpsc::channel(100);
+        let mempool = ChannelMempoolApi::new(tx_sender, 1);
+
+        // Retry with empty pending map - should return 0
+        let retried = mempool.retry_pending(&[]).await;
+        assert_eq!(retried, 0, "Should return 0 when no pending transactions");
+
+        // Verify nothing was sent to channel
+        assert!(rx.try_recv().is_err(), "Should not have sent anything");
     }
 
     // ===== Log conversion helper tests =====
