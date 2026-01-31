@@ -633,6 +633,11 @@ impl Primary {
                     "Received consensus decision notification"
                 );
 
+                // CRITICAL: Update last_cut to the DECIDED cut (not what we proposed)
+                // This ensures monotonicity checks in form_cut use the actual consensus
+                // state, preventing stale proposed cuts from causing violations
+                self.last_cut = Some(cut.clone());
+
                 // CRITICAL: Sync position tracking from the decided Cut BEFORE advancing state
                 // This ensures validators that missed some CARs during collection still have
                 // consistent position tracking for subsequent heights
