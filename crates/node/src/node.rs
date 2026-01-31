@@ -1650,8 +1650,9 @@ impl Node {
                                             debug!("Broadcast block {} to WebSocket subscribers", height.0);
                                         }
 
-                                        // Clean up executed transactions from mempool pending map
-                                        // This prevents stale transactions from accumulating in txpool_* responses
+                                        // Clean up executed transactions and retry pending ones
+                                        // This prevents stale transactions from accumulating and
+                                        // ensures skipped transactions (e.g., NonceTooLow) are retried
                                         if let Some(ref mempool) = rpc_mempool {
                                             use alloy_rlp::Decodable;
                                             use reth_primitives::TransactionSigned;
@@ -1667,11 +1668,22 @@ impl Node {
                                                 .collect();
 
                                             if !tx_hashes.is_empty() {
+                                                // Remove executed transactions from pending map
                                                 mempool.remove_included(&tx_hashes);
                                                 debug!(
                                                     "Removed {} executed transactions from mempool pending map",
                                                     tx_hashes.len()
                                                 );
+
+                                                // Retry any remaining pending transactions
+                                                // These may have been skipped due to nonce issues
+                                                let retried = mempool.retry_pending(&tx_hashes).await;
+                                                if retried > 0 {
+                                                    debug!(
+                                                        "Re-queued {} pending transactions for retry",
+                                                        retried
+                                                    );
+                                                }
                                             }
                                         }
                                     }

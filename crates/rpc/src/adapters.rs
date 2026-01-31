@@ -1528,6 +1528,49 @@ impl ChannelMempoolApi {
             pending.remove(hash);
         }
     }
+
+    /// Retry pending transactions that were not included in the block.
+    ///
+    /// After block execution, some transactions may have been skipped (e.g., NonceTooLow
+    /// due to out-of-order arrival). This re-submits them to the Worker for retry.
+    ///
+    /// # Arguments
+    /// * `executed_tx_hashes` - Hashes of transactions that were successfully executed
+    ///
+    /// # Returns
+    /// Number of transactions re-submitted for retry
+    pub async fn retry_pending(&self, executed_tx_hashes: &[B256]) -> usize {
+        // Get pending transactions that were NOT executed
+        let to_retry: Vec<Vec<u8>> = {
+            let pending = self.pending.read();
+            pending
+                .iter()
+                .filter(|(hash, _)| !executed_tx_hashes.contains(hash))
+                .map(|(_, (_, tx_bytes))| tx_bytes.clone())
+                .collect()
+        };
+
+        if to_retry.is_empty() {
+            return 0;
+        }
+
+        let mut retried = 0;
+        for tx_bytes in to_retry {
+            // Re-send to Worker channel (don't modify pending map - it's already there)
+            if self.tx_sender.send(tx_bytes).await.is_ok() {
+                retried += 1;
+            }
+        }
+
+        if retried > 0 {
+            info!(
+                "Retried {} pending transactions for re-processing",
+                retried
+            );
+        }
+
+        retried
+    }
 }
 
 #[async_trait]
@@ -1677,6 +1720,16 @@ impl MempoolWrapper {
     pub fn remove_included(&self, tx_hashes: &[B256]) {
         if let Self::Channel(api) = self {
             api.remove_included(tx_hashes);
+        }
+    }
+
+    /// Retry pending transactions that were not included in the block.
+    ///
+    /// Only has effect for `Channel` variant. Returns 0 for `Stub`.
+    pub async fn retry_pending(&self, executed_tx_hashes: &[B256]) -> usize {
+        match self {
+            Self::Channel(api) => api.retry_pending(executed_tx_hashes).await,
+            Self::Stub(_) => 0,
         }
     }
 }
