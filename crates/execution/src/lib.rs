@@ -593,6 +593,7 @@ mod tests {
             block_hash: B256::ZERO,
             receipts: vec![],
             logs_bloom: Bloom::ZERO,
+            executed_transactions: vec![],
         };
 
         let sealed = execution_layer

@@ -44,7 +44,14 @@ const BLOCK_HASH_CACHE_SIZE: NonZeroUsize = match NonZeroUsize::new(256) {
 /// - Cumulative gas used by all transactions
 /// - Logs emitted by each transaction
 /// - Total transaction fees collected (gas_used × effective_gas_price)
-type ProcessTransactionsResult = (Vec<TransactionReceipt>, u64, Vec<Vec<Log>>, U256);
+/// - Executed transaction bytes (only transactions with receipts, not skipped ones)
+type ProcessTransactionsResult = (
+    Vec<TransactionReceipt>,
+    u64,
+    Vec<Vec<Log>>,
+    U256,
+    Vec<Bytes>,
+);
 
 /// ExecutionLayer trait defines the interface for block execution.
 ///
@@ -345,6 +352,7 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
         let mut cumulative_gas_used = 0u64;
         let mut all_logs = Vec::new();
         let mut total_fees = U256::ZERO;
+        let mut executed_tx_bytes = Vec::new();
 
         // Sort transactions by (sender, nonce) to ensure correct execution order
         // This prevents NonceTooLow errors when txs from same sender arrive out of order
@@ -503,6 +511,7 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
 
                 receipts.push(receipt);
                 all_logs.push(tx_result.logs);
+                executed_tx_bytes.push(tx_bytes.clone());
             }
 
             // Finalize EVM to extract journal changes
@@ -531,7 +540,13 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
             );
         }
 
-        Ok((receipts, cumulative_gas_used, all_logs, total_fees))
+        Ok((
+            receipts,
+            cumulative_gas_used,
+            all_logs,
+            total_fees,
+            executed_tx_bytes,
+        ))
     }
 
     /// Compute or retrieve state root based on block number.
@@ -566,12 +581,14 @@ impl<P: Provider + Clone> ExecutionLayer for ExecutionEngine<P> {
         self.validate_block(&input)?;
 
         // Process all transactions and collect fees
-        let (receipts, gas_used, all_logs, total_fees) = self.process_transactions(
-            &input.transactions,
-            input.block_number,
-            input.timestamp,
-            input.parent_hash,
-        )?;
+        // executed_tx_bytes contains only transactions that actually executed (have receipts)
+        let (receipts, gas_used, all_logs, total_fees, executed_tx_bytes) = self
+            .process_transactions(
+                &input.transactions,
+                input.block_number,
+                input.timestamp,
+                input.parent_hash,
+            )?;
 
         if !total_fees.is_zero() {
             tracing::info!(
@@ -665,6 +682,7 @@ impl<P: Provider + Clone> ExecutionLayer for ExecutionEngine<P> {
             block_hash,
             receipts,
             logs_bloom,
+            executed_transactions: executed_tx_bytes,
         })
     }
 
@@ -958,6 +976,7 @@ mod tests {
             block_hash: B256::ZERO,
             receipts: vec![],
             logs_bloom: Bloom::ZERO,
+            executed_transactions: vec![],
         };
 
         let sealed = engine
@@ -1018,6 +1037,7 @@ mod tests {
             block_hash: B256::ZERO,
             receipts: vec![],
             logs_bloom: Bloom::ZERO,
+            executed_transactions: vec![],
         };
 
         let sealed = engine
