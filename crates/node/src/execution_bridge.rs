@@ -353,9 +353,8 @@ impl ExecutionBridge {
         let timestamp = execution_cut.timestamp;
         let parent_hash = execution_cut.parent_hash;
 
-        // Capture all transactions BEFORE they're consumed by execution.
-        // These will be stored by the node for eth_getTransactionByHash queries.
-        let executed_transactions: Vec<Bytes> = execution_cut
+        // Collect all transactions for the block input
+        let all_transactions: Vec<Bytes> = execution_cut
             .cars
             .iter()
             .flat_map(|car| car.transactions.iter().cloned())
@@ -365,7 +364,7 @@ impl ExecutionBridge {
         let block_input = BlockInput {
             block_number: execution_cut.block_number,
             timestamp: execution_cut.timestamp,
-            transactions: executed_transactions.clone(),
+            transactions: all_transactions,
             parent_hash: execution_cut.parent_hash,
             gas_limit: execution_cut.gas_limit,
             base_fee_per_gas: execution_cut.base_fee_per_gas,
@@ -399,6 +398,10 @@ impl ExecutionBridge {
             parent_hash = %parent_hash,
             "Block hash updated"
         );
+
+        // Use executed_transactions from the execution result - this only contains
+        // transactions that actually executed (have receipts), not skipped ones
+        let executed_transactions = result.executed_transactions.clone();
 
         Ok(BlockExecutionResult {
             execution_result: result,
@@ -787,7 +790,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_genesis_block_hash() {
-        let bridge = create_default_bridge().unwrap();
+        let (bridge, _temp_dir) = create_default_bridge().unwrap();
 
         // Initially should be B256::ZERO
         let initial_hash = bridge.last_block_hash.read().map(|guard| *guard).unwrap();

@@ -10,6 +10,10 @@ use cipherbft_types::{Hash, ValidatorId};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+/// Maximum number of timeout resets allowed for batched Cars.
+/// This prevents Cars from being stuck indefinitely when peers cannot sync batches.
+const MAX_BATCHED_CAR_RESETS: u32 = 10;
+
 /// Pending attestation collection for a Car
 #[derive(Debug)]
 struct PendingAttestation {
@@ -24,6 +28,8 @@ struct PendingAttestation {
     started_at: Instant,
     /// Current backoff duration
     current_backoff: Duration,
+    /// Number of times the timeout has been reset (for batched Cars)
+    reset_count: u32,
 }
 
 impl PendingAttestation {
@@ -34,6 +40,7 @@ impl PendingAttestation {
             attestations: HashMap::new(),
             started_at: Instant::now(),
             current_backoff: base_timeout,
+            reset_count: 0,
         }
     }
 }
@@ -237,15 +244,29 @@ impl AttestationCollector {
     /// Reset timeout for a Car without losing existing attestations
     ///
     /// Used for batched Cars that need extra time for peers to sync batch data.
-    /// Returns true if the Car was found and reset, false otherwise.
+    /// Returns true if the Car was found and reset successfully.
+    /// Returns false if the Car was not found OR if max reset count exceeded.
+    ///
+    /// This prevents Cars from being stuck indefinitely when peers cannot sync batches
+    /// (e.g., due to position divergence where peers reject the Car).
     pub fn reset_timeout(&mut self, car_hash: &Hash) -> bool {
         if let Some(pending) = self.pending.get_mut(car_hash) {
+            // Check if we've exceeded max resets
+            if pending.reset_count >= MAX_BATCHED_CAR_RESETS {
+                return false;
+            }
             pending.started_at = std::time::Instant::now();
             pending.current_backoff = self.base_timeout;
+            pending.reset_count += 1;
             true
         } else {
             false
         }
+    }
+
+    /// Get the reset count for a pending Car
+    pub fn reset_count(&self, car_hash: &Hash) -> Option<u32> {
+        self.pending.get(car_hash).map(|p| p.reset_count)
     }
 
     /// Get current attestation count for a Car

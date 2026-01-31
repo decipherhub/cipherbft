@@ -44,14 +44,18 @@ pub struct PrimaryConfig {
 
 impl PrimaryConfig {
     /// Create a new configuration with defaults
+    ///
+    /// Default intervals are tuned for responsive transaction processing:
+    /// - `car_interval`: 50ms matches Worker flush interval for quick Car creation
+    /// - `max_empty_cars`: 1 reduces timing races where empty Cars compete with tx-bearing Cars
     pub fn new(validator_id: ValidatorId, bls_secret_key: BlsSecretKey) -> Self {
         Self {
             validator_id,
             bls_secret_key,
-            car_interval: Duration::from_millis(100),
+            car_interval: Duration::from_millis(50), // Faster Car creation
             attestation_timeout_base: Duration::from_millis(500),
             attestation_timeout_max: Duration::from_millis(5000),
-            max_empty_cars: 3,
+            max_empty_cars: 1, // Reduce empty Car spam during tx processing
             worker_count: 1,
             equivocation_retention: 1000,
             startup_delay: Duration::from_secs(2),
