@@ -1563,10 +1563,7 @@ impl ChannelMempoolApi {
         }
 
         if retried > 0 {
-            info!(
-                "Retried {} pending transactions for re-processing",
-                retried
-            );
+            info!("Retried {} pending transactions for re-processing", retried);
         }
 
         retried

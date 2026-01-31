@@ -350,37 +350,36 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
         // This prevents NonceTooLow errors when txs from same sender arrive out of order
         let mut sorted_txs: Vec<(usize, &Bytes)> = transactions.iter().enumerate().collect();
         sorted_txs.sort_by(|(_, a), (_, b)| {
-            let parse_tx =
-                |tx_bytes: &Bytes| -> Option<(alloy_primitives::Address, u64)> {
-                    let tx_envelope = TxEnvelope::decode_2718(&mut tx_bytes.as_ref()).ok()?;
-                    let nonce = tx_envelope.nonce();
+            let parse_tx = |tx_bytes: &Bytes| -> Option<(alloy_primitives::Address, u64)> {
+                let tx_envelope = TxEnvelope::decode_2718(&mut tx_bytes.as_ref()).ok()?;
+                let nonce = tx_envelope.nonce();
 
-                    // Recover sender from signature
-                    let sender = match &tx_envelope {
-                        TxEnvelope::Legacy(signed) => signed
-                            .signature()
-                            .recover_address_from_prehash(&signed.signature_hash())
-                            .ok(),
-                        TxEnvelope::Eip2930(signed) => signed
-                            .signature()
-                            .recover_address_from_prehash(&signed.signature_hash())
-                            .ok(),
-                        TxEnvelope::Eip1559(signed) => signed
-                            .signature()
-                            .recover_address_from_prehash(&signed.signature_hash())
-                            .ok(),
-                        TxEnvelope::Eip4844(signed) => signed
-                            .signature()
-                            .recover_address_from_prehash(&signed.signature_hash())
-                            .ok(),
-                        TxEnvelope::Eip7702(signed) => signed
-                            .signature()
-                            .recover_address_from_prehash(&signed.signature_hash())
-                            .ok(),
-                    }?;
+                // Recover sender from signature
+                let sender = match &tx_envelope {
+                    TxEnvelope::Legacy(signed) => signed
+                        .signature()
+                        .recover_address_from_prehash(&signed.signature_hash())
+                        .ok(),
+                    TxEnvelope::Eip2930(signed) => signed
+                        .signature()
+                        .recover_address_from_prehash(&signed.signature_hash())
+                        .ok(),
+                    TxEnvelope::Eip1559(signed) => signed
+                        .signature()
+                        .recover_address_from_prehash(&signed.signature_hash())
+                        .ok(),
+                    TxEnvelope::Eip4844(signed) => signed
+                        .signature()
+                        .recover_address_from_prehash(&signed.signature_hash())
+                        .ok(),
+                    TxEnvelope::Eip7702(signed) => signed
+                        .signature()
+                        .recover_address_from_prehash(&signed.signature_hash())
+                        .ok(),
+                }?;
 
-                    Some((sender, nonce))
-                };
+                Some((sender, nonce))
+            };
 
             match (parse_tx(a), parse_tx(b)) {
                 (Some((sender_a, nonce_a)), Some((sender_b, nonce_b))) => {
