@@ -3346,8 +3346,13 @@ mod tests {
         assert_eq!(retried, 1, "Should retry the one pending transaction");
 
         // Verify transaction was re-sent to the channel
-        let received = rx.try_recv().expect("Should have received the retried transaction");
-        assert_eq!(received, tx_bytes, "Retried transaction should match original");
+        let received = rx
+            .try_recv()
+            .expect("Should have received the retried transaction");
+        assert_eq!(
+            received, tx_bytes,
+            "Retried transaction should match original"
+        );
 
         // Pending map should still contain the transaction (not removed by retry)
         let pending = mempool.pending.read();
@@ -3382,8 +3387,13 @@ mod tests {
         assert_eq!(retried, 1, "Should retry only the non-executed transaction");
 
         // Verify only tx_bytes_2 was re-sent
-        let received = rx.try_recv().expect("Should have received the retried transaction");
-        assert_eq!(received, tx_bytes_2, "Should only retry non-executed transaction");
+        let received = rx
+            .try_recv()
+            .expect("Should have received the retried transaction");
+        assert_eq!(
+            received, tx_bytes_2,
+            "Should only retry non-executed transaction"
+        );
 
         // No more transactions in channel
         assert!(
