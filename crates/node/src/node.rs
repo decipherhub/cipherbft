@@ -1667,23 +1667,25 @@ impl Node {
                                                 })
                                                 .collect();
 
+                                            // Remove executed transactions from pending map
                                             if !tx_hashes.is_empty() {
-                                                // Remove executed transactions from pending map
                                                 mempool.remove_included(&tx_hashes);
                                                 debug!(
                                                     "Removed {} executed transactions from mempool pending map",
                                                     tx_hashes.len()
                                                 );
+                                            }
 
-                                                // Retry any remaining pending transactions
-                                                // These may have been skipped due to nonce issues
-                                                let retried = mempool.retry_pending(&tx_hashes).await;
-                                                if retried > 0 {
-                                                    debug!(
-                                                        "Re-queued {} pending transactions for retry",
-                                                        retried
-                                                    );
-                                                }
+                                            // ALWAYS retry pending transactions after every block
+                                            // Previously this was inside the if block, causing pending
+                                            // transactions to only retry when a block had executed txs.
+                                            // This led to multi-minute delays when the chain had empty blocks.
+                                            let retried = mempool.retry_pending(&tx_hashes).await;
+                                            if retried > 0 {
+                                                debug!(
+                                                    "Re-queued {} pending transactions for retry",
+                                                    retried
+                                                );
                                             }
                                         }
                                     }
