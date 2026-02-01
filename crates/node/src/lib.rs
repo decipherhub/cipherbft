@@ -23,7 +23,7 @@ pub use config::{
     generate_keypair, generate_local_configs, LocalTestConfig, NodeConfig, PeerConfig,
     CIPHERD_GENESIS_PATH_ENV, CIPHERD_HOME_ENV, DEFAULT_GENESIS_FILENAME, DEFAULT_HOME_DIR,
     DEFAULT_KEYRING_BACKEND, DEFAULT_KEYS_DIR, DEFAULT_KEY_NAME, DEFAULT_METRICS_PORT,
-    DEFAULT_RPC_HTTP_PORT, DEFAULT_RPC_WS_PORT,
+    DEFAULT_RPC_HTTP_PORT, DEFAULT_RPC_WS_PORT, DEFAULT_WAIT_FOR_CUT_TIMEOUT_MS,
 };
 pub use execution_bridge::ExecutionBridge;
 pub use execution_sync::{ExecutionSyncConfig, ExecutionSyncTracker, SyncAction};

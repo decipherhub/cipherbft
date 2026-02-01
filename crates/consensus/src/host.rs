@@ -63,6 +63,17 @@ pub struct HostConfig {
     /// Higher values support longer sync windows for lagging nodes,
     /// at the cost of increased memory usage.
     pub decided_retention: usize,
+
+    /// Timeout in milliseconds to wait for the next cut after a decision (default: 50ms).
+    ///
+    /// After consensus decides on a block, the host waits for the next cut to be
+    /// available before starting the next consensus round. This prevents a race
+    /// condition where consensus requests a value before DCL has produced the cut.
+    ///
+    /// Lower values improve block throughput but may cause NIL votes if cuts
+    /// aren't ready. Higher values reduce throughput but give DCL more time.
+    /// Set to 0 to disable waiting entirely.
+    pub wait_for_cut_timeout_ms: u64,
 }
 
 impl Default for HostConfig {
@@ -76,6 +87,11 @@ impl Default for HostConfig {
             // 5 seconds. This larger window ensures peers can serve historical data for catch-up.
             // Note: Persistent storage (dcl_store) is also used for older blocks.
             decided_retention: 10000,
+            // Reduced from 500ms to 50ms to improve block throughput.
+            // Most cuts should be available within a few milliseconds if DCL is healthy.
+            // If cuts aren't ready, consensus will proceed and may vote NIL on round 0,
+            // but this is preferable to adding 500ms latency per block.
+            wait_for_cut_timeout_ms: 50,
         }
     }
 }
@@ -200,6 +216,9 @@ pub struct CipherBftHost {
     /// Host configuration.
     config: HostConfig,
 
+    /// Proposer selector for weighted round-robin (optional for backward compatibility).
+    proposer_selector: Option<Arc<crate::proposer_selector::ProposerSelector>>,
+
     /// Tracing span for this actor.
     span: tracing::Span,
 }
@@ -226,8 +245,21 @@ impl CipherBftHost {
             value_builder,
             decision_handler,
             config,
+            proposer_selector: None,
             span,
         }
+    }
+
+    /// Set the proposer selector for weighted round-robin updates.
+    ///
+    /// When set, the host will update the proposer selector's priorities
+    /// when validator sets change at epoch boundaries.
+    pub fn with_proposer_selector(
+        mut self,
+        proposer_selector: Arc<crate::proposer_selector::ProposerSelector>,
+    ) -> Self {
+        self.proposer_selector = Some(proposer_selector);
+        self
     }
 
     /// Get the validator set for a specific height.
@@ -679,7 +711,7 @@ impl Actor for CipherBftHost {
                 }
 
                 // Check for epoch transition
-                let _epoch_transition = match self.on_block_committed(height) {
+                let epoch_transition = match self.on_block_committed(height) {
                     Ok(true) => {
                         info!(
                             parent: &self.span,
@@ -701,10 +733,38 @@ impl Actor for CipherBftHost {
                     }
                 };
 
+                // Update proposer selector if validator set changed
+                if epoch_transition {
+                    if let Some(ref selector) = self.proposer_selector {
+                        // Get the new validator set for the next height
+                        if let Ok(new_validator_set) = self.get_validator_set(height.next()) {
+                            selector.update_validator_set(&new_validator_set);
+                            debug!(
+                                parent: &self.span,
+                                height = height.0,
+                                "Updated proposer selector for new validator set"
+                            );
+                        }
+                    }
+                }
+
+                // Periodic priority maintenance to prevent overflow
+                if let Some(ref selector) = self.proposer_selector {
+                    if height.0 % 100 == 0 {
+                        selector.center_priorities();
+                        selector.scale_if_needed();
+                        trace!(
+                            parent: &self.span,
+                            height = height.0,
+                            "Centered proposer selector priorities"
+                        );
+                    }
+                }
+
                 // Reply with the next height to start
                 let next_height = height.next();
 
-                // CRITICAL: Wait for the next cut to be available before starting next height.
+                // Wait for the next cut to be available before starting next height.
                 //
                 // This fixes a race condition where:
                 // 1. on_decided() sends the decision to the node's event loop
@@ -716,21 +776,23 @@ impl Actor for CipherBftHost {
                 // By waiting here, we ensure the node has processed the decision and
                 // Primary has formed the next Cut before consensus starts requesting it.
                 //
-                // Timeout of 500ms should be sufficient for the node to process the
-                // decision and form the Cut. If it times out, consensus will still
-                // start but may vote NIL on the first round.
-                let wait_timeout = std::time::Duration::from_millis(500);
-                if !self
-                    .value_builder
-                    .wait_for_cut(next_height, wait_timeout)
-                    .await
-                {
-                    warn!(
-                        parent: &self.span,
-                        next_height = next_height.0,
-                        "Cut not ready for next height after {:?}, proceeding anyway",
-                        wait_timeout
-                    );
+                // The timeout is configurable via HostConfig::wait_for_cut_timeout_ms.
+                // If it times out, consensus will still start but may vote NIL on round 0.
+                let wait_timeout_ms = self.config.wait_for_cut_timeout_ms;
+                if wait_timeout_ms > 0 {
+                    let wait_timeout = std::time::Duration::from_millis(wait_timeout_ms);
+                    if !self
+                        .value_builder
+                        .wait_for_cut(next_height, wait_timeout)
+                        .await
+                    {
+                        warn!(
+                            parent: &self.span,
+                            next_height = next_height.0,
+                            "Cut not ready for next height after {:?}, proceeding anyway",
+                            wait_timeout
+                        );
+                    }
                 }
 
                 match self.get_validator_set(next_height) {
@@ -1748,6 +1810,7 @@ impl DecisionHandler for ChannelDecisionHandler {
 /// * `decided_tx` - Channel to send decided events
 /// * `network` - Optional network reference for publishing proposal parts
 /// * `dcl_store` - Optional persistent storage for decisions (enables sync support)
+/// * `wait_for_cut_timeout_ms` - Timeout in ms to wait for next cut after decision (0 to disable)
 ///
 /// # Returns
 ///
@@ -1776,6 +1839,7 @@ pub async fn spawn_host(
     decided_tx: Option<mpsc::Sender<(ConsensusHeight, Cut)>>,
     network: Option<NetworkRef<CipherBftContext>>,
     dcl_store: Option<Arc<dyn cipherbft_storage::DclStore>>,
+    wait_for_cut_timeout_ms: u64,
 ) -> anyhow::Result<HostRef<CipherBftContext>> {
     // Extract validators from context
     let validators: Vec<_> = ctx.validator_set.as_slice().to_vec();
@@ -1787,8 +1851,11 @@ pub async fn spawn_host(
             .map_err(|e| anyhow::anyhow!("Failed to create validator set manager: {}", e))?,
     );
 
-    // Create config with default retention values
-    let config = HostConfig::default();
+    // Create config with provided wait_for_cut_timeout
+    let config = HostConfig {
+        wait_for_cut_timeout_ms,
+        ..Default::default()
+    };
 
     // Create channel-based handlers with config values
     let value_builder = if let Some(network_ref) = network {

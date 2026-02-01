@@ -47,4 +47,4 @@ devnet/
 docs/plans/
 
 # Docker auto-generated configs
-docker/configs/
+docker/

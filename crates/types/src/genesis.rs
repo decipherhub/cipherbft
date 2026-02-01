@@ -460,13 +460,13 @@ fn default_target_block_time_ms() -> u64 {
     2000
 }
 fn default_timeout_propose_ms() -> u64 {
-    3000
+    1000
 }
 fn default_timeout_prevote_ms() -> u64 {
-    1000
+    500
 }
 fn default_timeout_precommit_ms() -> u64 {
-    1000
+    500
 }
 
 /// Attestation quorum requirement for Car inclusion in Cuts.
@@ -947,7 +947,9 @@ mod tests {
     fn test_consensus_params_defaults() {
         let params = ConsensusParams::default();
         assert_eq!(params.target_block_time_ms, 2000);
-        assert_eq!(params.timeout_propose_ms, 3000);
+        assert_eq!(params.timeout_propose_ms, 1000);
+        assert_eq!(params.timeout_prevote_ms, 500);
+        assert_eq!(params.timeout_precommit_ms, 500);
     }
 
     #[test]
