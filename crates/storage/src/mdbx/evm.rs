@@ -343,6 +343,16 @@ impl EvmStore for MdbxEvmStore {
         Ok(())
     }
 
+    fn get_all_accounts(&self) -> EvmStoreResult<Vec<([u8; 20], EvmAccount)>> {
+        // Delegate to the inherent method
+        MdbxEvmStore::get_all_accounts(self)
+    }
+
+    fn get_all_storage(&self, address: &[u8; 20]) -> EvmStoreResult<Vec<([u8; 32], [u8; 32])>> {
+        // Delegate to the inherent method
+        MdbxEvmStore::get_all_storage(self, address)
+    }
+
     fn get_current_block(&self) -> EvmStoreResult<Option<u64>> {
         let start = Instant::now();
         let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;

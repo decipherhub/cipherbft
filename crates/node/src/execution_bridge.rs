@@ -631,6 +631,86 @@ impl ExecutionBridge {
         let execution = self.execution.read().await;
         Arc::clone(execution.staking_precompile())
     }
+
+    /// Get the last executed block hash.
+    ///
+    /// Returns the hash of the most recently executed block, or B256::ZERO
+    /// if no blocks have been executed yet.
+    pub fn last_block_hash(&self) -> B256 {
+        self.last_block_hash
+            .read()
+            .map(|guard| *guard)
+            .unwrap_or(B256::ZERO)
+    }
+
+    /// Get the current block number.
+    ///
+    /// Returns the block number of the most recently executed block.
+    /// This requires acquiring the execution lock.
+    pub async fn current_block_number(&self) -> u64 {
+        let execution = self.execution.read().await;
+        execution.current_block_number()
+    }
+
+    /// Execute a block directly from BlockInput (for sync replay).
+    ///
+    /// This method is used during sync to replay blocks that have been
+    /// downloaded from peers. It bypasses the Cut conversion since the
+    /// transactions are already flattened.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - Block input containing ordered transactions
+    ///
+    /// # Returns
+    ///
+    /// Returns `BlockExecutionResult` containing execution result with properly
+    /// computed block hash and parent hash.
+    pub async fn execute_block_input(
+        &self,
+        input: BlockInput,
+    ) -> anyhow::Result<BlockExecutionResult> {
+        let block_number = input.block_number;
+        let timestamp = input.timestamp;
+        let parent_hash = input.parent_hash;
+        let transactions = input.transactions.clone();
+
+        let mut execution = self.execution.write().await;
+
+        let result = execution
+            .execute_block(input)
+            .map_err(|e| anyhow::anyhow!("Block execution failed: {}", e))?;
+
+        // Compute and store the new block hash for the next block's parent_hash
+        let new_block_hash = compute_block_hash(
+            block_number,
+            timestamp,
+            parent_hash,
+            result.state_root,
+            result.transactions_root,
+            result.receipts_root,
+        );
+
+        // Update the last block hash for the next execution
+        if let Ok(mut guard) = self.last_block_hash.write() {
+            *guard = new_block_hash;
+        }
+
+        debug!(
+            height = block_number,
+            block_hash = %new_block_hash,
+            parent_hash = %parent_hash,
+            "Sync block hash updated"
+        );
+
+        Ok(BlockExecutionResult {
+            execution_result: result,
+            block_hash: new_block_hash,
+            parent_hash,
+            timestamp,
+            executed_transactions: transactions,
+        })
+    }
 }
 
 /// Compute a deterministic block hash from block components.

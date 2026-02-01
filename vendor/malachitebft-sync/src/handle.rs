@@ -95,7 +95,7 @@ where
 pub async fn on_tick<Ctx>(
     co: Co<Ctx>,
     state: &mut State<Ctx>,
-    _metrics: &Metrics,
+    metrics: &Metrics,
 ) -> Result<(), Error<Ctx>>
 where
     Ctx: Context,
@@ -112,6 +112,38 @@ where
         state
             .peer_scorer
             .reset_inactive_peers_scores(inactive_threshold);
+    }
+
+    // Clear stale pending requests that have timed out
+    let cleared_count = state.clear_stale_pending_requests();
+    if cleared_count > 0 {
+        warn!(
+            cleared_count,
+            height.sync = %state.sync_height,
+            pending_requests = state.pending_value_requests.len(),
+            "SYNC STALE CLEANUP: Cleared timed-out pending requests"
+        );
+
+        // After clearing stale requests, check if we need to skip ahead
+        // because peers can't serve the heights we're requesting
+        if let Some((skip_to, skip_peer)) = state.find_earliest_syncable_height(state.sync_height) {
+            if skip_to > state.sync_height {
+                warn!(
+                    height.current = %state.sync_height,
+                    height.skip_to = %skip_to,
+                    peer = %skip_peer,
+                    "SYNC SKIP AFTER CLEANUP: Peers cannot serve old heights, jumping to earliest available"
+                );
+
+                state.sync_height = skip_to;
+                state.tip_height = skip_to.decrement().unwrap_or_default();
+                state.pending_value_requests.clear();
+                state.height_per_request_id.clear();
+
+                // Request from the new height
+                request_value_from_peer(&co, state, metrics, skip_to, skip_peer).await?;
+            }
+        }
     }
 
     debug!("Peer scores: {:#?}", state.peer_scorer.get_scores());
@@ -147,6 +179,32 @@ where
             "SYNC REQUIRED: Falling behind"
         );
 
+        // Check if tip-first sync should be triggered now that we have peer info
+        // Only trigger if we're significantly behind and haven't already jumped
+        if state.config.tip_first_sync {
+            if let Some((skip_to, skip_peer)) =
+                state.calculate_tip_first_start(state.sync_height, state.config.tip_first_buffer)
+            {
+                warn!(
+                    height.current = %state.sync_height,
+                    height.skip_to = %skip_to,
+                    height.network_tip = ?state.get_network_tip(),
+                    buffer = state.config.tip_first_buffer,
+                    peer = %skip_peer,
+                    "TIP-FIRST SYNC: Skipping to near network tip for fast consensus participation"
+                );
+
+                state.sync_height = skip_to;
+                state.tip_height = skip_to.decrement().unwrap_or_default();
+                state.pending_value_requests.clear();
+                state.height_per_request_id.clear();
+
+                // Request from the new height
+                request_value_from_peer(&co, state, metrics, skip_to, skip_peer).await?;
+                return Ok(());
+            }
+        }
+
         // We are lagging behind one of our peer at least,
         // request sync from any peer already at or above that peer's height.
         request_values(co, state, metrics).await?;
@@ -170,8 +228,34 @@ where
     debug!(height.tip = %tip_height, height.sync = %height, %restart, "Starting new height");
 
     state.started = true;
-    state.sync_height = height;
     state.tip_height = tip_height;
+
+    // Check if tip-first sync is enabled and applicable
+    if state.config.tip_first_sync && !state.peers.is_empty() {
+        if let Some((skip_to, peer)) =
+            state.calculate_tip_first_start(height, state.config.tip_first_buffer)
+        {
+            warn!(
+                height.local = %height,
+                height.skip_to = %skip_to,
+                height.network_tip = ?state.get_network_tip(),
+                buffer = state.config.tip_first_buffer,
+                peer = %peer,
+                "TIP-FIRST SYNC: Skipping to near network tip for fast consensus participation"
+            );
+
+            state.sync_height = skip_to;
+            state.pending_value_requests.clear();
+            state.height_per_request_id.clear();
+
+            // Request the first block from the skip point
+            request_value_from_peer(&co, state, metrics, skip_to, peer).await?;
+            return Ok(());
+        }
+    }
+
+    // Normal sync: start from the given height
+    state.sync_height = height;
 
     let height_to_remove = if restart { &height } else { &tip_height };
     state.remove_pending_request_by_height(height_to_remove);
@@ -190,9 +274,11 @@ pub async fn on_decided<Ctx>(
 where
     Ctx: Context,
 {
-    debug!(height.tip = %height, "Updating request state");
+    debug!(height.tip = %height, "Decided value, removing pending request");
 
-    state.validate_response(height);
+    // Remove the pending request immediately - it's been validated by consensus
+    // This frees the slot for new parallel sync requests
+    state.remove_pending_request_by_height(&height);
 
     Ok(())
 }

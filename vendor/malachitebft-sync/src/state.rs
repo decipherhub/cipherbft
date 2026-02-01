@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::time::Instant;
 
 use malachitebft_core_types::{Context, Height};
 use malachitebft_peer::PeerId;
@@ -39,7 +40,8 @@ where
     pub sync_height: Ctx::Height,
 
     /// Decided value requests for these heights have been sent out to peers.
-    pub pending_value_requests: BTreeMap<Ctx::Height, (OutboundRequestId, RequestState)>,
+    /// Tuple contains: (request_id, state, timestamp_when_sent)
+    pub pending_value_requests: BTreeMap<Ctx::Height, (OutboundRequestId, RequestState, Instant)>,
 
     /// Maps request ID to height for pending decided value requests.
     pub height_per_request_id: BTreeMap<OutboundRequestId, Ctx::Height>,
@@ -132,15 +134,17 @@ where
         self.height_per_request_id
             .insert(request_id.clone(), height);
 
-        self.pending_value_requests
-            .insert(height, (request_id, RequestState::WaitingResponse));
+        self.pending_value_requests.insert(
+            height,
+            (request_id, RequestState::WaitingResponse, Instant::now()),
+        );
     }
 
     /// Mark that a response has been received for a height.
     ///
     /// State transition: WaitingResponse -> WaitingValidation
     pub fn response_received(&mut self, request_id: OutboundRequestId, height: Ctx::Height) {
-        if let Some((req_id, state)) = self.pending_value_requests.get_mut(&height) {
+        if let Some((req_id, state, _)) = self.pending_value_requests.get_mut(&height) {
             if req_id != &request_id {
                 return; // A new request has been made in the meantime, ignore this response.
             }
@@ -155,7 +159,7 @@ where
     /// State transition: WaitingValidation -> Validated
     /// It is also possible to have the following transition: WaitingResponse -> Validated.
     pub fn validate_response(&mut self, height: Ctx::Height) {
-        if let Some((_, state)) = self.pending_value_requests.get_mut(&height) {
+        if let Some((_, state, _)) = self.pending_value_requests.get_mut(&height) {
             *state = RequestState::Validated;
         }
     }
@@ -167,7 +171,7 @@ where
 
     /// Remove the pending decided value request for a given height.
     pub fn remove_pending_request_by_height(&mut self, height: &Ctx::Height) {
-        if let Some((request_id, _)) = self.pending_value_requests.remove(height) {
+        if let Some((request_id, _, _)) = self.pending_value_requests.remove(height) {
             self.height_per_request_id.remove(&request_id);
         }
     }
@@ -191,7 +195,7 @@ where
 
     /// Check if a pending decided value request for a given height is in the `Validated` state.
     pub fn is_pending_value_request_validated_by_height(&self, height: &Ctx::Height) -> bool {
-        if let Some((_, state)) = self.pending_value_requests.get(height) {
+        if let Some((_, state, _)) = self.pending_value_requests.get(height) {
             *state == RequestState::Validated
         } else {
             false
@@ -205,6 +209,35 @@ where
         } else {
             false
         }
+    }
+
+    /// Clear stale pending requests that have been waiting longer than the configured timeout,
+    /// as well as any validated requests that should have been cleaned up.
+    /// Returns the number of cleared requests.
+    pub fn clear_stale_pending_requests(&mut self) -> usize {
+        let timeout = self.config.request_timeout;
+        let now = Instant::now();
+
+        // Find heights with:
+        // 1. Validated requests (should have been removed by on_decided, safety net)
+        // 2. Timed-out pending requests (no response received in time)
+        let stale_heights: Vec<Ctx::Height> = self
+            .pending_value_requests
+            .iter()
+            .filter(|(_, (_, state, sent_at))| {
+                *state == RequestState::Validated || now.duration_since(*sent_at) > timeout
+            })
+            .map(|(height, _)| *height)
+            .collect();
+
+        let count = stale_heights.len();
+
+        // Remove stale requests
+        for height in stale_heights {
+            self.remove_pending_request_by_height(&height);
+        }
+
+        count
     }
 
     /// Find the earliest height that any peer can serve, above the given height.
@@ -258,5 +291,42 @@ where
         }
 
         None
+    }
+
+    /// Get the maximum tip height reported by any peer (network tip).
+    /// Returns None if no peers are connected.
+    pub fn get_network_tip(&self) -> Option<Ctx::Height> {
+        self.peers.values().map(|status| status.tip_height).max()
+    }
+
+    /// Calculate the starting height for tip-first sync.
+    /// Returns (start_height, peer) if tip-first sync is applicable.
+    /// Returns None if:
+    /// - No peers are connected
+    /// - Local height is already close to network tip
+    /// - No peer can serve the calculated start height
+    pub fn calculate_tip_first_start(
+        &mut self,
+        local_height: Ctx::Height,
+        buffer: u64,
+    ) -> Option<(Ctx::Height, PeerId)> {
+        // Get the network tip
+        let network_tip = self.get_network_tip()?;
+
+        // Calculate the start height (tip - buffer)
+        // Use decrement_by to safely subtract, returns None if would underflow
+        let start_height = network_tip
+            .decrement_by(buffer)
+            .unwrap_or(Ctx::Height::ZERO);
+
+        // If start_height is not significantly ahead of local_height, no benefit
+        // Use a threshold of buffer/2 to avoid unnecessary jumps
+        if start_height.as_u64() <= local_height.as_u64() + buffer / 2 {
+            return None;
+        }
+
+        // Find a peer that can serve this height
+        self.random_peer_with_tip_at_or_above(start_height)
+            .map(|peer| (start_height, peer))
     }
 }

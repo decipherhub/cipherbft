@@ -63,6 +63,7 @@ pub mod persistent_state;
 pub mod pruning;
 pub mod receipts;
 pub mod staking;
+pub mod sync;
 pub mod tables;
 pub mod transactions;
 pub mod wal;
@@ -85,6 +86,10 @@ pub use persistent_state::{
 pub use pruning::{PruningConfig, PruningHandle, PruningTask};
 pub use receipts::{Log, Receipt, ReceiptStore, ReceiptStoreResult};
 pub use staking::{StakingStore, StakingStoreResult, StoredValidator};
+pub use sync::{
+    InMemorySyncStore, StoredAccountProgress, StoredBlockProgress, StoredStorageProgress,
+    StoredSyncPhase, StoredSyncProgress, StoredSyncSnapshot, SyncStore, SYNC_SNAPSHOT_INTERVAL,
+};
 pub use transactions::{Transaction, TransactionStore, TransactionStoreResult};
 pub use wal::{Wal, WalEntry};
 
@@ -92,5 +97,5 @@ pub use wal::{Wal, WalEntry};
 #[cfg(feature = "mdbx")]
 pub use mdbx::{
     Database, DatabaseConfig, MdbxBatchStore, MdbxBlockStore, MdbxDclStore, MdbxEvmStore,
-    MdbxLogStore, MdbxReceiptStore, MdbxStakingStore, MdbxTransactionStore, MdbxWal,
+    MdbxLogStore, MdbxReceiptStore, MdbxStakingStore, MdbxSyncStore, MdbxTransactionStore, MdbxWal,
 };

@@ -329,6 +329,14 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
         self.database.provider()
     }
 
+    /// Get the current block number.
+    ///
+    /// Returns the block number of the most recently executed block, or 0 if
+    /// no blocks have been executed yet.
+    pub fn current_block_number(&self) -> u64 {
+        self.current_block
+    }
+
     /// Process all transactions in a block.
     ///
     /// Returns a tuple containing receipts, cumulative gas used, logs, and total fees.

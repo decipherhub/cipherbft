@@ -20,6 +20,7 @@ use crate::execution_bridge::{BlockExecutionResult, ExecutionBridge};
 use crate::execution_sync::{ExecutionSyncConfig, ExecutionSyncTracker, SyncAction};
 use crate::network::{TcpPrimaryNetwork, TcpWorkerNetwork};
 use crate::supervisor::NodeSupervisor;
+use crate::sync_network::{create_sync_adapter, wire_sync_to_network};
 use alloy_primitives::{Address, B256};
 use anyhow::{Context, Result};
 use cipherbft_consensus::{
@@ -548,6 +549,25 @@ impl Node {
             // Store reference for RPC NetworkApi before moving into adapter
             primary_network_opt = Some(Arc::clone(&primary_network));
 
+            // Wire up snap sync network adapter
+            // This enables the sync manager to communicate with peers via the TCP network
+            //
+            // TODO(snap-sync): Integrate with actual snap sync triggering logic
+            // Current state:
+            // - Network wiring is set up to forward snap sync messages
+            // - The sync_adapter is created but not yet connected to StateSyncManager
+            // - When implementing snap sync trigger (e.g., detecting node is behind),
+            //   create StateSyncManager and use this adapter with run_snap_sync()
+            // - Consider storing sync_adapter in Node struct for on-demand sync
+            let (_sync_adapter, network_to_sync_tx, sync_to_network_rx) = create_sync_adapter();
+            wire_sync_to_network(
+                &primary_network,
+                Arc::clone(&primary_network),
+                network_to_sync_tx,
+                sync_to_network_rx,
+            )
+            .await;
+
             // Start primary listener
             Arc::clone(&primary_network)
                 .start_listener(self.config.primary_listen)
@@ -1065,9 +1085,12 @@ impl Node {
 
         // Spawn Sync actor for state synchronization
         // Use higher parallelism to catch up faster when significantly behind
+        // Note: Blocks must be applied sequentially, but having more in-flight
+        // reduces wait time between blocks and saturates network bandwidth
+        // Note: tip_first_sync disabled - requires consensus to support checkpoint-based sync
         let sync_config = SyncConfig::new(true)
-            .with_parallel_requests(20) // Increased from default 5 for faster catch-up
-            .with_request_timeout(Duration::from_secs(30)); // Longer timeout for slower networks
+            .with_parallel_requests(50) // High parallelism ensures blocks ready when needed
+            .with_request_timeout(Duration::from_secs(5)); // Fail fast, try other peers quickly
         let sync = spawn_sync(ctx.clone(), network.clone(), host.clone(), sync_config).await?;
 
         // Build and spawn Consensus engine with sync support

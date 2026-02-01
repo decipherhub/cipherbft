@@ -10,6 +10,7 @@ members = [
     "crates/mempool",
     "crates/rpc",
     "crates/metrics",
+    "crates/sync",
 ]
 resolver = "2"
 
@@ -148,9 +149,11 @@ informalsystems-malachitebft-metrics = { version = "0.5", default-features = fal
 #   when sync requests fail, enabling retries instead of silent timeouts
 # - sync: Adds SkipToHeight effect to allow nodes to skip ahead when peers
 #   have pruned old blocks and cannot serve the required heights
+# - app: Updated to use new sync config fields (tip_first_sync, tip_first_buffer)
 [patch.crates-io]
 informalsystems-malachitebft-network = { path = "vendor/malachitebft-network" }
 informalsystems-malachitebft-sync = { path = "vendor/malachitebft-sync" }
+informalsystems-malachitebft-app = { path = "vendor/malachitebft-app" }
 
 [profile.release]
 opt-level = 3

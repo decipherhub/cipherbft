@@ -145,6 +145,27 @@ pub trait EvmStore: Send + Sync {
     /// * `hash` - 32-byte block hash
     fn set_block_hash(&self, number: u64, hash: [u8; 32]) -> EvmStoreResult<()>;
 
+    /// Get all accounts from the database.
+    ///
+    /// Returns all accounts stored in the database, ordered by address.
+    /// This is useful for state sync, debugging, and migration purposes.
+    ///
+    /// # Returns
+    /// A vector of (address, account) tuples ordered by address.
+    fn get_all_accounts(&self) -> EvmStoreResult<Vec<([u8; 20], EvmAccount)>>;
+
+    /// Get all storage slots for a specific address.
+    ///
+    /// Returns all storage slots stored for the given address, ordered by slot.
+    /// This is useful for state sync and contract inspection.
+    ///
+    /// # Arguments
+    /// * `address` - The 20-byte Ethereum address to get storage for
+    ///
+    /// # Returns
+    /// A vector of (slot, value) tuples ordered by slot.
+    fn get_all_storage(&self, address: &[u8; 20]) -> EvmStoreResult<Vec<([u8; 32], [u8; 32])>>;
+
     /// Get the current block number (last executed block).
     ///
     /// This method retrieves the persisted block number for execution engine recovery.
