@@ -477,6 +477,44 @@ impl Default for BlockHeader {
     }
 }
 
+/// Transaction with recovered ECDSA signature.
+///
+/// Caches the result of signature recovery to avoid re-parsing during execution.
+/// Used by parallel signature verification to batch-recover senders.
+#[derive(Debug, Clone)]
+pub struct RecoveredTx {
+    /// Original RLP-encoded transaction bytes.
+    pub tx_bytes: Bytes,
+    /// Parsed transaction environment for EVM execution.
+    pub tx_env: revm::context::TxEnv,
+    /// Transaction hash.
+    pub tx_hash: B256,
+    /// Recovered sender address.
+    pub sender: Address,
+    /// Recipient address (None for contract creation).
+    pub to: Option<Address>,
+}
+
+#[cfg(test)]
+mod recovered_tx_tests {
+    use super::*;
+    use revm::context::TxEnv;
+
+    #[test]
+    fn test_recovered_tx_fields() {
+        let tx = RecoveredTx {
+            tx_bytes: Bytes::from_static(&[1, 2, 3]),
+            tx_env: TxEnv::default(),
+            tx_hash: B256::ZERO,
+            sender: Address::ZERO,
+            to: None,
+        };
+        assert_eq!(tx.tx_bytes.len(), 3);
+        assert_eq!(tx.sender, Address::ZERO);
+        assert!(tx.to.is_none());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

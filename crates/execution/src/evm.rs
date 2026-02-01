@@ -10,6 +10,7 @@ use crate::{error::ExecutionError, types::Log, Result};
 use alloy_eips::eip2718::Decodable2718;
 use alloy_primitives::{Address, Bytes, B256};
 // revm 33.x uses Context-based API
+use rayon::prelude::*;
 use revm::{
     context::TxEnv,
     context_interface::{
@@ -407,6 +408,72 @@ impl CipherBftEvmConfig {
         Ok((tx_env, *tx_hash, sender, to_addr))
     }
 
+    /// Recover transaction signatures in parallel.
+    ///
+    /// Uses rayon to parallelize ECDSA signature recovery across all transactions.
+    /// Failed recoveries are filtered out with debug logging.
+    ///
+    /// # Arguments
+    /// * `txs` - Slice of RLP-encoded transaction bytes
+    ///
+    /// # Returns
+    /// Vector of successfully recovered transactions
+    pub fn recover_transactions_parallel(&self, txs: &[Bytes]) -> Vec<crate::types::RecoveredTx> {
+        txs.par_iter()
+            .enumerate()
+            .filter_map(|(idx, tx_bytes)| match self.tx_env(tx_bytes) {
+                Ok((tx_env, tx_hash, sender, to)) => Some(crate::types::RecoveredTx {
+                    tx_bytes: tx_bytes.clone(),
+                    tx_env,
+                    tx_hash,
+                    sender,
+                    to,
+                }),
+                Err(e) => {
+                    tracing::debug!(
+                        index = idx,
+                        error = %e,
+                        "Failed to recover transaction signature, skipping"
+                    );
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Execute a transaction using pre-recovered data.
+    ///
+    /// This avoids re-parsing and signature recovery since the data
+    /// was already recovered during parallel batch processing.
+    ///
+    /// # Arguments
+    /// * `evm` - EVM instance
+    /// * `recovered_tx` - Pre-recovered transaction data
+    ///
+    /// # Returns
+    /// Transaction execution result
+    pub fn execute_recovered_transaction<EVM>(
+        &self,
+        evm: &mut EVM,
+        recovered_tx: &crate::types::RecoveredTx,
+    ) -> Result<TransactionResult>
+    where
+        EVM: revm::handler::ExecuteEvm<Tx = revm::context::TxEnv, ExecutionResult = RevmResult>,
+        EVM::Error: std::fmt::Debug,
+    {
+        // Execute transaction using pre-recovered TxEnv
+        let result = evm
+            .transact_one(recovered_tx.tx_env.clone())
+            .map_err(|e| ExecutionError::evm(format!("Transaction execution failed: {e:?}")))?;
+
+        self.process_execution_result(
+            result,
+            recovered_tx.tx_hash,
+            recovered_tx.sender,
+            recovered_tx.to,
+        )
+    }
+
     /// Process the execution result from revm.
     fn process_execution_result(
         &self,
@@ -572,5 +639,23 @@ mod tests {
         assert_eq!(config.spec_id, SpecId::CANCUN);
         assert_eq!(config.block_gas_limit, DEFAULT_BLOCK_GAS_LIMIT);
         assert_eq!(config.base_fee_per_gas, DEFAULT_BASE_FEE_PER_GAS);
+    }
+
+    #[test]
+    fn test_recover_transactions_parallel_empty() {
+        let config = CipherBftEvmConfig::default();
+        let result = config.recover_transactions_parallel(&[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_recover_transactions_parallel_filters_invalid() {
+        let config = CipherBftEvmConfig::default();
+        // Invalid transaction bytes (not valid RLP)
+        let invalid_tx = Bytes::from_static(&[0xff, 0xff, 0xff]);
+        let txs = vec![invalid_tx];
+        let result = config.recover_transactions_parallel(&txs);
+        // Invalid transactions should be filtered out
+        assert!(result.is_empty());
     }
 }
