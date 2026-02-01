@@ -1087,10 +1087,10 @@ impl Node {
         // Use higher parallelism to catch up faster when significantly behind
         // Note: Blocks must be applied sequentially, but having more in-flight
         // reduces wait time between blocks and saturates network bandwidth
+        // Note: tip_first_sync disabled - requires consensus to support checkpoint-based sync
         let sync_config = SyncConfig::new(true)
             .with_parallel_requests(50) // High parallelism ensures blocks ready when needed
             .with_request_timeout(Duration::from_secs(5)); // Fail fast, try other peers quickly
-        // Note: tip_first_sync disabled - requires consensus to support checkpoint-based sync
         let sync = spawn_sync(ctx.clone(), network.clone(), host.clone(), sync_config).await?;
 
         // Build and spawn Consensus engine with sync support
