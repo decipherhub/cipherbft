@@ -179,6 +179,32 @@ where
             "SYNC REQUIRED: Falling behind"
         );
 
+        // Check if tip-first sync should be triggered now that we have peer info
+        // Only trigger if we're significantly behind and haven't already jumped
+        if state.config.tip_first_sync {
+            if let Some((skip_to, skip_peer)) =
+                state.calculate_tip_first_start(state.sync_height, state.config.tip_first_buffer)
+            {
+                warn!(
+                    height.current = %state.sync_height,
+                    height.skip_to = %skip_to,
+                    height.network_tip = ?state.get_network_tip(),
+                    buffer = state.config.tip_first_buffer,
+                    peer = %skip_peer,
+                    "TIP-FIRST SYNC: Skipping to near network tip for fast consensus participation"
+                );
+
+                state.sync_height = skip_to;
+                state.tip_height = skip_to.decrement().unwrap_or_default();
+                state.pending_value_requests.clear();
+                state.height_per_request_id.clear();
+
+                // Request from the new height
+                request_value_from_peer(&co, state, metrics, skip_to, skip_peer).await?;
+                return Ok(());
+            }
+        }
+
         // We are lagging behind one of our peer at least,
         // request sync from any peer already at or above that peer's height.
         request_values(co, state, metrics).await?;
