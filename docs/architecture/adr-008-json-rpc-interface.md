@@ -2,11 +2,30 @@
 
 ## Changelog
 
+* 2026-02-01: Added implementation status
 * 2025-12-07: Initial draft
 
 ## Status
 
-PROPOSED Not Implemented
+ACCEPTED Implemented
+
+## Implementation Status
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| eth_* Namespace | Implemented | `crates/rpc/src/eth/` |
+| net_* Namespace | Implemented | `crates/rpc/src/net.rs` |
+| web3_* Namespace | Implemented | `crates/rpc/src/web3.rs` |
+| WebSocket Subscriptions | Implemented | `crates/rpc/src/ws/` |
+| Health Endpoint | Implemented | `crates/rpc/src/health.rs` |
+| Rate Limiting | Implemented | `crates/rpc/src/middleware.rs` |
+
+### Implementation Notes
+
+- **Port**: Default 8545 (HTTP), 8546 (WebSocket)
+- **Batch Requests**: Supported with max 100 requests per batch
+- **Subscriptions**: `newHeads`, `logs`, `newPendingTransactions` supported
+- **Not Implemented**: `debug_*`, `trace_*`, `admin_*` namespaces (intentionally deferred)
 
 ## Abstract
 

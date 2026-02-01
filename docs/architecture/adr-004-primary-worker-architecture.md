@@ -2,11 +2,37 @@
 
 ## Changelog
 
-* 2025-12-06: Initial draft
+* 2026-02-01: Added implementation status
+* 2025-12-07: Initial draft
 
 ## Status
 
-PROPOSED Not Implemented
+ACCEPTED Implemented
+
+## Implementation Status
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| Primary Process | Implemented | `crates/data-chain/src/primary.rs` |
+| Worker Process | Implemented | `crates/data-chain/src/worker/` |
+| Car Structure | Implemented | `crates/data-chain/src/car.rs` |
+| Cut Formation | Implemented | `crates/data-chain/src/cut.rs` |
+| Attestation Collection | Implemented | `crates/data-chain/src/attestation.rs` |
+| Batch Creation | Implemented | `crates/data-chain/src/worker/batch.rs` |
+| Pipeline Manager | Implemented | `crates/data-chain/src/pipeline.rs` |
+
+### Implementation Notes
+
+- **Worker Count**: Configurable 1-8 workers per validator (default: 4)
+- **Batch Size**: Max 1MB or 1000 transactions per batch
+- **Car Interval**: 100ms default, configurable
+- **Attestation Timeout**: 500ms base with exponential backoff
+
+### Performance Validation
+
+- Throughput baseline with 1 worker established
+- Worker scaling (2, 4, 8) validated with expected linear improvement
+- Pipeline overlap verified: attestation N+1 collected during consensus N
 
 ## Abstract
 

@@ -2,11 +2,29 @@
 
 ## Changelog
 
+* 2026-02-01: Added implementation status
 * 2025-12-07: Initial draft
 
 ## Status
 
-PROPOSED Not Implemented
+ACCEPTED Implemented
+
+## Implementation Status
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| Ed25519 (CL) | Implemented | Via Malachite `malachitebft-signing-ed25519` |
+| BLS12-381 (DCL) | Implemented | `crates/crypto/src/bls.rs` |
+| Key Management | Implemented | `crates/crypto/src/keys.rs` |
+| Attestation Aggregation | Implemented | `crates/data-chain/src/attestation.rs` |
+| Domain Separation Tags | Implemented | `DST_CAR`, `DST_ATTESTATION` in `crates/crypto/` |
+
+### Implementation Notes
+
+- **BLS Library**: Uses `blst` crate for BLS12-381 operations
+- **Key Files**: Separate files for Ed25519 (`consensus.key`) and BLS (`dcl.key`)
+- **Aggregation**: f+1 attestations aggregated into single BLS signature
+- **Verification**: Batch verification for aggregated attestations
 
 ## Abstract
 

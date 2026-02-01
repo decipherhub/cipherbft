@@ -2,11 +2,29 @@
 
 ## Changelog
 
+* 2026-02-01: Added implementation status
 * 2025-12-07: Initial draft
 
 ## Status
 
-PROPOSED Not Implemented
+ACCEPTED Implemented
+
+## Implementation Status
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| Reth Transaction Pool | Implemented | `crates/mempool/` |
+| Pool Adapter | Implemented | `crates/mempool/src/adapter.rs` |
+| Transaction Validation | Implemented | `crates/mempool/src/validator.rs` |
+| Worker Integration | Implemented | `crates/data-chain/src/worker/` |
+| Post-Finalization Cleanup | Implemented | `crates/mempool/src/cleanup.rs` |
+
+### Implementation Notes
+
+- **Pool Size**: Default 10,000 transactions, configurable
+- **Gas Price Ordering**: Uses `CoinbaseTipOrdering` for EIP-1559
+- **Nonce Gap**: Maximum 16 nonce gap before rejection
+- **Memory Usage**: Bounded by pool config limits
 
 ## Abstract
 
