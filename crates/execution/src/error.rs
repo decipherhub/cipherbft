@@ -143,3 +143,59 @@ impl DatabaseError {
 }
 
 impl DBErrorMarker for DatabaseError {}
+
+/// Categorizes transaction execution errors for handling decisions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TxErrorCategory {
+    /// Skip transaction, continue block execution.
+    Skip {
+        /// The reason for skipping this transaction.
+        reason: SkipReason,
+    },
+    /// Include transaction with failed receipt (EVM revert).
+    FailedReceipt,
+    /// Fatal error - halt block execution.
+    Fatal,
+}
+
+/// Reason for skipping a transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkipReason {
+    /// Transaction nonce is higher than expected.
+    NonceTooHigh,
+    /// Transaction nonce is lower than expected (already executed).
+    NonceTooLow,
+    /// Account has insufficient balance for transaction.
+    InsufficientBalance,
+    /// Transaction failed basic validation.
+    InvalidTransaction,
+}
+
+impl ExecutionError {
+    /// Categorize this error for handling decision.
+    pub fn category(&self) -> TxErrorCategory {
+        let error_str = format!("{:?}", self);
+
+        if error_str.contains("NonceTooHigh") {
+            TxErrorCategory::Skip {
+                reason: SkipReason::NonceTooHigh,
+            }
+        } else if error_str.contains("NonceTooLow") {
+            TxErrorCategory::Skip {
+                reason: SkipReason::NonceTooLow,
+            }
+        } else if error_str.contains("InsufficientFunds") || error_str.contains("insufficient") {
+            TxErrorCategory::Skip {
+                reason: SkipReason::InsufficientBalance,
+            }
+        } else if matches!(self, ExecutionError::InvalidTransaction(_)) {
+            TxErrorCategory::Skip {
+                reason: SkipReason::InvalidTransaction,
+            }
+        } else if matches!(self, ExecutionError::Evm(_)) {
+            TxErrorCategory::FailedReceipt
+        } else {
+            TxErrorCategory::Fatal
+        }
+    }
+}

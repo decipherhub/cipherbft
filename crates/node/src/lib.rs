@@ -7,13 +7,16 @@
 pub mod client_config;
 pub mod config;
 pub mod execution_bridge;
+pub mod execution_sync;
 pub mod genesis_bootstrap;
 pub mod key_cli;
+pub mod mempool_state;
 pub mod network;
 pub mod network_api;
 pub mod node;
 pub mod supervisor;
 pub mod util;
+pub mod worker_pool_adapter;
 
 pub use client_config::ClientConfig;
 pub use config::{
@@ -23,11 +26,14 @@ pub use config::{
     DEFAULT_RPC_HTTP_PORT, DEFAULT_RPC_WS_PORT, DEFAULT_WAIT_FOR_CUT_TIMEOUT_MS,
 };
 pub use execution_bridge::ExecutionBridge;
+pub use execution_sync::{ExecutionSyncConfig, ExecutionSyncTracker, SyncAction};
 pub use genesis_bootstrap::{
     GeneratedValidator, GenesisGenerationResult, GenesisGenerator, GenesisGeneratorConfig,
     GenesisLoader, ValidatorKeyFile,
 };
 pub use key_cli::{execute_keys_command, KeysCommand};
+pub use mempool_state::ExecutionStateValidator;
 pub use network_api::{NodeNetworkApi, TcpNetworkApi};
 pub use node::Node;
 pub use supervisor::{NodeSupervisor, ShutdownError};
+pub use worker_pool_adapter::WorkerPoolAdapter;

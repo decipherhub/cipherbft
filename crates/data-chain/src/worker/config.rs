@@ -20,13 +20,17 @@ pub struct WorkerConfig {
 
 impl WorkerConfig {
     /// Create a new configuration with defaults
+    ///
+    /// Default batch thresholds are tuned for responsive transaction processing:
+    /// - `max_batch_txs`: 100 transactions triggers immediate batch flush
+    /// - `flush_interval`: 50ms ensures batches don't wait too long
     pub fn new(validator_id: ValidatorId, worker_id: u8) -> Self {
         Self {
             validator_id,
             worker_id,
-            max_batch_bytes: 1024 * 1024, // 1MB
-            max_batch_txs: 1000,
-            flush_interval: Duration::from_millis(100),
+            max_batch_bytes: 1024 * 1024,              // 1MB
+            max_batch_txs: 100, // Flush after 100 txs for responsive batching
+            flush_interval: Duration::from_millis(50), // Faster time-based flush
         }
     }
 

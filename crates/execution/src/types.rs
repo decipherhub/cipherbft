@@ -351,6 +351,14 @@ pub struct ExecutionResult {
 
     /// Logs bloom filter.
     pub logs_bloom: Bloom,
+
+    /// Raw bytes of transactions that actually executed (have receipts).
+    ///
+    /// This excludes transactions that were skipped due to nonce errors
+    /// (NonceTooLow, NonceTooHigh). Used by the node to properly clean up
+    /// the mempool pending map - only executed transactions should be removed.
+    #[serde(default)]
+    pub executed_transactions: Vec<Bytes>,
 }
 
 /// Transaction receipt.
