@@ -202,8 +202,34 @@ where
     debug!(height.tip = %tip_height, height.sync = %height, %restart, "Starting new height");
 
     state.started = true;
-    state.sync_height = height;
     state.tip_height = tip_height;
+
+    // Check if tip-first sync is enabled and applicable
+    if state.config.tip_first_sync && !state.peers.is_empty() {
+        if let Some((skip_to, peer)) =
+            state.calculate_tip_first_start(height, state.config.tip_first_buffer)
+        {
+            warn!(
+                height.local = %height,
+                height.skip_to = %skip_to,
+                height.network_tip = ?state.get_network_tip(),
+                buffer = state.config.tip_first_buffer,
+                peer = %peer,
+                "TIP-FIRST SYNC: Skipping to near network tip for fast consensus participation"
+            );
+
+            state.sync_height = skip_to;
+            state.pending_value_requests.clear();
+            state.height_per_request_id.clear();
+
+            // Request the first block from the skip point
+            request_value_from_peer(&co, state, metrics, skip_to, peer).await?;
+            return Ok(());
+        }
+    }
+
+    // Normal sync: start from the given height
+    state.sync_height = height;
 
     let height_to_remove = if restart { &height } else { &tip_height };
     state.remove_pending_request_by_height(height_to_remove);

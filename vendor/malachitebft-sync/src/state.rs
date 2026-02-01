@@ -289,4 +289,44 @@ where
 
         None
     }
+
+    /// Get the maximum tip height reported by any peer (network tip).
+    /// Returns None if no peers are connected.
+    pub fn get_network_tip(&self) -> Option<Ctx::Height> {
+        self.peers
+            .values()
+            .map(|status| status.tip_height)
+            .max()
+    }
+
+    /// Calculate the starting height for tip-first sync.
+    /// Returns (start_height, peer) if tip-first sync is applicable.
+    /// Returns None if:
+    /// - No peers are connected
+    /// - Local height is already close to network tip
+    /// - No peer can serve the calculated start height
+    pub fn calculate_tip_first_start(
+        &mut self,
+        local_height: Ctx::Height,
+        buffer: u64,
+    ) -> Option<(Ctx::Height, PeerId)> {
+        // Get the network tip
+        let network_tip = self.get_network_tip()?;
+
+        // Calculate the start height (tip - buffer)
+        // Use decrement_by to safely subtract, returns None if would underflow
+        let start_height = network_tip
+            .decrement_by(buffer)
+            .unwrap_or(Ctx::Height::ZERO);
+
+        // If start_height is not significantly ahead of local_height, no benefit
+        // Use a threshold of buffer/2 to avoid unnecessary jumps
+        if start_height.as_u64() <= local_height.as_u64() + buffer / 2 {
+            return None;
+        }
+
+        // Find a peer that can serve this height
+        self.random_peer_with_tip_at_or_above(start_height)
+            .map(|peer| (start_height, peer))
+    }
 }

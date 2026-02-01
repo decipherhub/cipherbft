@@ -3,6 +3,7 @@ use std::time::Duration;
 use crate::scoring::Strategy;
 
 const DEFAULT_PARALLEL_REQUESTS: u64 = 5;
+const DEFAULT_TIP_FIRST_BUFFER: u64 = 100;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Config {
@@ -13,6 +14,12 @@ pub struct Config {
     pub parallel_requests: u64,
     pub scoring_strategy: Strategy,
     pub inactive_threshold: Option<Duration>,
+    /// When enabled, sync starts from near the network tip instead of genesis.
+    /// This allows nodes to quickly join consensus without syncing full history.
+    pub tip_first_sync: bool,
+    /// Number of blocks before tip to start syncing from when tip_first_sync is enabled.
+    /// Default: 100 blocks. This ensures enough recent history for consensus participation.
+    pub tip_first_buffer: u64,
 }
 
 impl Config {
@@ -52,6 +59,20 @@ impl Config {
         self.inactive_threshold = inactive_threshold;
         self
     }
+
+    /// Enable tip-first sync mode where sync starts from near the network tip
+    /// instead of genesis. This allows faster consensus participation.
+    pub fn with_tip_first_sync(mut self, enabled: bool) -> Self {
+        self.tip_first_sync = enabled;
+        self
+    }
+
+    /// Set the number of blocks before tip to start syncing from.
+    /// Only used when tip_first_sync is enabled.
+    pub fn with_tip_first_buffer(mut self, buffer: u64) -> Self {
+        self.tip_first_buffer = buffer;
+        self
+    }
 }
 
 impl Default for Config {
@@ -64,6 +85,8 @@ impl Default for Config {
             parallel_requests: DEFAULT_PARALLEL_REQUESTS,
             scoring_strategy: Strategy::default(),
             inactive_threshold: None,
+            tip_first_sync: false,              // Disabled by default for safety
+            tip_first_buffer: DEFAULT_TIP_FIRST_BUFFER,
         }
     }
 }
