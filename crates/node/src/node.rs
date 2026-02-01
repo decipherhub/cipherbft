@@ -1089,9 +1089,8 @@ impl Node {
         // reduces wait time between blocks and saturates network bandwidth
         let sync_config = SyncConfig::new(true)
             .with_parallel_requests(50) // High parallelism ensures blocks ready when needed
-            .with_request_timeout(Duration::from_secs(5)) // Fail fast, try other peers quickly
-            .with_tip_first_sync(true) // Skip to near network tip for fast startup
-            .with_tip_first_buffer(100); // Sync last 100 blocks before joining consensus
+            .with_request_timeout(Duration::from_secs(5)); // Fail fast, try other peers quickly
+        // Note: tip_first_sync disabled - requires consensus to support checkpoint-based sync
         let sync = spawn_sync(ctx.clone(), network.clone(), host.clone(), sync_config).await?;
 
         // Build and spawn Consensus engine with sync support
