@@ -340,6 +340,16 @@ impl EvmStore for MdbxEvmStore {
 
         Ok(())
     }
+
+    fn get_all_accounts(&self) -> EvmStoreResult<Vec<([u8; 20], EvmAccount)>> {
+        // Delegate to the inherent method
+        MdbxEvmStore::get_all_accounts(self)
+    }
+
+    fn get_all_storage(&self, address: &[u8; 20]) -> EvmStoreResult<Vec<([u8; 32], [u8; 32])>> {
+        // Delegate to the inherent method
+        MdbxEvmStore::get_all_storage(self, address)
+    }
 }
 
 #[cfg(test)]

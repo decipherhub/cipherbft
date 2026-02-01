@@ -10,6 +10,7 @@ members = [
     "crates/mempool",
     "crates/rpc",
     "crates/metrics",
+    "crates/sync",
 ]
 resolver = "2"
 

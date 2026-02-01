@@ -29,6 +29,7 @@ mod persistent_state;
 mod provider;
 mod receipts;
 mod staking;
+mod sync;
 mod tables;
 mod transactions;
 mod wal;
@@ -42,6 +43,7 @@ pub use persistent_state::{MdbxPersistentStateBuilder, MdbxStatePersistence};
 pub use provider::{MdbxDclStore, MdbxDclStoreTx};
 pub use receipts::MdbxReceiptStore;
 pub use staking::MdbxStakingStore;
+pub use sync::MdbxSyncStore;
 pub use tables::{
     // EVM table types
     AddressKey,
@@ -109,6 +111,16 @@ pub use tables::{
     StoredVote,
     StoredVotes,
     StoredWalEntry,
+    // Sync table types
+    StoredAccountProgress,
+    StoredBlockProgress,
+    StoredStorageProgress,
+    StoredSyncPhase,
+    StoredSyncProgressState,
+    StoredSyncSnapshot,
+    SyncProgress,
+    SyncProgressKey,
+    SyncSnapshots,
     Tables,
     Transactions,
     TransactionsByBlock,

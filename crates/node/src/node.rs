@@ -19,6 +19,7 @@ use crate::config::NodeConfig;
 use crate::execution_bridge::{BlockExecutionResult, ExecutionBridge};
 use crate::network::{TcpPrimaryNetwork, TcpWorkerNetwork};
 use crate::supervisor::NodeSupervisor;
+use crate::sync_network::{create_sync_adapter, wire_sync_to_network};
 use alloy_primitives::Address;
 use anyhow::{Context, Result};
 use cipherbft_consensus::{
@@ -542,6 +543,25 @@ impl Node {
 
             // Store reference for RPC NetworkApi before moving into adapter
             primary_network_opt = Some(Arc::clone(&primary_network));
+
+            // Wire up snap sync network adapter
+            // This enables the sync manager to communicate with peers via the TCP network
+            //
+            // TODO(snap-sync): Integrate with actual snap sync triggering logic
+            // Current state:
+            // - Network wiring is set up to forward snap sync messages
+            // - The sync_adapter is created but not yet connected to StateSyncManager
+            // - When implementing snap sync trigger (e.g., detecting node is behind),
+            //   create StateSyncManager and use this adapter with run_snap_sync()
+            // - Consider storing sync_adapter in Node struct for on-demand sync
+            let (_sync_adapter, network_to_sync_tx, sync_to_network_rx) = create_sync_adapter();
+            wire_sync_to_network(
+                &primary_network,
+                Arc::clone(&primary_network),
+                network_to_sync_tx,
+                sync_to_network_rx,
+            )
+            .await;
 
             // Start primary listener
             Arc::clone(&primary_network)

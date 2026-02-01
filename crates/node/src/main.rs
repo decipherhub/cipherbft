@@ -560,6 +560,7 @@ fn cmd_init(
         rpc_http_port: cipherd::DEFAULT_RPC_HTTP_PORT,
         rpc_ws_port: cipherd::DEFAULT_RPC_WS_PORT,
         metrics_port: cipherd::DEFAULT_METRICS_PORT,
+        sync: cipherd::SyncConfig::default(),
     };
 
     let config_path = config_dir.join("node.json");
@@ -975,6 +976,7 @@ fn cmd_testnet_init_files(
             rpc_http_port: cipherd::DEFAULT_RPC_HTTP_PORT + (i as u16 * 10),
             rpc_ws_port: cipherd::DEFAULT_RPC_WS_PORT + (i as u16 * 10),
             metrics_port: cipherd::DEFAULT_METRICS_PORT + (i as u16 * 10),
+            sync: cipherd::SyncConfig::default(),
         };
 
         let config_path = config_dir.join("node.json");

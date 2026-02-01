@@ -1404,6 +1404,152 @@ impl Decompress for UnitKey {
 }
 
 // =============================================================================
+// Sync Tables (for snap sync and state sync)
+// =============================================================================
+
+/// Key for SyncProgress table (singleton, always "current")
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord, Serialize, Deserialize,
+)]
+pub struct SyncProgressKey;
+
+impl Encode for SyncProgressKey {
+    type Encoded = [u8; 7]; // "current"
+
+    fn encode(self) -> Self::Encoded {
+        *b"current"
+    }
+}
+
+impl Decode for SyncProgressKey {
+    fn decode(_value: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
+        Ok(Self)
+    }
+}
+
+impl Compress for SyncProgressKey {
+    type Compressed = Vec<u8>;
+
+    fn compress(self) -> Self::Compressed {
+        b"current".to_vec()
+    }
+
+    fn compress_to_buf<B: bytes::BufMut + AsMut<[u8]>>(&self, buf: &mut B) {
+        buf.put_slice(b"current");
+    }
+}
+
+impl Decompress for SyncProgressKey {
+    fn decompress(_value: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
+        Ok(Self)
+    }
+}
+
+/// Stored sync snapshot for MDBX persistence
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredSyncSnapshot {
+    /// Block height this snapshot represents
+    pub block_number: u64,
+    /// Block hash at this height (32 bytes)
+    pub block_hash: [u8; 32],
+    /// State root (MPT root of all accounts, 32 bytes)
+    pub state_root: [u8; 32],
+    /// Unix timestamp when snapshot was created
+    pub timestamp: u64,
+}
+
+/// Stored sync phase for MDBX persistence
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum StoredSyncPhase {
+    /// Finding peers and selecting snapshot
+    #[default]
+    Discovery,
+    /// Downloading accounts
+    SnapSyncAccounts,
+    /// Downloading storage for accounts
+    SnapSyncStorage,
+    /// Final state root verification
+    SnapSyncVerification,
+    /// Downloading and executing blocks
+    BlockSync,
+    /// Sync complete
+    Complete,
+}
+
+
+/// Stored account progress for sync resumability
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StoredAccountProgress {
+    /// Last completed address (exclusive upper bound, 20 bytes)
+    pub completed_up_to: Option<[u8; 20]>,
+    /// Addresses that need storage downloaded
+    pub accounts_needing_storage: Vec<[u8; 20]>,
+    /// Total accounts downloaded
+    pub total_accounts: u64,
+    /// Total bytes downloaded
+    pub total_bytes: u64,
+}
+
+/// Stored storage slot progress per account
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StoredStorageProgress {
+    /// Last completed slot (exclusive upper bound, 32 bytes)
+    pub completed_up_to: Option<[u8; 32]>,
+    /// Total slots downloaded
+    pub total_slots: u64,
+}
+
+/// Stored block sync progress
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StoredBlockProgress {
+    /// First block needed (snapshot height + 1)
+    pub start_height: u64,
+    /// Last block successfully executed
+    pub executed_up_to: u64,
+    /// Target height to sync to
+    pub target_height: u64,
+}
+
+/// Stored sync progress state for MDBX persistence
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StoredSyncProgressState {
+    /// Current sync phase
+    pub phase: StoredSyncPhase,
+    /// Target snapshot being synced to
+    pub target_snapshot: Option<StoredSyncSnapshot>,
+    /// Account download progress
+    pub account_progress: StoredAccountProgress,
+    /// Storage download progress per account (address -> progress)
+    pub storage_progress: Vec<([u8; 20], StoredStorageProgress)>,
+    /// Block sync progress
+    pub block_progress: StoredBlockProgress,
+}
+
+/// SyncSnapshots table: BlockNumber -> StoredSyncSnapshot
+/// Stores state snapshots at regular intervals (every 10,000 blocks)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SyncSnapshots;
+
+impl Table for SyncSnapshots {
+    const NAME: &'static str = "SyncSnapshots";
+    const DUPSORT: bool = false;
+    type Key = BlockNumberKey;
+    type Value = BincodeValue<StoredSyncSnapshot>;
+}
+
+/// SyncProgress table: SyncProgressKey -> StoredSyncProgressState
+/// Stores current sync progress for resumability (single row)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SyncProgress;
+
+impl Table for SyncProgress {
+    const NAME: &'static str = "SyncProgress";
+    const DUPSORT: bool = false;
+    type Key = SyncProgressKey;
+    type Value = BincodeValue<StoredSyncProgressState>;
+}
+
+// =============================================================================
 // TableInfo and TableSet implementation for CipherBFT custom tables
 // =============================================================================
 
@@ -1447,6 +1593,9 @@ pub enum CipherBftTable {
     // Persistent state tables
     StateSnapshots,
     StateDeltas,
+    // Sync tables
+    SyncSnapshots,
+    SyncProgress,
 }
 
 impl CipherBftTable {
@@ -1489,6 +1638,9 @@ impl CipherBftTable {
         // Persistent state tables
         Self::StateSnapshots,
         Self::StateDeltas,
+        // Sync tables
+        Self::SyncSnapshots,
+        Self::SyncProgress,
     ];
 }
 
@@ -1524,6 +1676,8 @@ impl TableInfo for CipherBftTable {
             Self::BlockBlooms => BlockBlooms::NAME,
             Self::StateSnapshots => StateSnapshots::NAME,
             Self::StateDeltas => StateDeltas::NAME,
+            Self::SyncSnapshots => SyncSnapshots::NAME,
+            Self::SyncProgress => SyncProgress::NAME,
         }
     }
 
@@ -1558,6 +1712,8 @@ impl TableInfo for CipherBftTable {
             Self::BlockBlooms => BlockBlooms::DUPSORT,
             Self::StateSnapshots => StateSnapshots::DUPSORT,
             Self::StateDeltas => StateDeltas::DUPSORT,
+            Self::SyncSnapshots => SyncSnapshots::DUPSORT,
+            Self::SyncProgress => SyncProgress::DUPSORT,
         }
     }
 }
@@ -1605,6 +1761,9 @@ impl Tables {
         // Persistent state tables
         StateSnapshots::NAME,
         StateDeltas::NAME,
+        // Sync tables
+        SyncSnapshots::NAME,
+        SyncProgress::NAME,
     ];
 }
 
