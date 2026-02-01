@@ -95,7 +95,7 @@ where
 pub async fn on_tick<Ctx>(
     co: Co<Ctx>,
     state: &mut State<Ctx>,
-    _metrics: &Metrics,
+    metrics: &Metrics,
 ) -> Result<(), Error<Ctx>>
 where
     Ctx: Context,
@@ -112,6 +112,38 @@ where
         state
             .peer_scorer
             .reset_inactive_peers_scores(inactive_threshold);
+    }
+
+    // Clear stale pending requests that have timed out
+    let cleared_count = state.clear_stale_pending_requests();
+    if cleared_count > 0 {
+        warn!(
+            cleared_count,
+            height.sync = %state.sync_height,
+            pending_requests = state.pending_value_requests.len(),
+            "SYNC STALE CLEANUP: Cleared timed-out pending requests"
+        );
+
+        // After clearing stale requests, check if we need to skip ahead
+        // because peers can't serve the heights we're requesting
+        if let Some((skip_to, skip_peer)) = state.find_earliest_syncable_height(state.sync_height) {
+            if skip_to > state.sync_height {
+                warn!(
+                    height.current = %state.sync_height,
+                    height.skip_to = %skip_to,
+                    peer = %skip_peer,
+                    "SYNC SKIP AFTER CLEANUP: Peers cannot serve old heights, jumping to earliest available"
+                );
+
+                state.sync_height = skip_to;
+                state.tip_height = skip_to.decrement().unwrap_or_default();
+                state.pending_value_requests.clear();
+                state.height_per_request_id.clear();
+
+                // Request from the new height
+                request_value_from_peer(&co, state, metrics, skip_to, skip_peer).await?;
+            }
+        }
     }
 
     debug!("Peer scores: {:#?}", state.peer_scorer.get_scores());
