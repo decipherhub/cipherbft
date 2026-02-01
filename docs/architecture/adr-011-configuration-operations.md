@@ -2,11 +2,31 @@
 
 ## Changelog
 
+* 2026-02-01: Added implementation status
 * 2025-12-07: Initial draft
 
 ## Status
 
-PROPOSED Not Implemented
+ACCEPTED Partially Implemented
+
+## Implementation Status
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| Node Binary | Implemented | `crates/node/src/main.rs` |
+| Config File Parser | Implemented | `crates/node/src/config.rs` |
+| Genesis Loader | Implemented | `crates/node/src/genesis.rs` |
+| Prometheus Metrics | Implemented | `crates/metrics/` |
+| Structured Logging | Implemented | `crates/node/src/logging.rs` |
+| CLI Commands | Partial | `init`, `run` implemented; `reset`, `export-state` pending |
+| Key Generation | Partial | Manual key generation; automated ceremony pending |
+
+### Implementation Notes
+
+- **Config Path**: Default `~/.cipherbft/config.toml`
+- **Data Directory**: Default `~/.cipherbft/data/`
+- **Metrics Port**: Default 9090 (Prometheus)
+- **Log Format**: JSON structured logging with configurable level
 
 ## Abstract
 
