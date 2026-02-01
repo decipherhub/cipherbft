@@ -1176,6 +1176,32 @@ impl Node {
             if let Ok(Some(latest)) = storage.block_store().get_latest_block_number().await {
                 storage.set_latest_block(latest);
                 info!("Initialized RPC latest_block from storage: {}", latest);
+
+                // CRITICAL: Restore last_block_hash for correct parent_hash in next block
+                // On node restart, the ExecutionBridge's in-memory last_block_hash is lost.
+                // We must restore it from the latest block in storage to ensure the next
+                // block's parent_hash correctly references the latest block's hash.
+                if latest > 0 {
+                    if let Some(ref bridge) = self.execution_bridge {
+                        match storage.block_store().get_block_by_number(latest).await {
+                            Ok(Some(latest_block)) => {
+                                bridge.restore_last_block_hash(B256::from(latest_block.hash));
+                            }
+                            Ok(None) => {
+                                warn!(
+                                    "Latest block {} not found in storage despite get_latest_block_number returning it",
+                                    latest
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to retrieve latest block {} for hash recovery: {}",
+                                    latest, e
+                                );
+                            }
+                        }
+                    }
+                }
             }
 
             Some(storage)
