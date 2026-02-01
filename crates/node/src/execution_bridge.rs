@@ -449,7 +449,7 @@ impl ExecutionBridge {
     ///
     /// This converts the data-chain Cut format to the execution layer format.
     /// Fetches actual batches from storage to extract transactions.
-    /// Uses the tracked `last_block_hash` as the parent hash to maintain chain connectivity.
+    /// Uses the tracked `last_block_hash` as the parent hash for fair ordering.
     async fn convert_cut(
         &self,
         consensus_cut: cipherbft_data_chain::Cut,
@@ -462,7 +462,15 @@ impl ExecutionBridge {
         let mut batches_found = 0usize;
         let mut total_txs = 0usize;
 
-        for (validator_id, car) in consensus_cut.ordered_cars() {
+        // Get parent hash for fair ordering (XOR-based shuffling)
+        let parent_hash_b256 = self
+            .last_block_hash
+            .read()
+            .map(|guard| *guard)
+            .unwrap_or(B256::ZERO);
+        let parent_hash = cipherbft_types::Hash::from_bytes(parent_hash_b256.0);
+
+        for (validator_id, car) in consensus_cut.ordered_cars(Some(&parent_hash)) {
             // Extract transactions from batches by fetching from storage
             let mut transactions = Vec::new();
             for batch_digest in &car.batch_digests {
