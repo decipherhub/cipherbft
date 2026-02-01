@@ -279,6 +279,39 @@ impl ExecutionBridge {
         }
     }
 
+    /// Restore the last block hash from storage on node restart.
+    ///
+    /// This MUST be called after node restart when blocks already exist in storage.
+    /// It ensures that the next block's parent_hash correctly references the latest
+    /// stored block's hash, maintaining proper chain connectivity.
+    ///
+    /// # Arguments
+    ///
+    /// * `latest_block_hash` - The hash of the latest block in storage
+    ///
+    /// # Note
+    ///
+    /// This method should be called AFTER `set_genesis_block_hash` during node
+    /// initialization. If there are blocks beyond genesis in storage, this method
+    /// should be called to update `last_block_hash` to the latest block's hash.
+    pub fn restore_last_block_hash(&self, latest_block_hash: B256) {
+        match self.last_block_hash.write() {
+            Ok(mut guard) => {
+                *guard = latest_block_hash;
+                info!(
+                    latest_block_hash = %latest_block_hash,
+                    "Execution bridge restored last block hash from storage (node restart recovery)"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "Failed to restore last block hash - lock poisoned, next block may have incorrect parent_hash"
+                );
+            }
+        }
+    }
+
     /// Validate a transaction for mempool CheckTx
     ///
     /// This is called by workers before accepting transactions into batches.
@@ -829,5 +862,48 @@ mod tests {
         let bridge = ExecutionBridge::new(config, dcl_store, temp_dir.path()).unwrap();
 
         assert_eq!(bridge.gas_limit(), 50_000_000);
+    }
+
+    #[tokio::test]
+    async fn test_restore_last_block_hash() {
+        let (bridge, _temp_dir) = create_default_bridge().unwrap();
+
+        // Initially should be B256::ZERO
+        let initial_hash = bridge.last_block_hash.read().map(|guard| *guard).unwrap();
+        assert_eq!(initial_hash, B256::ZERO);
+
+        // Restore to a specific block hash (simulating node restart recovery)
+        let latest_block_hash = B256::from([0xABu8; 32]);
+        bridge.restore_last_block_hash(latest_block_hash);
+
+        // Should now be updated to the restored hash
+        let restored_hash = bridge.last_block_hash.read().map(|guard| *guard).unwrap();
+        assert_eq!(
+            restored_hash, latest_block_hash,
+            "restore_last_block_hash should update last_block_hash to the latest block's hash"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_restore_overrides_genesis_hash() {
+        let (bridge, _temp_dir) = create_default_bridge().unwrap();
+
+        // First set genesis hash (simulating initial node startup)
+        let genesis_hash = B256::from([0x01u8; 32]);
+        bridge.set_genesis_block_hash(genesis_hash);
+
+        let after_genesis = bridge.last_block_hash.read().map(|guard| *guard).unwrap();
+        assert_eq!(after_genesis, genesis_hash);
+
+        // Now restore to latest block hash (simulating node restart with existing blocks)
+        let latest_block_hash = B256::from([0xFFu8; 32]);
+        bridge.restore_last_block_hash(latest_block_hash);
+
+        // Should be updated to the latest, not genesis
+        let after_restore = bridge.last_block_hash.read().map(|guard| *guard).unwrap();
+        assert_eq!(
+            after_restore, latest_block_hash,
+            "restore_last_block_hash should override any previously set hash"
+        );
     }
 }
