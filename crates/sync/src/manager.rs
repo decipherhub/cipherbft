@@ -5,11 +5,11 @@
 use crate::blocks::BlockSyncer;
 use crate::error::{Result, SyncError};
 use crate::peers::PeerManager;
-use crate::progress::{ProgressTracker, SyncPhase, SnapSubPhase};
+use crate::progress::{ProgressTracker, SnapSubPhase, SyncPhase};
 use crate::protocol::StatusResponse;
 use crate::snap::accounts::AccountRangeSyncer;
 use crate::snap::storage::StorageRangeSyncer;
-use crate::snapshot::{StateSnapshot, SnapshotAgreement};
+use crate::snapshot::{SnapshotAgreement, StateSnapshot};
 use alloy_primitives::B256;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -184,10 +184,7 @@ impl StateSyncManager {
                         snapshot_info.state_root,
                         snapshot_info.block_hash,
                     );
-                    snapshot_votes
-                        .entry(key)
-                        .or_default()
-                        .push(peer_id.clone());
+                    snapshot_votes.entry(key).or_default().push(peer_id.clone());
                 }
             }
         }
@@ -201,9 +198,7 @@ impl StateSyncManager {
             .map(|((height, state_root, block_hash), peers)| {
                 SnapshotAgreement {
                     snapshot: StateSnapshot::new(
-                        height,
-                        block_hash,
-                        state_root,
+                        height, block_hash, state_root,
                         0, // Timestamp not included in snapshot info - could be added later
                     ),
                     peer_count: peers.len(),
@@ -224,24 +219,26 @@ impl StateSyncManager {
 
         self.target_snapshot = Some(snapshot.clone());
         self.account_syncer = Some(AccountRangeSyncer::new(snapshot));
-        self.progress.set_phase(SyncPhase::SnapSync(SnapSubPhase::Accounts))?;
+        self.progress
+            .set_phase(SyncPhase::SnapSync(SnapSubPhase::Accounts))?;
 
         Ok(())
     }
 
     /// Check if account sync is complete
     pub fn is_account_sync_complete(&self) -> bool {
-        self.account_syncer
-            .as_ref()
-            .is_none_or(|s| s.is_complete())
+        self.account_syncer.as_ref().is_none_or(|s| s.is_complete())
     }
 
     /// Transition to storage sync
     pub fn start_storage_sync(&mut self) -> Result<()> {
-        let snapshot = self.target_snapshot.clone()
+        let snapshot = self
+            .target_snapshot
+            .clone()
             .ok_or_else(|| SyncError::InvalidState("no target snapshot".into()))?;
 
-        let accounts_with_storage: Vec<_> = self.account_syncer
+        let accounts_with_storage: Vec<_> = self
+            .account_syncer
             .as_ref()
             .map(|s| s.accounts_needing_storage().to_vec())
             .unwrap_or_default();
@@ -258,16 +255,15 @@ impl StateSyncManager {
             .collect();
 
         self.storage_syncer = Some(StorageRangeSyncer::new(snapshot, storage_accounts));
-        self.progress.set_phase(SyncPhase::SnapSync(SnapSubPhase::Storage))?;
+        self.progress
+            .set_phase(SyncPhase::SnapSync(SnapSubPhase::Storage))?;
 
         Ok(())
     }
 
     /// Check if storage sync is complete
     pub fn is_storage_sync_complete(&self) -> bool {
-        self.storage_syncer
-            .as_ref()
-            .is_none_or(|s| s.is_complete())
+        self.storage_syncer.as_ref().is_none_or(|s| s.is_complete())
     }
 
     /// Verify final state root
@@ -282,7 +278,9 @@ impl StateSyncManager {
 
     /// Start block sync phase
     pub fn start_block_sync(&mut self) -> Result<()> {
-        let snapshot = self.target_snapshot.as_ref()
+        let snapshot = self
+            .target_snapshot
+            .as_ref()
             .ok_or_else(|| SyncError::InvalidState("no target snapshot".into()))?;
 
         let start_height = snapshot.block_number + 1;
@@ -309,9 +307,7 @@ impl StateSyncManager {
 
     /// Check if block sync is complete
     pub fn is_block_sync_complete(&self) -> bool {
-        self.block_syncer
-            .as_ref()
-            .is_none_or(|s| s.is_complete())
+        self.block_syncer.as_ref().is_none_or(|s| s.is_complete())
     }
 
     /// Mark sync as complete
@@ -385,11 +381,17 @@ mod tests {
         // Start snap sync
         let snapshot = StateSnapshot::new(10000, B256::ZERO, B256::repeat_byte(0xab), 12345);
         manager.start_snap_sync(snapshot).unwrap();
-        assert!(matches!(manager.phase(), SyncPhase::SnapSync(SnapSubPhase::Accounts)));
+        assert!(matches!(
+            manager.phase(),
+            SyncPhase::SnapSync(SnapSubPhase::Accounts)
+        ));
 
         // Transition to storage
         manager.start_storage_sync().unwrap();
-        assert!(matches!(manager.phase(), SyncPhase::SnapSync(SnapSubPhase::Storage)));
+        assert!(matches!(
+            manager.phase(),
+            SyncPhase::SnapSync(SnapSubPhase::Storage)
+        ));
     }
 
     #[test]

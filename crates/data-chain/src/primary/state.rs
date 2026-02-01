@@ -397,15 +397,50 @@ impl PrimaryState {
     pub fn mark_attested(&mut self, car: Car, aggregated: AggregatedAttestation) {
         let validator = car.proposer;
         let new_has_batches = !car.batch_digests.is_empty();
+        let last_included = self
+            .last_included_positions
+            .get(&validator)
+            .copied()
+            .unwrap_or(0);
+
+        // CRITICAL: Never store a Car that has already been finalized
+        // This prevents monotonicity violations in Cut formation
+        if car.position <= last_included {
+            tracing::debug!(
+                validator = %validator,
+                car_position = car.position,
+                last_included,
+                "Rejecting attested Car - position already finalized"
+            );
+            return;
+        }
 
         // Check if we should replace the existing attested Car
         if let Some((existing_car, _)) = self.attested_cars.get(&validator) {
             let existing_has_batches = !existing_car.batch_digests.is_empty();
-            let last_included = self
-                .last_included_positions
-                .get(&validator)
-                .copied()
-                .unwrap_or(0);
+
+            // CRITICAL: Never go backwards in position
+            // This prevents monotonicity violations in Cut formation
+            if car.position < existing_car.position {
+                tracing::debug!(
+                    validator = %validator,
+                    existing_position = existing_car.position,
+                    new_position = car.position,
+                    "Rejecting attested Car - would go backwards in position"
+                );
+                return;
+            }
+
+            // Don't replace a Car with batches with an empty Car at same position
+            if existing_has_batches && !new_has_batches && car.position == existing_car.position {
+                tracing::debug!(
+                    validator = %validator,
+                    position = car.position,
+                    existing_batches = existing_car.batch_digests.len(),
+                    "Preserving Car with batches over empty Car at same position"
+                );
+                return;
+            }
 
             // Don't replace a Car with batches with an empty Car, UNLESS the
             // existing Car's position has already been included in a decided Cut

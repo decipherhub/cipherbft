@@ -964,6 +964,25 @@ impl Table for EvmBlockHashes {
     type Value = HashKey;
 }
 
+/// Stored EVM execution metadata (current block number, etc.)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StoredEvmMetadata {
+    /// Current block number (last executed block)
+    pub current_block: u64,
+}
+
+/// EvmMetadata table: () -> StoredEvmMetadata
+/// Stores execution layer metadata (current block number for recovery)
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EvmMetadata;
+
+impl Table for EvmMetadata {
+    const NAME: &'static str = "EvmMetadata";
+    const DUPSORT: bool = false;
+    type Key = UnitKey;
+    type Value = BincodeValue<StoredEvmMetadata>;
+}
+
 // =============================================================================
 // Receipt Tables (for RPC eth_getTransactionReceipt)
 // =============================================================================
@@ -1476,7 +1495,6 @@ pub enum StoredSyncPhase {
     Complete,
 }
 
-
 /// Stored account progress for sync resumability
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StoredAccountProgress {
@@ -1574,6 +1592,7 @@ pub enum CipherBftTable {
     EvmCode,
     EvmStorage,
     EvmBlockHashes,
+    EvmMetadata,
     // Staking tables
     StakingValidators,
     StakingMetadata,
@@ -1619,6 +1638,7 @@ impl CipherBftTable {
         Self::EvmCode,
         Self::EvmStorage,
         Self::EvmBlockHashes,
+        Self::EvmMetadata,
         // Staking tables
         Self::StakingValidators,
         Self::StakingMetadata,
@@ -1663,6 +1683,7 @@ impl TableInfo for CipherBftTable {
             Self::EvmCode => EvmCode::NAME,
             Self::EvmStorage => EvmStorage::NAME,
             Self::EvmBlockHashes => EvmBlockHashes::NAME,
+            Self::EvmMetadata => EvmMetadata::NAME,
             Self::StakingValidators => StakingValidators::NAME,
             Self::StakingMetadata => StakingMetadata::NAME,
             Self::Receipts => Receipts::NAME,
@@ -1699,6 +1720,7 @@ impl TableInfo for CipherBftTable {
             Self::EvmCode => EvmCode::DUPSORT,
             Self::EvmStorage => EvmStorage::DUPSORT,
             Self::EvmBlockHashes => EvmBlockHashes::DUPSORT,
+            Self::EvmMetadata => EvmMetadata::DUPSORT,
             Self::StakingValidators => StakingValidators::DUPSORT,
             Self::StakingMetadata => StakingMetadata::DUPSORT,
             Self::Receipts => Receipts::DUPSORT,
@@ -1742,6 +1764,7 @@ impl Tables {
         EvmCode::NAME,
         EvmStorage::NAME,
         EvmBlockHashes::NAME,
+        EvmMetadata::NAME,
         // Staking tables
         StakingValidators::NAME,
         StakingMetadata::NAME,

@@ -571,6 +571,15 @@ impl Primary {
                         "Checked for ready Cars after batch sync"
                     );
                     for car in ready_cars {
+                        // Skip if this is our own Car (defensive check)
+                        if car.proposer == self.config.validator_id {
+                            trace!(
+                                position = car.position,
+                                "Skipping attestation for our own Car in batch sync"
+                            );
+                            continue;
+                        }
+
                         // IMPORTANT: The Car was already validated when first received
                         // (position check, signature, parent_ref all passed). We queued
                         // it only because batches were missing. Now that batches are
@@ -623,6 +632,11 @@ impl Primary {
                     cut_cars = cut.cars.len(),
                     "Received consensus decision notification"
                 );
+
+                // CRITICAL: Update last_cut to the DECIDED cut (not what we proposed)
+                // This ensures monotonicity checks in form_cut use the actual consensus
+                // state, preventing stale proposed cuts from causing violations
+                self.last_cut = Some(cut.clone());
 
                 // CRITICAL: Sync position tracking from the decided Cut BEFORE advancing state
                 // This ensures validators that missed some CARs during collection still have
@@ -858,6 +872,15 @@ impl Primary {
 
     /// Handle a received Car
     async fn handle_received_car(&mut self, from: ValidatorId, car: Car) {
+        // Skip if this is our own Car (we handle our own Cars through attestation collection)
+        if car.proposer == self.config.validator_id {
+            trace!(
+                position = car.position,
+                "Ignoring received Car for our own Car"
+            );
+            return;
+        }
+
         // DIAGNOSTIC: Log at INFO level for batched Cars to trace attestation flow
         let batch_count = car.batch_digests.len();
         if batch_count > 0 {
@@ -981,6 +1004,48 @@ impl Primary {
                     actual,
                     "Position gap detected, initiating gap recovery"
                 );
+
+                // CRITICAL FIX: Update position tracking when we're behind
+                //
+                // If actual > expected, we've fallen behind this validator's position.
+                // The Car signature was already validated by core.handle_car(), so we
+                // know this is a legitimate Car. Update tracking to prevent death spiral:
+                //
+                // Without this fix:
+                // 1. We miss some Cars from validator X
+                // 2. New Cars from X trigger position gap errors
+                // 3. We never attest to X's new Cars
+                // 4. X's Cars never reach quorum
+                // 5. Transactions stuck forever
+                //
+                // With this fix:
+                // - We update tracking to actual position
+                // - Next Car from X (at actual+1) will be attested normally
+                // - Network recovers quickly
+                if actual > expected {
+                    let car_hash = car.hash();
+                    info!(
+                        proposer = %validator,
+                        expected,
+                        actual,
+                        car_hash = %car_hash,
+                        "Updating position tracking to recover from gap - signature was valid"
+                    );
+                    self.state.update_last_seen(validator, actual, car_hash);
+
+                    // Also generate attestation since signature is valid and we're syncing
+                    // This helps the network reach quorum faster
+                    let attestation = self.core.create_attestation(&car);
+                    DCL_ATTESTATIONS_SENT.inc();
+                    self.network
+                        .send_attestation(car.proposer, &attestation)
+                        .await;
+                    info!(
+                        proposer = %validator,
+                        position = actual,
+                        "Generated attestation after position gap recovery"
+                    );
+                }
 
                 // Queue the out-of-order Car for later processing
                 if !self.state.is_awaiting_gap_sync(&validator, actual) {
@@ -1228,6 +1293,30 @@ impl Primary {
             "Received valid CarWithAttestation from peer"
         );
 
+        // CRITICAL FIX: Update position tracking from attested Car broadcasts
+        //
+        // Without this, validators can fall into a position gap death spiral:
+        // 1. Validator A's Cars don't reach quorum (for whatever reason)
+        // 2. Other validators' last_seen_positions[A] becomes stale
+        // 3. When A broadcasts new Cars, others detect a "position gap"
+        // 4. No attestations are generated, A's Cars never reach quorum
+        // 5. The gap grows forever
+        //
+        // By updating position tracking when we receive a valid CarWithAttestation
+        // (which has quorum verification), we stay in sync even if we missed
+        // some intermediate Cars. This breaks the death spiral.
+        let current_pos = self.state.last_seen_positions.get(&car.proposer).copied();
+        if current_pos.is_none_or(|p| car.position > p) {
+            self.state
+                .update_last_seen(car.proposer, car.position, car_hash);
+            info!(
+                proposer = %car.proposer,
+                old_position = current_pos,
+                new_position = car.position,
+                "Updated position tracking from CarWithAttestation broadcast"
+            );
+        }
+
         // Persist attestation to storage if available
         if let Some(ref storage) = self.storage {
             if let Err(e) = storage.put_attestation(attestation.clone()).await {
@@ -1377,20 +1466,39 @@ impl Primary {
                 );
                 // Could re-broadcast Car here
             } else {
-                // IMPORTANT: Don't timeout Cars with batches!
-                // Peers need extra time to sync batch data before they can attest.
-                // Without this, batched Cars timeout before peers finish syncing,
-                // causing attestations to be rejected with UnknownCar error.
+                // Max backoff exceeded
                 if has_batches {
-                    // Reset the timeout without losing existing attestations
-                    info!(
-                        hash = %hash,
-                        position = car.position,
-                        batch_count = car.batch_digests.len(),
-                        attestation_count = self.attestation_collector.attestation_count(&hash).unwrap_or(0),
-                        "Extending timeout for batched Car - peers may still be syncing"
-                    );
-                    self.attestation_collector.reset_timeout(&hash);
+                    // Try to extend timeout for batched Cars that need more time.
+                    // reset_timeout() returns false if max resets exceeded.
+                    let reset_count = self.attestation_collector.reset_count(&hash).unwrap_or(0);
+                    if self.attestation_collector.reset_timeout(&hash) {
+                        info!(
+                            hash = %hash,
+                            position = car.position,
+                            batch_count = car.batch_digests.len(),
+                            attestation_count = self.attestation_collector.attestation_count(&hash).unwrap_or(0),
+                            reset_count = reset_count + 1,
+                            "Extending timeout for batched Car - peers may still be syncing"
+                        );
+                    } else {
+                        // Max resets exceeded - drop the Car and restore batches
+                        warn!(
+                            hash = %hash,
+                            position = car.position,
+                            batch_count = car.batch_digests.len(),
+                            attestation_count = self.attestation_collector.attestation_count(&hash).unwrap_or(0),
+                            reset_count,
+                            "Batched Car exceeded max timeout resets - dropping and restoring batches"
+                        );
+                        self.attestation_collector.remove(&hash);
+                        self.state.remove_pending_car(&hash);
+
+                        // Restore batch digests to pending so they can be re-batched
+                        // This ensures transactions are not lost
+                        for digest in &car.batch_digests {
+                            self.state.add_batch_digest(digest.clone());
+                        }
+                    }
                 } else {
                     warn!(
                         hash = %hash,

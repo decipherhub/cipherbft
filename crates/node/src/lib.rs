@@ -7,8 +7,10 @@
 pub mod client_config;
 pub mod config;
 pub mod execution_bridge;
+pub mod execution_sync;
 pub mod genesis_bootstrap;
 pub mod key_cli;
+pub mod mempool_state;
 pub mod network;
 pub mod network_api;
 pub mod node;
@@ -18,6 +20,7 @@ pub mod sync_network;
 pub mod sync_runner;
 pub mod sync_server;
 pub mod util;
+pub mod worker_pool_adapter;
 
 pub use client_config::ClientConfig;
 pub use config::{
@@ -27,12 +30,14 @@ pub use config::{
     DEFAULT_MIN_SYNC_PEERS, DEFAULT_RPC_HTTP_PORT, DEFAULT_RPC_WS_PORT, DEFAULT_SNAP_SYNC_ENABLED,
     DEFAULT_SNAP_SYNC_THRESHOLD, DEFAULT_SYNC_TIMEOUT_SECS,
 };
-pub use execution_bridge::{create_default_bridge, ExecutionBridge};
+pub use execution_bridge::ExecutionBridge;
+pub use execution_sync::{ExecutionSyncConfig, ExecutionSyncTracker, SyncAction};
 pub use genesis_bootstrap::{
     GeneratedValidator, GenesisGenerationResult, GenesisGenerator, GenesisGeneratorConfig,
     GenesisLoader, ValidatorKeyFile,
 };
 pub use key_cli::{execute_keys_command, KeysCommand};
+pub use mempool_state::ExecutionStateValidator;
 pub use network_api::{NodeNetworkApi, TcpNetworkApi};
 pub use node::Node;
 pub use supervisor::{NodeSupervisor, ShutdownError};
@@ -40,3 +45,4 @@ pub use sync_executor::ExecutionBridgeSyncExecutor;
 pub use sync_network::{create_sync_adapter, wire_sync_to_network, SyncNetworkAdapter};
 pub use sync_runner::{create_sync_manager, run_snap_sync, should_snap_sync, SyncResult};
 pub use sync_server::SnapSyncServer;
+pub use worker_pool_adapter::WorkerPoolAdapter;

@@ -15,8 +15,9 @@ use reth_db_api::transaction::{DbTx, DbTxMut};
 
 use super::database::DatabaseEnv;
 use super::tables::{
-    AddressKey, BlockNumberKey, EvmAccounts, EvmBlockHashes, EvmCode, EvmStorage, HashKey,
-    StorageSlotKey, StoredAccount, StoredBytecode, StoredStorageValue,
+    AddressKey, BlockNumberKey, EvmAccounts, EvmBlockHashes, EvmCode, EvmMetadata, EvmStorage,
+    HashKey, StorageSlotKey, StoredAccount, StoredBytecode, StoredEvmMetadata, StoredStorageValue,
+    UnitKey,
 };
 use crate::error::StorageError;
 use crate::evm::{EvmAccount, EvmBytecode, EvmStore, EvmStoreResult};
@@ -30,6 +31,7 @@ fn db_err(e: impl std::fmt::Display) -> StorageError {
 ///
 /// This implementation uses reth-db (MDBX) for persistent storage of EVM state.
 /// It stores accounts, code, storage slots, and block hashes in separate tables.
+#[derive(Clone)]
 pub struct MdbxEvmStore {
     db: Arc<DatabaseEnv>,
 }
@@ -350,6 +352,48 @@ impl EvmStore for MdbxEvmStore {
         // Delegate to the inherent method
         MdbxEvmStore::get_all_storage(self, address)
     }
+
+    fn get_current_block(&self) -> EvmStoreResult<Option<u64>> {
+        let start = Instant::now();
+        let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
+
+        let result = tx
+            .get::<EvmMetadata>(UnitKey)
+            .map_err(|e| db_err(e.to_string()))?;
+
+        STORAGE_READ_LATENCY
+            .with_label_values(&["evm_metadata"])
+            .observe(start.elapsed().as_secs_f64());
+
+        match result {
+            Some(metadata) => Ok(Some(metadata.0.current_block)),
+            None => Ok(None),
+        }
+    }
+
+    fn set_current_block(&self, block_number: u64) -> EvmStoreResult<()> {
+        let start = Instant::now();
+        let tx = self.db.tx_mut().map_err(|e| db_err(e.to_string()))?;
+
+        let metadata = StoredEvmMetadata {
+            current_block: block_number,
+        };
+
+        tx.put::<EvmMetadata>(UnitKey, metadata.into())
+            .map_err(|e| db_err(e.to_string()))?;
+
+        let commit_start = Instant::now();
+        tx.commit().map_err(|e| db_err(e.to_string()))?;
+        STORAGE_BATCH_COMMIT
+            .with_label_values(&[])
+            .observe(commit_start.elapsed().as_secs_f64());
+
+        STORAGE_WRITE_LATENCY
+            .with_label_values(&["evm_metadata"])
+            .observe(start.elapsed().as_secs_f64());
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -553,5 +597,47 @@ mod tests {
         let storage2 = store.get_all_storage(&addr2).unwrap();
         assert_eq!(storage2.len(), 1);
         assert_eq!(storage2[0].1, value3);
+    }
+
+    #[test]
+    fn test_current_block_operations() {
+        let (db, _temp_dir) = create_test_db();
+        let store = MdbxEvmStore::new(db);
+
+        // Initially no current block
+        assert!(store.get_current_block().unwrap().is_none());
+
+        // Set current block
+        store.set_current_block(12345).unwrap();
+        assert_eq!(store.get_current_block().unwrap(), Some(12345));
+
+        // Update current block
+        store.set_current_block(67890).unwrap();
+        assert_eq!(store.get_current_block().unwrap(), Some(67890));
+    }
+
+    #[test]
+    fn test_current_block_persistence() {
+        use crate::mdbx::DatabaseConfig;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path();
+
+        // First: Create store and write current block
+        {
+            let config = DatabaseConfig::new(db_path);
+            let db = Database::open(config).unwrap();
+            let store = MdbxEvmStore::new(Arc::clone(db.env()));
+            store.set_current_block(138350).unwrap();
+        }
+
+        // Second: Create new store and verify current block persists
+        {
+            let config = DatabaseConfig::new(db_path);
+            let db = Database::open(config).unwrap();
+            let store = MdbxEvmStore::new(Arc::clone(db.env()));
+            let retrieved = store.get_current_block().unwrap();
+            assert_eq!(retrieved, Some(138350));
+        }
     }
 }

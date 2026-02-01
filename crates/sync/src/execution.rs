@@ -4,9 +4,9 @@
 
 #![allow(dead_code)] // Will be used by node integration
 
+use crate::error::{Result, SyncError};
 use alloy_primitives::{Address, Bytes, B256};
 use async_trait::async_trait;
-use crate::error::{Result, SyncError};
 use serde::{Deserialize, Serialize};
 
 /// Block data ready for execution
@@ -121,7 +121,10 @@ impl MockSyncExecutor {
 
     /// Create with initial state
     pub fn with_state(last_number: u64, last_hash: B256) -> Self {
-        Self { last_hash, last_number }
+        Self {
+            last_hash,
+            last_number,
+        }
     }
 }
 

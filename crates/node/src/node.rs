@@ -17,10 +17,11 @@
 
 use crate::config::NodeConfig;
 use crate::execution_bridge::{BlockExecutionResult, ExecutionBridge};
+use crate::execution_sync::{ExecutionSyncConfig, ExecutionSyncTracker, SyncAction};
 use crate::network::{TcpPrimaryNetwork, TcpWorkerNetwork};
 use crate::supervisor::NodeSupervisor;
 use crate::sync_network::{create_sync_adapter, wire_sync_to_network};
-use alloy_primitives::Address;
+use alloy_primitives::{Address, B256};
 use anyhow::{Context, Result};
 use cipherbft_consensus::{
     create_context, default_consensus_params, default_engine_config_single_part, spawn_host,
@@ -36,7 +37,7 @@ use cipherbft_data_chain::{
     Batch, Cut, DclMessage, WorkerMessage,
 };
 use cipherbft_execution::{
-    keccak256, Bytes as ExecutionBytes, ChainConfig, InMemoryProvider, Log as ExecutionLog,
+    keccak256, Bytes as ExecutionBytes, ChainConfig, Log as ExecutionLog,
     TransactionReceipt as ExecutionReceipt, U256,
 };
 use cipherbft_storage::{
@@ -409,7 +410,8 @@ impl Node {
     /// Must be called before `run()` to enable Cut execution.
     ///
     /// # Note
-    /// This creates an execution layer with an in-memory store (for testing).
+    /// This creates an execution layer with an in-memory DCL store (for testing),
+    /// but uses persistent MDBX storage for EVM state in the node's data directory.
     /// For production use, prefer `with_execution_layer_from_genesis` to
     /// initialize the staking state from the genesis file and enable
     /// persistent storage for consensus sync support.
@@ -418,7 +420,9 @@ impl Node {
         let chain_config = ChainConfig::default();
         let dcl_store: Arc<dyn DclStore> = Arc::new(InMemoryStore::new());
         self.dcl_store = Some(dcl_store.clone());
-        let bridge = ExecutionBridge::new(chain_config, dcl_store)?;
+        // Ensure data directory exists for EVM storage
+        std::fs::create_dir_all(&self.config.data_dir)?;
+        let bridge = ExecutionBridge::new(chain_config, dcl_store, &self.config.data_dir)?;
         self.execution_bridge = Some(Arc::new(bridge));
         Ok(self)
     }
@@ -461,7 +465,8 @@ impl Node {
         // Store the dcl_store for later use in spawn_host (consensus sync)
         self.dcl_store = Some(dcl_store.clone());
 
-        let bridge = ExecutionBridge::from_genesis(chain_config, dcl_store, genesis)?;
+        let bridge =
+            ExecutionBridge::from_genesis(chain_config, dcl_store, genesis, &self.config.data_dir)?;
         self.execution_bridge = Some(Arc::new(bridge));
 
         // Store epoch block reward from genesis for reward distribution at epoch boundaries
@@ -1103,9 +1108,9 @@ impl Node {
 
         // RPC storage reference - used to update block number when consensus decides
         // Moved outside the `if` block so it can be passed to run_event_loop
+        use cipherbft_execution::MdbxProvider;
         use cipherbft_rpc::{MdbxRpcStorage, StubDebugExecutionApi};
-        let rpc_storage: Option<Arc<MdbxRpcStorage<InMemoryProvider>>> = if self.config.rpc_enabled
-        {
+        let rpc_storage: Option<Arc<MdbxRpcStorage<MdbxProvider>>> = if self.config.rpc_enabled {
             // Create MDBX database for block/receipt storage
             let db_path = self.config.data_dir.join("rpc_storage");
             let db_config = DatabaseConfig::new(&db_path);
@@ -1125,10 +1130,13 @@ impl Node {
             let provider = if let Some(ref bridge) = self.execution_bridge {
                 bridge.provider().await
             } else {
-                // Fallback: create new provider if no execution bridge is configured
-                // (e.g., for tests or minimal node configurations)
-                warn!("RPC enabled but no execution bridge configured - creating empty provider");
-                Arc::new(InMemoryProvider::new())
+                // Execution bridge is required for RPC to function properly.
+                // The MdbxProvider is needed to share EVM state with the RPC layer.
+                anyhow::bail!(
+                    "RPC enabled but no execution bridge configured. \
+                     Call with_execution_layer() or with_execution_layer_from_genesis() \
+                     before enabling RPC."
+                );
             };
 
             // Create MdbxRpcStorage with chain ID and transaction store.
@@ -1146,30 +1154,41 @@ impl Node {
 
             // Ensure genesis block (block 0) exists for Ethereum RPC compatibility
             // Block explorers like Blockscout expect block 0 to exist
-            match storage.block_store().get_block_by_number(0).await {
-                Ok(Some(_)) => {
-                    debug!("Genesis block (block 0) already exists in storage");
-                }
-                Ok(None) => {
-                    // Create and store genesis block
-                    let genesis_timestamp = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-                    let genesis_block =
-                        Self::create_genesis_block(genesis_timestamp, self.gas_limit);
-                    if let Err(e) = storage.block_store().put_block(&genesis_block).await {
-                        error!("Failed to store genesis block: {}", e);
-                    } else {
-                        info!(
-                            "Created genesis block (block 0) with hash 0x{}",
-                            hex::encode(&genesis_block.hash[..8])
-                        );
+            let genesis_hash: Option<[u8; 32]> =
+                match storage.block_store().get_block_by_number(0).await {
+                    Ok(Some(existing_block)) => {
+                        debug!("Genesis block (block 0) already exists in storage");
+                        Some(existing_block.hash)
                     }
-                }
-                Err(e) => {
-                    warn!("Failed to check for genesis block: {}", e);
-                }
+                    Ok(None) => {
+                        // Create and store genesis block
+                        let genesis_timestamp = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        let genesis_block =
+                            Self::create_genesis_block(genesis_timestamp, self.gas_limit);
+                        let hash = genesis_block.hash;
+                        if let Err(e) = storage.block_store().put_block(&genesis_block).await {
+                            error!("Failed to store genesis block: {}", e);
+                            None
+                        } else {
+                            info!(
+                                "Created genesis block (block 0) with hash 0x{}",
+                                hex::encode(&genesis_block.hash[..8])
+                            );
+                            Some(hash)
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to check for genesis block: {}", e);
+                        None
+                    }
+                };
+
+            // Synchronize genesis block hash with execution bridge for correct parent_hash in block 1
+            if let (Some(hash), Some(ref bridge)) = (genesis_hash, &self.execution_bridge) {
+                bridge.set_genesis_block_hash(B256::from(hash));
             }
 
             // Initialize latest_block from storage (important for restart scenarios)
@@ -1203,32 +1222,34 @@ impl Node {
 
         // Create RPC executor before the RPC setup block so it can be shared
         // with the event loop for updating latest_block on consensus decisions
-        use cipherbft_execution::StakingPrecompile;
         use cipherbft_rpc::EvmExecutionApi;
-        let rpc_executor: Option<Arc<EvmExecutionApi<InMemoryProvider>>> =
-            if self.config.rpc_enabled {
-                let (exec_provider, staking_precompile) = if let Some(ref bridge) =
-                    self.execution_bridge
-                {
+        let rpc_executor: Option<Arc<EvmExecutionApi<MdbxProvider>>> = if self.config.rpc_enabled {
+            let (exec_provider, staking_precompile) =
+                if let Some(ref bridge) = self.execution_bridge {
                     // Get the provider and staking precompile from the execution bridge
                     // to ensure RPC queries see the same state as the execution layer
                     (bridge.provider().await, bridge.staking_precompile().await)
                 } else {
-                    warn!("RPC execution using empty provider - eth_call may not work correctly");
-                    (
-                        Arc::new(InMemoryProvider::new()),
-                        Arc::new(StakingPrecompile::new()),
-                    )
+                    // Execution bridge is required for RPC to function properly
+                    anyhow::bail!(
+                        "RPC enabled but no execution bridge configured. \
+                         Call with_execution_layer() or with_execution_layer_from_genesis() \
+                         before enabling RPC."
+                    );
                 };
-                let chain_id = 85300u64;
-                Some(Arc::new(EvmExecutionApi::new(
-                    exec_provider,
-                    chain_id,
-                    staking_precompile,
-                )))
-            } else {
-                None
-            };
+            let chain_id = 85300u64;
+            Some(Arc::new(EvmExecutionApi::new(
+                exec_provider,
+                chain_id,
+                staking_precompile,
+            )))
+        } else {
+            None
+        };
+
+        // Mempool handle for cleaning up pending transactions after block execution
+        // This is set when RPC is enabled and DCL is enabled (ChannelMempoolApi)
+        let mut rpc_mempool: Option<Arc<cipherbft_rpc::MempoolWrapper>> = None;
 
         // Start RPC server if enabled
         if let (Some(ref storage), Some(ref debug_executor), Some(ref sub_mgr)) =
@@ -1264,6 +1285,9 @@ impl Node {
             } else {
                 NodeNetworkApi::stub()
             });
+
+            // Clone mempool for use in event loop to clean up pending txs after block execution
+            rpc_mempool = Some(mempool.clone());
 
             // Use with_subscription_manager to share the subscription manager
             // between the RPC server and the event loop for broadcasting blocks
@@ -1332,6 +1356,7 @@ impl Node {
             subscription_manager,
             rpc_debug_executor,
             rpc_executor,
+            rpc_mempool,
             epoch_config,
             self.epoch_block_reward,
             gas_limit,
@@ -1378,14 +1403,21 @@ impl Node {
         decided_rx: &mut mpsc::Receiver<(ConsensusHeight, Cut)>,
         cut_advance_tx: mpsc::Sender<()>,
         execution_bridge: Option<Arc<ExecutionBridge>>,
-        rpc_storage: Option<Arc<cipherbft_rpc::MdbxRpcStorage<InMemoryProvider>>>,
+        rpc_storage: Option<Arc<cipherbft_rpc::MdbxRpcStorage<cipherbft_execution::MdbxProvider>>>,
         subscription_manager: Option<Arc<cipherbft_rpc::SubscriptionManager>>,
         rpc_debug_executor: Option<Arc<cipherbft_rpc::StubDebugExecutionApi>>,
-        rpc_executor: Option<Arc<cipherbft_rpc::EvmExecutionApi<InMemoryProvider>>>,
+        rpc_executor: Option<
+            Arc<cipherbft_rpc::EvmExecutionApi<cipherbft_execution::MdbxProvider>>,
+        >,
+        rpc_mempool: Option<Arc<cipherbft_rpc::MempoolWrapper>>,
         epoch_config: EpochConfig,
         epoch_block_reward: U256,
         gas_limit: u64,
     ) -> Result<()> {
+        // Initialize execution-consensus sync tracker
+        // This detects when execution falls behind and halts before unrecoverable divergence
+        let sync_tracker = ExecutionSyncTracker::new(ExecutionSyncConfig::default());
+
         loop {
             tokio::select! {
                 biased;
@@ -1505,6 +1537,9 @@ impl Node {
 
                         match bridge.execute_cut(cut).await {
                             Ok(block_result) => {
+                                // Track successful execution for divergence detection
+                                sync_tracker.on_success(height.0);
+
                                 info!(
                                     "Cut executed successfully - state_root: {}, gas_used: {}, block_hash: {}",
                                     block_result.execution_result.state_root,
@@ -1528,11 +1563,12 @@ impl Node {
 
                                         // Store receipts for eth_getBlockReceipts queries
                                         if !block_result.execution_result.receipts.is_empty() {
+                                            let block_hash_bytes = block_result.block_hash.0;
                                             let storage_receipts: Vec<StorageReceipt> = block_result
                                                 .execution_result
                                                 .receipts
                                                 .iter()
-                                                .map(Self::execution_receipt_to_storage)
+                                                .map(|r| Self::execution_receipt_to_storage(r, block_hash_bytes))
                                                 .collect();
                                             if let Err(e) = storage.receipt_store().put_receipts(&storage_receipts).await {
                                                 error!("Failed to store {} receipts for block {}: {}", storage_receipts.len(), height.0, e);
@@ -1633,6 +1669,45 @@ impl Node {
                                             sub_mgr.broadcast_block(rpc_block);
                                             debug!("Broadcast block {} to WebSocket subscribers", height.0);
                                         }
+
+                                        // Clean up executed transactions and retry pending ones
+                                        // This prevents stale transactions from accumulating and
+                                        // ensures skipped transactions (e.g., NonceTooLow) are retried
+                                        if let Some(ref mempool) = rpc_mempool {
+                                            use alloy_rlp::Decodable;
+                                            use reth_primitives::TransactionSigned;
+
+                                            let tx_hashes: Vec<B256> = block_result
+                                                .executed_transactions
+                                                .iter()
+                                                .filter_map(|tx_bytes| {
+                                                    TransactionSigned::decode(&mut tx_bytes.as_ref())
+                                                        .ok()
+                                                        .map(|tx| *tx.tx_hash())
+                                                })
+                                                .collect();
+
+                                            // Remove executed transactions from pending map
+                                            if !tx_hashes.is_empty() {
+                                                mempool.remove_included(&tx_hashes);
+                                                debug!(
+                                                    "Removed {} executed transactions from mempool pending map",
+                                                    tx_hashes.len()
+                                                );
+                                            }
+
+                                            // ALWAYS retry pending transactions after every block
+                                            // Previously this was inside the if block, causing pending
+                                            // transactions to only retry when a block had executed txs.
+                                            // This led to multi-minute delays when the chain had empty blocks.
+                                            let retried = mempool.retry_pending(&tx_hashes).await;
+                                            if retried > 0 {
+                                                debug!(
+                                                    "Re-queued {} pending transactions for retry",
+                                                    retried
+                                                );
+                                            }
+                                        }
                                     }
                                 }
 
@@ -1657,7 +1732,25 @@ impl Node {
                                 }
                             }
                             Err(e) => {
-                                error!("Cut execution failed: {}", e);
+                                // Check sync tracker for divergence-based halt decision
+                                let action = sync_tracker.on_failure(height.0, &e.to_string());
+                                match action {
+                                    SyncAction::Continue => {
+                                        // Log error but continue processing
+                                        error!("Cut execution failed at height {}: {}", height.0, e);
+                                    }
+                                    SyncAction::Halt { reason } => {
+                                        // Critical divergence detected - halt node
+                                        error!(
+                                            "CRITICAL: Execution-consensus divergence detected. {}. \
+                                             Halting node to prevent unrecoverable state.",
+                                            reason
+                                        );
+                                        return Err(anyhow::anyhow!(
+                                            "Execution halted due to divergence: {}", reason
+                                        ));
+                                    }
+                                }
                             }
                         }
                     } else {
@@ -1794,7 +1887,12 @@ impl Node {
     /// Convert an execution TransactionReceipt to a storage Receipt for MDBX persistence.
     ///
     /// This bridges the execution layer receipt format to the storage layer format.
-    fn execution_receipt_to_storage(receipt: &ExecutionReceipt) -> StorageReceipt {
+    /// The block_hash parameter is passed explicitly because the execution receipt
+    /// is created before the block hash is computed, so it contains a placeholder value.
+    fn execution_receipt_to_storage(
+        receipt: &ExecutionReceipt,
+        block_hash: [u8; 32],
+    ) -> StorageReceipt {
         // Convert logs
         let logs: Vec<StorageLog> = receipt
             .logs
@@ -1808,7 +1906,7 @@ impl Node {
         StorageReceipt {
             transaction_hash: receipt.transaction_hash.0,
             block_number: receipt.block_number,
-            block_hash: receipt.block_hash.0,
+            block_hash,
             transaction_index: receipt.transaction_index as u32,
             from: receipt.from.0 .0,
             to: receipt.to.map(|a| a.0 .0),

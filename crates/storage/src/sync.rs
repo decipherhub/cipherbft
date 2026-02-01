@@ -70,7 +70,6 @@ pub enum StoredSyncPhase {
     Complete,
 }
 
-
 /// Stored account progress for sync resumability
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StoredAccountProgress {
@@ -276,7 +275,11 @@ mod tests {
         assert_eq!(latest, snapshot2);
 
         // Get at or before
-        let at_or_before = store.get_snapshot_at_or_before(15000).await.unwrap().unwrap();
+        let at_or_before = store
+            .get_snapshot_at_or_before(15000)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(at_or_before, snapshot1);
 
         // List heights
@@ -317,10 +320,7 @@ mod tests {
         let mut progress = StoredSyncProgress::new();
         progress.phase = StoredSyncPhase::SnapSyncStorage;
         progress.target_snapshot = Some(StoredSyncSnapshot::new(
-            10000,
-            [0xab; 32],
-            [0xcd; 32],
-            1234567890,
+            10000, [0xab; 32], [0xcd; 32], 1234567890,
         ));
         progress.account_progress.completed_up_to = Some([0x80; 20]);
         progress.account_progress.total_accounts = 1000;

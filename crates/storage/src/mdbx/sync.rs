@@ -76,7 +76,10 @@ impl MdbxSyncStore {
             SyncPhase::Complete => StoredSyncPhase::Complete,
         };
 
-        let target_snapshot = progress.target_snapshot.as_ref().map(Self::to_mdbx_snapshot);
+        let target_snapshot = progress
+            .target_snapshot
+            .as_ref()
+            .map(Self::to_mdbx_snapshot);
 
         let account_progress = StoredAccountProgress {
             completed_up_to: progress.account_progress.completed_up_to,
@@ -130,7 +133,10 @@ impl MdbxSyncStore {
             StoredSyncPhase::Complete => SyncPhase::Complete,
         };
 
-        let target_snapshot = progress.target_snapshot.as_ref().map(Self::from_mdbx_snapshot);
+        let target_snapshot = progress
+            .target_snapshot
+            .as_ref()
+            .map(Self::from_mdbx_snapshot);
 
         let account_progress = SyncAccountProgress {
             completed_up_to: progress.account_progress.completed_up_to,
@@ -342,7 +348,11 @@ mod tests {
         assert_eq!(latest.block_number, snapshot2.block_number);
 
         // Get at or before
-        let at_or_before = store.get_snapshot_at_or_before(15000).await.unwrap().unwrap();
+        let at_or_before = store
+            .get_snapshot_at_or_before(15000)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(at_or_before.block_number, snapshot1.block_number);
 
         // List heights
@@ -391,18 +401,34 @@ mod tests {
         }
 
         // Query at exact boundaries
-        let at_10k = store.get_snapshot_at_or_before(10000).await.unwrap().unwrap();
+        let at_10k = store
+            .get_snapshot_at_or_before(10000)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(at_10k.block_number, 10000);
 
         // Query between snapshots
-        let at_15k = store.get_snapshot_at_or_before(15000).await.unwrap().unwrap();
+        let at_15k = store
+            .get_snapshot_at_or_before(15000)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(at_15k.block_number, 10000);
 
-        let at_25k = store.get_snapshot_at_or_before(25000).await.unwrap().unwrap();
+        let at_25k = store
+            .get_snapshot_at_or_before(25000)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(at_25k.block_number, 20000);
 
         // Query past all snapshots
-        let at_40k = store.get_snapshot_at_or_before(40000).await.unwrap().unwrap();
+        let at_40k = store
+            .get_snapshot_at_or_before(40000)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(at_40k.block_number, 30000);
 
         // Query before first snapshot

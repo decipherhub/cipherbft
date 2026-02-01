@@ -27,7 +27,7 @@ use cipherbft_sync::protocol::{
 use cipherbft_sync::snap::accounts::PendingRange;
 use cipherbft_sync::snap::storage::PendingStorageRange;
 use cipherbft_sync::{
-    SyncBlock, SyncConfig as ManagerSyncConfig, SyncError, SyncExecutor, StateSyncManager,
+    StateSyncManager, SyncBlock, SyncConfig as ManagerSyncConfig, SyncError, SyncExecutor,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -318,11 +318,13 @@ pub async fn run_snap_sync_with_executor<E: SyncExecutor>(
     let result = run_snap_sync(manager, network, local_tip, network_tip, config).await;
 
     // If we completed with blocks to execute, run the execution phase
-    if let SyncResult::Completed { final_height, duration } = &result {
+    if let SyncResult::Completed {
+        final_height,
+        duration,
+    } = &result
+    {
         // Check if block syncer exists and has blocks
-        let needs_execution = manager
-            .block_syncer_mut()
-            .is_some_and(|s| !s.is_complete());
+        let needs_execution = manager.block_syncer_mut().is_some_and(|s| !s.is_complete());
 
         if needs_execution {
             if let Err(e) = run_block_execution_phase(manager, executor).await {
@@ -578,7 +580,10 @@ async fn run_account_sync_phase(
             in_flight.insert(next_request_id, InFlightRequest::new(range, peer));
             next_request_id += 1;
 
-            debug!(request_id = next_request_id - 1, "Sent account range request");
+            debug!(
+                request_id = next_request_id - 1,
+                "Sent account range request"
+            );
         }
 
         // Process incoming responses
@@ -603,41 +608,41 @@ async fn run_account_sync_phase(
                         }
 
                         let latency = req.sent_at.elapsed();
-                            let bytes = estimate_account_response_size(&response);
+                        let bytes = estimate_account_response_size(&response);
 
-                            // Process the response
-                            let process_result = manager
-                                .account_syncer_mut()
-                                .map(|s| s.process_response(req.data.clone(), response));
+                        // Process the response
+                        let process_result = manager
+                            .account_syncer_mut()
+                            .map(|s| s.process_response(req.data.clone(), response));
 
-                            match process_result {
-                                Some(Ok(())) => {
-                                    manager
-                                        .peers_mut()
-                                        .request_completed(&peer_id, latency, bytes);
-                                    debug!(
-                                        peer = %peer_id,
-                                        latency_ms = latency.as_millis(),
-                                        "Account range response processed"
-                                    );
+                        match process_result {
+                            Some(Ok(())) => {
+                                manager
+                                    .peers_mut()
+                                    .request_completed(&peer_id, latency, bytes);
+                                debug!(
+                                    peer = %peer_id,
+                                    latency_ms = latency.as_millis(),
+                                    "Account range response processed"
+                                );
+                            }
+                            Some(Err(e)) => {
+                                warn!(
+                                    peer = %peer_id,
+                                    error = %e,
+                                    "Failed to process account range response"
+                                );
+                                manager.handle_peer_error(&peer_id, &e);
+                                if let Some(account_syncer) = manager.account_syncer_mut() {
+                                    account_syncer.handle_failure(req.data, max_retries);
                                 }
-                                Some(Err(e)) => {
-                                    warn!(
-                                        peer = %peer_id,
-                                        error = %e,
-                                        "Failed to process account range response"
-                                    );
-                                    manager.handle_peer_error(&peer_id, &e);
-                                    if let Some(account_syncer) = manager.account_syncer_mut() {
-                                        account_syncer.handle_failure(req.data, max_retries);
-                                    }
-                                }
-                                None => {
-                                    warn!("No account syncer available");
-                                }
+                            }
+                            None => {
+                                warn!("No account syncer available");
                             }
                         }
                     }
+                }
                 SnapSyncMessage::Status(status) => {
                     // Update peer status even during account sync
                     manager.handle_status(&peer_id, status);
@@ -739,7 +744,10 @@ async fn run_storage_sync_phase(
             in_flight.insert(next_request_id, InFlightRequest::new(range, peer));
             next_request_id += 1;
 
-            debug!(request_id = next_request_id - 1, "Sent storage range request");
+            debug!(
+                request_id = next_request_id - 1,
+                "Sent storage range request"
+            );
         }
 
         // Process incoming responses

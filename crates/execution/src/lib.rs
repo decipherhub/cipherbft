@@ -65,6 +65,8 @@ pub mod types;
 
 // Re-export main types for convenience
 pub use bridge::{BatchFetcher, ExecutionBridge};
+#[cfg(feature = "mdbx")]
+pub use database::MdbxProvider;
 pub use database::{Account, CipherBftDatabase, InMemoryProvider, Provider};
 pub use engine::{ExecutionEngine, ExecutionLayer as ExecutionLayerTrait};
 pub use error::{DatabaseError, ExecutionError, Result};
@@ -591,6 +593,7 @@ mod tests {
             block_hash: B256::ZERO,
             receipts: vec![],
             logs_bloom: Bloom::ZERO,
+            executed_transactions: vec![],
         };
 
         let sealed = execution_layer

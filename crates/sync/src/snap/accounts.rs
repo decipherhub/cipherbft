@@ -196,7 +196,11 @@ impl AccountRangeSyncer {
     }
 
     /// Verify account range proof using MPT proof verification.
-    fn verify_account_proof(&self, range: &PendingRange, response: &AccountRangeResponse) -> Result<()> {
+    fn verify_account_proof(
+        &self,
+        range: &PendingRange,
+        response: &AccountRangeResponse,
+    ) -> Result<()> {
         // Use the actual range start address for proper verification
         verify_account_range_proof(
             self.snapshot.state_root,

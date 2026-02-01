@@ -81,12 +81,8 @@ where
     pub async fn handle_request(&self, request: SnapSyncMessage) -> Option<SnapSyncMessage> {
         match request {
             SnapSyncMessage::GetStatus => Some(self.handle_get_status().await),
-            SnapSyncMessage::GetAccountRange(req) => {
-                Some(self.handle_get_account_range(req).await)
-            }
-            SnapSyncMessage::GetStorageRange(req) => {
-                Some(self.handle_get_storage_range(req).await)
-            }
+            SnapSyncMessage::GetAccountRange(req) => Some(self.handle_get_account_range(req).await),
+            SnapSyncMessage::GetStorageRange(req) => Some(self.handle_get_storage_range(req).await),
             SnapSyncMessage::GetBlocks(req) => Some(self.handle_get_blocks(req).await),
             // Response messages don't need handling - they're for the client side
             SnapSyncMessage::Status(_)
@@ -105,19 +101,17 @@ where
 
         // Get latest block number and hash
         let (tip_height, tip_hash) = match self.block_store.get_latest_block_number().await {
-            Ok(Some(height)) => {
-                match self.block_store.get_block_by_number(height).await {
-                    Ok(Some(block)) => (height, B256::from(block.hash)),
-                    Ok(None) => {
-                        warn!("Latest block {} not found in storage", height);
-                        (0, B256::ZERO)
-                    }
-                    Err(e) => {
-                        warn!("Failed to get latest block: {}", e);
-                        (0, B256::ZERO)
-                    }
+            Ok(Some(height)) => match self.block_store.get_block_by_number(height).await {
+                Ok(Some(block)) => (height, B256::from(block.hash)),
+                Ok(None) => {
+                    warn!("Latest block {} not found in storage", height);
+                    (0, B256::ZERO)
                 }
-            }
+                Err(e) => {
+                    warn!("Failed to get latest block: {}", e);
+                    (0, B256::ZERO)
+                }
+            },
             Ok(None) => {
                 debug!("No blocks in storage, returning genesis state");
                 (0, B256::ZERO)
@@ -220,8 +214,7 @@ where
 
         debug!(
             accounts_returned = accounts.len(),
-            more,
-            "Returning account range"
+            more, "Returning account range"
         );
 
         // TODO: Generate actual merkle proofs using alloy-trie
@@ -288,8 +281,7 @@ where
 
         debug!(
             slots_returned = slots.len(),
-            more,
-            "Returning storage range"
+            more, "Returning storage range"
         );
 
         // TODO: Generate actual merkle proofs using alloy-trie
@@ -397,7 +389,10 @@ mod tests {
     #[async_trait::async_trait]
     impl BlockStore for TestBlockStore {
         async fn put_block(&self, block: &Block) -> cipherbft_storage::BlockStoreResult<()> {
-            self.blocks.write().unwrap().insert(block.number, block.clone());
+            self.blocks
+                .write()
+                .unwrap()
+                .insert(block.number, block.clone());
             Ok(())
         }
 
@@ -457,6 +452,7 @@ mod tests {
     }
 
     /// In-memory EVM store for testing
+    #[allow(clippy::type_complexity)]
     struct TestEvmStore {
         accounts: RwLock<HashMap<[u8; 20], EvmAccount>>,
         storage: RwLock<HashMap<([u8; 20], [u8; 32]), [u8; 32]>>,
@@ -559,6 +555,14 @@ mod tests {
             result.sort_by_key(|(k, _)| *k);
             Ok(result)
         }
+
+        fn get_current_block(&self) -> EvmStoreResult<Option<u64>> {
+            Ok(None)
+        }
+
+        fn set_current_block(&self, _block_number: u64) -> EvmStoreResult<()> {
+            Ok(())
+        }
     }
 
     fn make_test_block(number: u64) -> Block {
@@ -604,7 +608,9 @@ mod tests {
 
         // Add a snapshot
         sync_store
-            .put_snapshot(StoredSyncSnapshot::new(10000, [0xab; 32], [0xcd; 32], 123456))
+            .put_snapshot(StoredSyncSnapshot::new(
+                10000, [0xab; 32], [0xcd; 32], 123456,
+            ))
             .await
             .unwrap();
 

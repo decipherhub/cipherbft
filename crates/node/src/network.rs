@@ -34,11 +34,11 @@ use cipherbft_data_chain::{
     error::MAX_MESSAGE_SIZE, primary::runner::PrimaryNetwork, worker::core::WorkerNetwork,
     Attestation, Car, DclMessage, WorkerMessage,
 };
-use cipherbft_sync::{OutgoingSnapMessage, SnapSyncMessage, SyncNetworkSender};
 use cipherbft_metrics::network::{
     P2P_BYTES_RECEIVED, P2P_BYTES_SENT, P2P_CONNECTION_ERRORS, P2P_MESSAGES_RECEIVED,
     P2P_MESSAGES_SENT, P2P_PEERS_CONNECTED, P2P_PEERS_INBOUND, P2P_PEERS_OUTBOUND,
 };
+use cipherbft_sync::{OutgoingSnapMessage, SnapSyncMessage, SyncNetworkSender};
 use cipherbft_types::ValidatorId;
 use std::collections::HashMap;
 use std::net::SocketAddr;

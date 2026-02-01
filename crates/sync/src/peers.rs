@@ -208,12 +208,7 @@ impl PeerManager {
     }
 
     /// Mark request completed for peer
-    pub fn request_completed(
-        &mut self,
-        peer_id: &str,
-        latency: Duration,
-        bytes: u64,
-    ) {
+    pub fn request_completed(&mut self, peer_id: &str, latency: Duration, bytes: u64) {
         if let Some(peer) = self.peers.get_mut(peer_id) {
             peer.pending_requests = peer.pending_requests.saturating_sub(1);
             peer.metrics.record_success(latency, bytes);
@@ -293,7 +288,8 @@ mod tests {
         let initial_score = peer.score();
 
         // Record some success
-        peer.metrics.record_success(Duration::from_millis(50), 10000);
+        peer.metrics
+            .record_success(Duration::from_millis(50), 10000);
         let better_score = peer.score();
 
         assert!(better_score > initial_score);

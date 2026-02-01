@@ -2,7 +2,7 @@
 
 use crate::error::{Result, SyncError};
 use crate::protocol::AccountData;
-use alloy_primitives::{keccak256, Address, B256, Bytes};
+use alloy_primitives::{keccak256, Address, Bytes, B256};
 use alloy_rlp::Encodable;
 use alloy_trie::{proof::verify_proof as trie_verify_proof, Nibbles, EMPTY_ROOT_HASH};
 
@@ -195,7 +195,9 @@ fn verify_range_completeness(
                 "peer",
                 format!(
                     "accounts not in sorted order at index {}: {} should be after {}",
-                    i, account.address, accounts[i - 1].address
+                    i,
+                    account.address,
+                    accounts[i - 1].address
                 ),
             ));
         }
@@ -329,7 +331,10 @@ mod tests {
             &[account],
             &[], // Empty proof
         );
-        assert!(result.is_ok(), "Empty proof with accounts should temporarily pass");
+        assert!(
+            result.is_ok(),
+            "Empty proof with accounts should temporarily pass"
+        );
 
         // Non-empty storage with empty proof - temporarily allowed
         let result = verify_storage_range_proof(
@@ -338,6 +343,9 @@ mod tests {
             &[(B256::ZERO, B256::repeat_byte(0x42))],
             &[], // Empty proof
         );
-        assert!(result.is_ok(), "Empty proof with slots should temporarily pass");
+        assert!(
+            result.is_ok(),
+            "Empty proof with slots should temporarily pass"
+        );
     }
 }

@@ -144,7 +144,7 @@ const SYNC_CHANNEL_SIZE: usize = 1000;
 #[allow(clippy::type_complexity)]
 pub fn create_sync_adapter() -> (
     SyncNetworkAdapter,
-    mpsc::Sender<(String, SnapSyncMessage)>,   // for network to send to sync
+    mpsc::Sender<(String, SnapSyncMessage)>, // for network to send to sync
     mpsc::Receiver<(String, SnapSyncMessage)>, // for network to receive from sync
 ) {
     // Channel for messages from network to sync (inbound to sync)
@@ -209,11 +209,10 @@ pub async fn wire_sync_to_network(
 ///
 /// The sync crate's SyncNetworkSender expects IncomingSnapMessage, but our local
 /// adapter uses (String, SnapSyncMessage) tuples. This creates a bridge sender.
-fn create_bridge_sender(
-    tx: mpsc::Sender<(String, SnapSyncMessage)>,
-) -> SyncNetworkSender {
+fn create_bridge_sender(tx: mpsc::Sender<(String, SnapSyncMessage)>) -> SyncNetworkSender {
     // Create a channel that the SyncNetworkSender will use
-    let (bridge_tx, mut bridge_rx) = mpsc::channel::<cipherbft_sync::IncomingSnapMessage>(SYNC_CHANNEL_SIZE);
+    let (bridge_tx, mut bridge_rx) =
+        mpsc::channel::<cipherbft_sync::IncomingSnapMessage>(SYNC_CHANNEL_SIZE);
 
     // Spawn a task that forwards from bridge to local adapter format
     tokio::spawn(async move {
@@ -246,7 +245,10 @@ fn start_outgoing_processor(
                 if let Some(vid) = TcpPrimaryNetwork::parse_peer_id(&peer_id) {
                     network.send_snap_sync(vid, message).await;
                 } else {
-                    tracing::warn!("Could not parse peer ID for outgoing sync message: {}", peer_id);
+                    tracing::warn!(
+                        "Could not parse peer ID for outgoing sync message: {}",
+                        peer_id
+                    );
                 }
             }
         }
@@ -257,8 +259,8 @@ fn start_outgoing_processor(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cipherbft_sync::protocol::{SnapshotInfo, StatusResponse};
     use alloy_primitives::B256;
+    use cipherbft_sync::protocol::{SnapshotInfo, StatusResponse};
 
     #[tokio::test]
     async fn test_adapter_send_recv() {
@@ -310,7 +312,11 @@ mod tests {
     async fn test_broadcast() {
         let (adapter, _inbound_tx, mut outbound_rx) = create_sync_adapter();
 
-        let peers = vec!["peer1".to_string(), "peer2".to_string(), "peer3".to_string()];
+        let peers = vec![
+            "peer1".to_string(),
+            "peer2".to_string(),
+            "peer3".to_string(),
+        ];
         let msg = SnapSyncMessage::GetStatus;
 
         let count = adapter.broadcast(&peers, &msg).await;

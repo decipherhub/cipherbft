@@ -116,9 +116,7 @@ impl SyncProgressState {
                 };
                 base + self.snap_phase_progress() * 33.0 / 100.0
             }
-            SyncPhase::BlockSync => {
-                66.0 + self.block_sync_progress() * 34.0 / 100.0
-            }
+            SyncPhase::BlockSync => 66.0 + self.block_sync_progress() * 34.0 / 100.0,
             SyncPhase::Complete => 100.0,
         }
     }
@@ -154,7 +152,9 @@ impl From<&SyncPhase> for StoredSyncPhase {
             SyncPhase::Discovery => StoredSyncPhase::Discovery,
             SyncPhase::SnapSync(SnapSubPhase::Accounts) => StoredSyncPhase::SnapSyncAccounts,
             SyncPhase::SnapSync(SnapSubPhase::Storage) => StoredSyncPhase::SnapSyncStorage,
-            SyncPhase::SnapSync(SnapSubPhase::Verification) => StoredSyncPhase::SnapSyncVerification,
+            SyncPhase::SnapSync(SnapSubPhase::Verification) => {
+                StoredSyncPhase::SnapSyncVerification
+            }
             SyncPhase::BlockSync => StoredSyncPhase::BlockSync,
             SyncPhase::Complete => StoredSyncPhase::Complete,
         }
@@ -167,7 +167,9 @@ impl From<&StoredSyncPhase> for SyncPhase {
             StoredSyncPhase::Discovery => SyncPhase::Discovery,
             StoredSyncPhase::SnapSyncAccounts => SyncPhase::SnapSync(SnapSubPhase::Accounts),
             StoredSyncPhase::SnapSyncStorage => SyncPhase::SnapSync(SnapSubPhase::Storage),
-            StoredSyncPhase::SnapSyncVerification => SyncPhase::SnapSync(SnapSubPhase::Verification),
+            StoredSyncPhase::SnapSyncVerification => {
+                SyncPhase::SnapSync(SnapSubPhase::Verification)
+            }
             StoredSyncPhase::BlockSync => SyncPhase::BlockSync,
             StoredSyncPhase::Complete => SyncPhase::Complete,
         }
@@ -230,10 +232,7 @@ impl From<&StoredSyncProgress> for SyncProgressState {
                 )
             }),
             account_progress: AccountProgress {
-                completed_up_to: stored
-                    .account_progress
-                    .completed_up_to
-                    .map(Address::from),
+                completed_up_to: stored.account_progress.completed_up_to.map(Address::from),
                 accounts_needing_storage: stored
                     .account_progress
                     .accounts_needing_storage
@@ -503,7 +502,11 @@ mod tests {
 
         assert_eq!(tracker.state().account_progress.total_accounts, 1000);
         assert_eq!(
-            tracker.state().account_progress.accounts_needing_storage.len(),
+            tracker
+                .state()
+                .account_progress
+                .accounts_needing_storage
+                .len(),
             1
         );
     }
@@ -579,10 +582,7 @@ mod tests {
             state.account_progress.total_accounts,
             back.account_progress.total_accounts
         );
-        assert_eq!(
-            state.storage_progress.len(),
-            back.storage_progress.len()
-        );
+        assert_eq!(state.storage_progress.len(), back.storage_progress.len());
         assert_eq!(
             state.block_progress.executed_up_to,
             back.block_progress.executed_up_to

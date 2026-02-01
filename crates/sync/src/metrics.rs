@@ -2,14 +2,16 @@
 
 use once_cell::sync::Lazy;
 use prometheus::{
-    register_counter_vec, register_gauge, register_histogram,
-    CounterVec, Gauge, Histogram,
+    register_counter_vec, register_gauge, register_histogram, CounterVec, Gauge, Histogram,
 };
 
 /// Current sync phase (0=Discovery, 1=SnapSync, 2=BlockSync, 3=Complete)
 pub static SYNC_PHASE: Lazy<Gauge> = Lazy::new(|| {
-    register_gauge!("sync_phase", "Current sync phase (0=Discovery, 1=SnapSync, 2=BlockSync, 3=Complete)")
-        .expect("Failed to register sync_phase metric")
+    register_gauge!(
+        "sync_phase",
+        "Current sync phase (0=Discovery, 1=SnapSync, 2=BlockSync, 3=Complete)"
+    )
+    .expect("Failed to register sync_phase metric")
 });
 
 /// Overall sync progress percentage (0-100)
@@ -44,20 +46,29 @@ pub static SYNC_ACCOUNTS_DOWNLOADED: Lazy<Gauge> = Lazy::new(|| {
 
 /// Storage slots downloaded during snap sync
 pub static SYNC_STORAGE_SLOTS_DOWNLOADED: Lazy<Gauge> = Lazy::new(|| {
-    register_gauge!("sync_storage_slots_downloaded", "Number of storage slots downloaded")
-        .expect("Failed to register sync_storage_slots_downloaded metric")
+    register_gauge!(
+        "sync_storage_slots_downloaded",
+        "Number of storage slots downloaded"
+    )
+    .expect("Failed to register sync_storage_slots_downloaded metric")
 });
 
 /// Bytes downloaded during sync
 pub static SYNC_BYTES_DOWNLOADED: Lazy<Gauge> = Lazy::new(|| {
-    register_gauge!("sync_bytes_downloaded", "Total bytes downloaded during sync")
-        .expect("Failed to register sync_bytes_downloaded metric")
+    register_gauge!(
+        "sync_bytes_downloaded",
+        "Total bytes downloaded during sync"
+    )
+    .expect("Failed to register sync_bytes_downloaded metric")
 });
 
 /// Blocks executed during block sync
 pub static SYNC_BLOCKS_EXECUTED: Lazy<Gauge> = Lazy::new(|| {
-    register_gauge!("sync_blocks_executed", "Number of blocks executed during sync")
-        .expect("Failed to register sync_blocks_executed metric")
+    register_gauge!(
+        "sync_blocks_executed",
+        "Number of blocks executed during sync"
+    )
+    .expect("Failed to register sync_blocks_executed metric")
 });
 
 /// Sync request latency histogram
@@ -82,12 +93,8 @@ pub static SYNC_REQUESTS: Lazy<CounterVec> = Lazy::new(|| {
 
 /// Sync errors by type
 pub static SYNC_ERRORS: Lazy<CounterVec> = Lazy::new(|| {
-    register_counter_vec!(
-        "sync_errors_total",
-        "Total sync errors by type",
-        &["type"]
-    )
-    .expect("Failed to register sync_errors metric")
+    register_counter_vec!("sync_errors_total", "Total sync errors by type", &["type"])
+        .expect("Failed to register sync_errors metric")
 });
 
 /// Update sync phase metric
@@ -138,7 +145,9 @@ pub fn set_blocks_executed(count: u64) {
 /// Record a sync request
 pub fn record_request(request_type: &str, success: bool) {
     let status = if success { "success" } else { "failure" };
-    SYNC_REQUESTS.with_label_values(&[request_type, status]).inc();
+    SYNC_REQUESTS
+        .with_label_values(&[request_type, status])
+        .inc();
 }
 
 /// Record request latency

@@ -84,12 +84,15 @@ pub use tables::{
     StakingValidators,
     StorageSlotKey,
     StoredAccount,
+    // Sync table types
+    StoredAccountProgress,
     // Consensus value types
     StoredAggregatedAttestation,
     StoredBatch,
     StoredBatchDigest,
     // Block value types
     StoredBlock,
+    StoredBlockProgress,
     StoredBloom,
     StoredBytecode,
     StoredCar,
@@ -102,7 +105,11 @@ pub use tables::{
     StoredProposal,
     StoredReceipt,
     StoredStakingMetadata,
+    StoredStorageProgress,
     StoredStorageValue,
+    StoredSyncPhase,
+    StoredSyncProgressState,
+    StoredSyncSnapshot,
     // Transaction table types
     StoredTransaction,
     StoredValidator,
@@ -111,13 +118,6 @@ pub use tables::{
     StoredVote,
     StoredVotes,
     StoredWalEntry,
-    // Sync table types
-    StoredAccountProgress,
-    StoredBlockProgress,
-    StoredStorageProgress,
-    StoredSyncPhase,
-    StoredSyncProgressState,
-    StoredSyncSnapshot,
     SyncProgress,
     SyncProgressKey,
     SyncSnapshots,
