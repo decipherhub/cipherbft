@@ -274,9 +274,11 @@ pub async fn on_decided<Ctx>(
 where
     Ctx: Context,
 {
-    debug!(height.tip = %height, "Updating request state");
+    debug!(height.tip = %height, "Decided value, removing pending request");
 
-    state.validate_response(height);
+    // Remove the pending request immediately - it's been validated by consensus
+    // This frees the slot for new parallel sync requests
+    state.remove_pending_request_by_height(&height);
 
     Ok(())
 }

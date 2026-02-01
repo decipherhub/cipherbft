@@ -211,18 +211,21 @@ where
         }
     }
 
-    /// Clear stale pending requests that have been waiting longer than the configured timeout.
+    /// Clear stale pending requests that have been waiting longer than the configured timeout,
+    /// as well as any validated requests that should have been cleaned up.
     /// Returns the number of cleared requests.
     pub fn clear_stale_pending_requests(&mut self) -> usize {
         let timeout = self.config.request_timeout;
         let now = Instant::now();
 
-        // Find heights with stale requests (not yet validated and older than timeout)
+        // Find heights with:
+        // 1. Validated requests (should have been removed by on_decided, safety net)
+        // 2. Timed-out pending requests (no response received in time)
         let stale_heights: Vec<Ctx::Height> = self
             .pending_value_requests
             .iter()
             .filter(|(_, (_, state, sent_at))| {
-                *state != RequestState::Validated && now.duration_since(*sent_at) > timeout
+                *state == RequestState::Validated || now.duration_since(*sent_at) > timeout
             })
             .map(|(height, _)| *height)
             .collect();
