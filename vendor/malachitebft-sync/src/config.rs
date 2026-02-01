@@ -85,7 +85,7 @@ impl Default for Config {
             parallel_requests: DEFAULT_PARALLEL_REQUESTS,
             scoring_strategy: Strategy::default(),
             inactive_threshold: None,
-            tip_first_sync: false,              // Disabled by default for safety
+            tip_first_sync: false, // Disabled by default for safety
             tip_first_buffer: DEFAULT_TIP_FIRST_BUFFER,
         }
     }

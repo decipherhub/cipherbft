@@ -293,10 +293,7 @@ where
     /// Get the maximum tip height reported by any peer (network tip).
     /// Returns None if no peers are connected.
     pub fn get_network_tip(&self) -> Option<Ctx::Height> {
-        self.peers
-            .values()
-            .map(|status| status.tip_height)
-            .max()
+        self.peers.values().map(|status| status.tip_height).max()
     }
 
     /// Calculate the starting height for tip-first sync.
