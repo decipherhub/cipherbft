@@ -183,14 +183,17 @@ impl ProposerSelector {
             p.priority = p.priority.saturating_add(p.voting_power as i64);
         }
 
-        // Step 2: Find proposer (max priority, tie-break by address)
+        // Step 2: Find proposer (max priority, tie-break by smallest address per Tendermint spec)
+        // When priorities are equal, choose the validator with the lexicographically smallest address.
+        // This matches CometBFT behavior and ensures consistency with simple round-robin.
         let proposer_idx = priorities
             .iter()
             .enumerate()
             .max_by(|(_, a), (_, b)| {
                 a.priority
                     .cmp(&b.priority)
-                    .then_with(|| a.address.cmp(&b.address))
+                    // Reverse address comparison: prefer smaller address when priorities tie
+                    .then_with(|| b.address.cmp(&a.address))
             })
             .map(|(idx, _)| idx)
             .unwrap();
@@ -532,6 +535,52 @@ mod tests {
         assert_eq!(
             gen_h34_r2.address, sync_h34_r2.address,
             "Must agree on round 2"
+        );
+    }
+
+    #[test]
+    fn test_weighted_matches_simple_round_robin_for_equal_power() {
+        // CRITICAL: With equal voting power, weighted round-robin MUST produce the same
+        // proposer sequence as simple round-robin (round % validator_count).
+        // This ensures backwards compatibility when switching algorithms.
+        let vs = make_validator_set(&[100, 100, 100, 100]);
+        let selector = ProposerSelector::new(&vs, ConsensusHeight(1));
+
+        // The validator set is sorted by (power desc, address asc).
+        // For equal power, the sorted order is by address ascending.
+        let validators: Vec<_> = vs.as_slice().to_vec();
+
+        // For the first few rounds at height 1, verify rotation matches simple RR
+        for round in 0..4u32 {
+            let expected_idx = round as usize % validators.len();
+            let expected_addr = validators[expected_idx].address;
+
+            let actual = selector.select_proposer(&vs, ConsensusHeight(1), Round::new(round));
+
+            assert_eq!(
+                actual.address, expected_addr,
+                "Round {} should select validator at index {} (simple round-robin)",
+                round, expected_idx
+            );
+        }
+    }
+
+    #[test]
+    fn test_tie_break_chooses_smallest_address() {
+        // Per Tendermint spec: when priorities are equal, choose the validator
+        // with the lexicographically smallest address.
+        let vs = make_validator_set(&[100, 100]);
+        let selector = ProposerSelector::new(&vs, ConsensusHeight(1));
+
+        // With 2 validators of equal power, first proposer should have smallest address
+        let first_proposer = selector.select_proposer(&vs, ConsensusHeight(1), Round::new(0));
+
+        // Get the validator with smallest address from the set
+        let smallest_addr = vs.as_slice().iter().map(|v| v.address).min().unwrap();
+
+        assert_eq!(
+            first_proposer.address, smallest_addr,
+            "First proposer should be the validator with smallest address (tie-break rule)"
         );
     }
 }
