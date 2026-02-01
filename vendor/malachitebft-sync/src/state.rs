@@ -134,8 +134,10 @@ where
         self.height_per_request_id
             .insert(request_id.clone(), height);
 
-        self.pending_value_requests
-            .insert(height, (request_id, RequestState::WaitingResponse, Instant::now()));
+        self.pending_value_requests.insert(
+            height,
+            (request_id, RequestState::WaitingResponse, Instant::now()),
+        );
     }
 
     /// Mark that a response has been received for a height.
