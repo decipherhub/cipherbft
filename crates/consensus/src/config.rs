@@ -15,12 +15,15 @@ pub struct ConsensusConfig {
 
 impl ConsensusConfig {
     /// Create a new config with sensible defaults.
+    ///
+    /// Default timeouts: propose=1s, prevote=500ms, precommit=500ms
+    /// Total timeout per failed round: 2s
     pub fn new(chain_id: impl Into<String>) -> Self {
         Self {
             chain_id: chain_id.into(),
             propose_timeout: Duration::from_secs(1),
-            prevote_timeout: Duration::from_secs(1),
-            precommit_timeout: Duration::from_secs(1),
+            prevote_timeout: Duration::from_millis(500),
+            precommit_timeout: Duration::from_millis(500),
         }
     }
 
@@ -57,8 +60,8 @@ mod tests {
         let config = ConsensusConfig::new("test-chain");
         assert_eq!(config.chain_id(), "test-chain");
         assert_eq!(config.propose_timeout, Duration::from_secs(1));
-        assert_eq!(config.prevote_timeout, Duration::from_secs(1));
-        assert_eq!(config.precommit_timeout, Duration::from_secs(1));
+        assert_eq!(config.prevote_timeout, Duration::from_millis(500));
+        assert_eq!(config.precommit_timeout, Duration::from_millis(500));
     }
 
     #[test]
