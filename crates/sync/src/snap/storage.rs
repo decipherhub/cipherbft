@@ -120,14 +120,16 @@ impl StorageRangeSyncer {
         // If more slots exist, add continuation range
         if response.more {
             if let Some((last_key, _)) = response.slots.last() {
-                let next_start = increment_b256(*last_key);
-                self.current_ranges.push(PendingStorageRange {
-                    account: range.account,
-                    storage_root: range.storage_root,
-                    start: next_start,
-                    end: range.end,
-                    retries: 0,
-                });
+                // None means we hit max slot, no more ranges needed
+                if let Some(next_start) = increment_b256(*last_key) {
+                    self.current_ranges.push(PendingStorageRange {
+                        account: range.account,
+                        storage_root: range.storage_root,
+                        start: next_start,
+                        end: range.end,
+                        retries: 0,
+                    });
+                }
             }
         } else {
             // Account storage complete
@@ -194,16 +196,16 @@ pub struct StorageSyncStats {
 
 // Helper functions
 
-fn increment_b256(val: B256) -> B256 {
+fn increment_b256(val: B256) -> Option<B256> {
     let mut bytes = val.0;
     for i in (0..32).rev() {
         if bytes[i] < 255 {
             bytes[i] += 1;
-            return B256::from(bytes);
+            return Some(B256::from(bytes));
         }
         bytes[i] = 0;
     }
-    B256::ZERO // Overflow wraps
+    None // Overflow: already at max slot
 }
 
 fn estimate_storage_response_size(response: &StorageRangeResponse) -> u64 {
@@ -259,11 +261,11 @@ mod tests {
     #[test]
     fn test_increment_b256() {
         let val = B256::ZERO;
-        let next = increment_b256(val);
+        let next = increment_b256(val).unwrap();
         assert_eq!(next.0[31], 1);
 
         let val = B256::repeat_byte(0xff);
         let next = increment_b256(val);
-        assert_eq!(next, B256::ZERO); // Overflow
+        assert_eq!(next, None); // Overflow returns None
     }
 }

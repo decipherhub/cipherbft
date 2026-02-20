@@ -5,7 +5,7 @@
 use crate::error::{Result, SyncError};
 use crate::protocol::{BlockRangeRequest, BlockRangeResponse};
 use alloy_primitives::{Bytes, B256};
-use std::collections::VecDeque;
+use std::collections::BTreeMap;
 
 /// Block batch size for parallel requests
 pub const BLOCK_BATCH_SIZE: u32 = 64;
@@ -43,8 +43,8 @@ pub struct BlockSyncer {
     executed_up_to: u64,
     /// Pending ranges to download
     pending_ranges: Vec<PendingBlockRange>,
-    /// Downloaded blocks awaiting execution (sorted by height)
-    downloaded: VecDeque<DownloadedBlock>,
+    /// Downloaded blocks awaiting execution (ordered by height)
+    downloaded: BTreeMap<u64, DownloadedBlock>,
     /// Expected state roots at checkpoints (height -> root)
     checkpoint_roots: Vec<(u64, B256)>,
     /// Total blocks downloaded
@@ -80,7 +80,7 @@ impl BlockSyncer {
             target_height,
             executed_up_to: start_height.saturating_sub(1),
             pending_ranges,
-            downloaded: VecDeque::new(),
+            downloaded: BTreeMap::new(),
             checkpoint_roots: Vec::new(),
             total_downloaded: 0,
             total_executed: 0,
@@ -103,9 +103,7 @@ impl BlockSyncer {
 
     /// Check if we have blocks ready to execute
     pub fn has_executable_blocks(&self) -> bool {
-        self.downloaded
-            .front()
-            .is_some_and(|b| b.height == self.executed_up_to + 1)
+        self.downloaded.contains_key(&(self.executed_up_to + 1))
     }
 
     /// Get next range to request
@@ -134,29 +132,26 @@ impl BlockSyncer {
             return Err(SyncError::malformed("unknown", "empty block response"));
         }
 
-        // Add blocks to download queue
+        // Add blocks to download map (BTreeMap keeps them sorted by height)
         for (i, block_data) in response.blocks.into_iter().enumerate() {
             let height = range.start + i as u64;
-            self.downloaded.push_back(DownloadedBlock {
+            self.downloaded.insert(
                 height,
-                data: block_data,
-            });
+                DownloadedBlock {
+                    height,
+                    data: block_data,
+                },
+            );
             self.total_downloaded += 1;
         }
-
-        // Sort by height (insertion sort since mostly sorted)
-        self.sort_downloaded();
 
         Ok(())
     }
 
     /// Get next block to execute (if available in sequence)
     pub fn next_executable_block(&mut self) -> Option<DownloadedBlock> {
-        if self.has_executable_blocks() {
-            self.downloaded.pop_front()
-        } else {
-            None
-        }
+        let next_height = self.executed_up_to + 1;
+        self.downloaded.remove(&next_height)
     }
 
     /// Mark block as successfully executed
@@ -206,7 +201,7 @@ impl BlockSyncer {
         });
 
         // Remove any downloaded blocks at or after this height
-        self.downloaded.retain(|b| b.height < height);
+        self.downloaded.retain(|h, _| *h < height);
     }
 
     /// Get sync progress as percentage
@@ -230,14 +225,6 @@ impl BlockSyncer {
             pending_ranges: self.pending_ranges.len() as u64,
             downloaded_pending: self.downloaded.len() as u64,
         }
-    }
-
-    /// Sort downloaded blocks by height
-    fn sort_downloaded(&mut self) {
-        // Convert to vec, sort, convert back
-        let mut blocks: Vec<_> = self.downloaded.drain(..).collect();
-        blocks.sort_by_key(|b| b.height);
-        self.downloaded = blocks.into_iter().collect();
     }
 }
 

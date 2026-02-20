@@ -154,6 +154,25 @@ pub trait EvmStore: Send + Sync {
     /// A vector of (address, account) tuples ordered by address.
     fn get_all_accounts(&self) -> EvmStoreResult<Vec<([u8; 20], EvmAccount)>>;
 
+    /// Get accounts within an address range.
+    ///
+    /// Returns up to `max` accounts in the range [start, limit), ordered by address.
+    /// Uses cursor-based iteration for efficiency with large databases.
+    ///
+    /// # Arguments
+    /// * `start` - Start address (inclusive)
+    /// * `limit` - Limit address (exclusive)
+    /// * `max` - Maximum number of accounts to return
+    ///
+    /// # Returns
+    /// A vector of (address, account) tuples ordered by address.
+    fn get_accounts_in_range(
+        &self,
+        start: &[u8; 20],
+        limit: &[u8; 20],
+        max: usize,
+    ) -> EvmStoreResult<Vec<([u8; 20], EvmAccount)>>;
+
     /// Get all storage slots for a specific address.
     ///
     /// Returns all storage slots stored for the given address, ordered by slot.

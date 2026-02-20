@@ -20,6 +20,7 @@
 
 use crate::config::SyncConfig as NodeSyncConfig;
 use crate::sync_network::SyncNetworkAdapter;
+use cipherbft_storage::evm::EvmStore;
 use cipherbft_sync::protocol::{
     AccountRangeResponse, BlockRangeRequest, BlockRangeResponse, SnapSyncMessage,
     StorageRangeResponse,
@@ -131,6 +132,7 @@ impl<T> InFlightRequest<T> {
 ///     local_tip,
 ///     network_tip,
 ///     &config,
+///     Some(&evm_store),
 /// ).await;
 ///
 /// match result {
@@ -154,6 +156,97 @@ pub async fn run_snap_sync(
     local_tip: u64,
     network_tip: u64,
     config: &NodeSyncConfig,
+    evm_store: Option<&dyn EvmStore>,
+) -> SyncResult {
+    // Run all sync phases (discovery, accounts, storage, block download)
+    let result = run_sync_phases(manager, network, local_tip, network_tip, config, evm_store).await;
+
+    // Mark sync as complete (clears syncers) only on success
+    if let SyncResult::Completed { .. } = &result {
+        if let Err(e) = manager.complete_sync() {
+            return SyncResult::Failed {
+                error: format!("failed to complete sync: {}", e),
+            };
+        }
+    }
+
+    result
+}
+
+/// Run snap sync with a provided executor for block execution
+///
+/// This is the full-featured version that includes block execution.
+pub async fn run_snap_sync_with_executor<E: SyncExecutor>(
+    manager: &mut StateSyncManager,
+    network: &mut SyncNetworkAdapter,
+    executor: Arc<E>,
+    local_tip: u64,
+    network_tip: u64,
+    config: &NodeSyncConfig,
+    evm_store: Option<&dyn EvmStore>,
+) -> SyncResult {
+    // Run all sync phases WITHOUT calling complete_sync() so block_syncer is preserved
+    let result = run_sync_phases(manager, network, local_tip, network_tip, config, evm_store).await;
+
+    // If download phases completed, run execution before cleanup
+    if let SyncResult::Completed {
+        final_height,
+        duration,
+    } = &result
+    {
+        // Block syncer is still alive here — check if execution is needed
+        let needs_execution = manager.block_syncer_mut().is_some_and(|s| !s.is_complete());
+
+        if needs_execution {
+            if let Err(e) = run_block_execution_phase(manager, executor).await {
+                return SyncResult::Failed {
+                    error: format!("block execution failed: {}", e),
+                };
+            }
+
+            // Grab final height before complete_sync clears syncers
+            let executed_height = manager
+                .block_syncer_mut()
+                .map(|s| s.stats().executed_up_to)
+                .unwrap_or(*final_height);
+
+            if let Err(e) = manager.complete_sync() {
+                return SyncResult::Failed {
+                    error: format!("failed to complete sync: {}", e),
+                };
+            }
+
+            return SyncResult::Completed {
+                final_height: executed_height,
+                duration: *duration,
+            };
+        }
+
+        // No execution needed — complete sync
+        if let Err(e) = manager.complete_sync() {
+            return SyncResult::Failed {
+                error: format!("failed to complete sync: {}", e),
+            };
+        }
+
+        return SyncResult::Completed {
+            final_height: *final_height,
+            duration: *duration,
+        };
+    }
+
+    result
+}
+
+/// Internal: Run all sync phases (discovery, account, storage, block download)
+/// without calling complete_sync(). This preserves block_syncer for execution.
+async fn run_sync_phases(
+    manager: &mut StateSyncManager,
+    network: &mut SyncNetworkAdapter,
+    local_tip: u64,
+    network_tip: u64,
+    config: &NodeSyncConfig,
+    evm_store: Option<&dyn EvmStore>,
 ) -> SyncResult {
     // Check if snap sync is enabled
     if !config.snap_sync_enabled {
@@ -241,11 +334,15 @@ pub async fn run_snap_sync(
         };
     }
 
-    // Verify state root
-    if let Err(e) = manager.verify_state_root() {
-        return SyncResult::Failed {
-            error: format!("state root verification failed: {}", e),
-        };
+    // Verify state root against downloaded state
+    if let Some(store) = evm_store {
+        if let Err(e) = manager.verify_state_root(store) {
+            return SyncResult::Failed {
+                error: format!("state root verification failed: {}", e),
+            };
+        }
+    } else {
+        warn!("No EVM store provided, skipping state root verification");
     }
 
     // Start block sync
@@ -269,19 +366,10 @@ pub async fn run_snap_sync(
         };
     }
 
-    // Phase 4: Block sync - download and execute remaining blocks
-    // Note: This phase requires a SyncExecutor which should be passed in
-    // For now, we just download the blocks; execution is handled separately
+    // Phase 4: Block download (execution handled separately by caller)
     if let Err(e) = run_block_download_phase(manager, network, config).await {
         return SyncResult::Failed {
             error: format!("block sync failed: {}", e),
-        };
-    }
-
-    // Mark sync as complete
-    if let Err(e) = manager.complete_sync() {
-        return SyncResult::Failed {
-            error: format!("failed to complete sync: {}", e),
         };
     }
 
@@ -294,64 +382,13 @@ pub async fn run_snap_sync(
     info!(
         final_height,
         duration_secs = duration.as_secs(),
-        "Snap sync completed successfully"
+        "Snap sync phases completed successfully"
     );
 
     SyncResult::Completed {
         final_height,
         duration,
     }
-}
-
-/// Run snap sync with a provided executor for block execution
-///
-/// This is the full-featured version that includes block execution.
-pub async fn run_snap_sync_with_executor<E: SyncExecutor>(
-    manager: &mut StateSyncManager,
-    network: &mut SyncNetworkAdapter,
-    executor: Arc<E>,
-    local_tip: u64,
-    network_tip: u64,
-    config: &NodeSyncConfig,
-) -> SyncResult {
-    // Run the main sync phases (discovery, accounts, storage)
-    let result = run_snap_sync(manager, network, local_tip, network_tip, config).await;
-
-    // If we completed with blocks to execute, run the execution phase
-    if let SyncResult::Completed {
-        final_height,
-        duration,
-    } = &result
-    {
-        // Check if block syncer exists and has blocks
-        let needs_execution = manager.block_syncer_mut().is_some_and(|s| !s.is_complete());
-
-        if needs_execution {
-            if let Err(e) = run_block_execution_phase(manager, executor).await {
-                return SyncResult::Failed {
-                    error: format!("block execution failed: {}", e),
-                };
-            }
-
-            // Update final height after execution
-            let executed_height = manager
-                .block_syncer_mut()
-                .map(|s| s.stats().executed_up_to)
-                .unwrap_or(*final_height);
-
-            return SyncResult::Completed {
-                final_height: executed_height,
-                duration: *duration,
-            };
-        }
-
-        return SyncResult::Completed {
-            final_height: *final_height,
-            duration: *duration,
-        };
-    }
-
-    result
 }
 
 /// Check if snap sync is needed for the current node state
@@ -1206,7 +1243,7 @@ mod tests {
         let mut manager = create_sync_manager(&config);
         let (mut adapter, _tx, _rx) = crate::sync_network::create_sync_adapter();
 
-        let result = run_snap_sync(&mut manager, &mut adapter, 0, 100000, &config).await;
+        let result = run_snap_sync(&mut manager, &mut adapter, 0, 100000, &config, None).await;
 
         assert!(matches!(result, SyncResult::Skipped { .. }));
     }
@@ -1217,7 +1254,7 @@ mod tests {
         let mut manager = create_sync_manager(&config);
         let (mut adapter, _tx, _rx) = crate::sync_network::create_sync_adapter();
 
-        let result = run_snap_sync(&mut manager, &mut adapter, 9900, 10000, &config).await;
+        let result = run_snap_sync(&mut manager, &mut adapter, 9900, 10000, &config, None).await;
 
         assert!(matches!(result, SyncResult::Skipped { .. }));
     }

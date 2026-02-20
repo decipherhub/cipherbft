@@ -114,7 +114,7 @@ where
             .reset_inactive_peers_scores(inactive_threshold);
     }
 
-    // Clear stale pending requests that have timed out
+    // CIPHERBFT: Clear stale pending requests (also clears validated ones as safety net)
     let cleared_count = state.clear_stale_pending_requests();
     if cleared_count > 0 {
         warn!(
@@ -124,7 +124,7 @@ where
             "SYNC STALE CLEANUP: Cleared timed-out pending requests"
         );
 
-        // After clearing stale requests, check if we need to skip ahead
+        // CIPHERBFT: After clearing stale requests, check if we need to skip ahead
         // because peers can't serve the heights we're requesting
         if let Some((skip_to, skip_peer)) = state.find_earliest_syncable_height(state.sync_height) {
             if skip_to > state.sync_height {
@@ -132,7 +132,8 @@ where
                     height.current = %state.sync_height,
                     height.skip_to = %skip_to,
                     peer = %skip_peer,
-                    "SYNC SKIP AFTER CLEANUP: Peers cannot serve old heights, jumping to earliest available"
+                    "SYNC HISTORY LOST: Skipping heights {}..{} after stale cleanup, these blocks will not be synced",
+                    state.sync_height, skip_to
                 );
 
                 state.sync_height = skip_to;
@@ -179,7 +180,7 @@ where
             "SYNC REQUIRED: Falling behind"
         );
 
-        // Check if tip-first sync should be triggered now that we have peer info
+        // CIPHERBFT: Check if tip-first sync should be triggered now that we have peer info
         // Only trigger if we're significantly behind and haven't already jumped
         if state.config.tip_first_sync {
             if let Some((skip_to, skip_peer)) =
@@ -191,7 +192,8 @@ where
                     height.network_tip = ?state.get_network_tip(),
                     buffer = state.config.tip_first_buffer,
                     peer = %skip_peer,
-                    "TIP-FIRST SYNC: Skipping to near network tip for fast consensus participation"
+                    "SYNC HISTORY LOST: Tip-first sync skipping heights {}..{}, these blocks will not be synced",
+                    state.sync_height, skip_to
                 );
 
                 state.sync_height = skip_to;
@@ -230,7 +232,7 @@ where
     state.started = true;
     state.tip_height = tip_height;
 
-    // Check if tip-first sync is enabled and applicable
+    // CIPHERBFT: Check if tip-first sync is enabled and applicable
     if state.config.tip_first_sync && !state.peers.is_empty() {
         if let Some((skip_to, peer)) =
             state.calculate_tip_first_start(height, state.config.tip_first_buffer)
@@ -241,7 +243,8 @@ where
                 height.network_tip = ?state.get_network_tip(),
                 buffer = state.config.tip_first_buffer,
                 peer = %peer,
-                "TIP-FIRST SYNC: Skipping to near network tip for fast consensus participation"
+                "SYNC HISTORY LOST: Tip-first sync skipping heights {}..{} on start, these blocks will not be synced",
+                height, skip_to
             );
 
             state.sync_height = skip_to;
@@ -276,8 +279,8 @@ where
 {
     debug!(height.tip = %height, "Decided value, removing pending request");
 
-    // Remove the pending request immediately - it's been validated by consensus
-    // This frees the slot for new parallel sync requests
+    // CIPHERBFT: Remove the pending request immediately - it's been validated by consensus.
+    // This frees the slot for new parallel sync requests (upstream only called validate_response).
     state.remove_pending_request_by_height(&height);
 
     Ok(())
@@ -372,6 +375,7 @@ where
                         %height,
                         "No other peer can serve height, checking if we should skip ahead"
                     );
+                    // CIPHERBFT: Skip ahead when no peer can serve this height
                     if let Some((skip_to, skip_peer)) = state.find_earliest_syncable_height(height)
                     {
                         if skip_to > height {
@@ -379,7 +383,8 @@ where
                                 height.current = %height,
                                 height.skip_to = %skip_to,
                                 peer = %skip_peer,
-                                "SYNC SKIP ON FAILURE: Skipping to height that peers can actually serve"
+                                "SYNC HISTORY LOST: Skipping heights {}..{} on empty response, these blocks will not be synced",
+                                height, skip_to
                             );
 
                             state.sync_height = skip_to;
@@ -451,13 +456,15 @@ where
                     %height,
                     "No other peer can serve height after failure, checking if we should skip ahead"
                 );
+                // CIPHERBFT: Skip ahead when no peer can serve this height after failure
                 if let Some((skip_to, skip_peer)) = state.find_earliest_syncable_height(height) {
                     if skip_to > height {
                         warn!(
                             height.current = %height,
                             height.skip_to = %skip_to,
                             peer = %skip_peer,
-                            "SYNC SKIP ON FAILURE: Skipping to height that peers can actually serve"
+                            "SYNC HISTORY LOST: Skipping heights {}..{} on invalid response, these blocks will not be synced",
+                            height, skip_to
                         );
 
                         state.sync_height = skip_to;
@@ -633,7 +640,7 @@ where
         debug!(height.sync = %DisplayRange(state.sync_height, height.decrement().unwrap_or_default()), "Already have a pending request or validation for these heights");
     }
 
-    // Log if we're blocked by pending requests
+    // CIPHERBFT: Log if we're blocked by pending requests
     if height >= limit {
         warn!(
             height.sync = %state.sync_height,
@@ -662,14 +669,13 @@ where
                 );
             }
 
-            // No peer can serve this height - check if we need to skip ahead
+            // CIPHERBFT: No peer can serve this height - check if we need to skip ahead
             if let Some((skip_to_height, skip_peer)) = state.find_earliest_syncable_height(height) {
                 warn!(
                     height.current = %height,
                     height.skip_to = %skip_to_height,
                     peer = %skip_peer,
-                    "SYNC SKIP: No peer has height {} in their history. \
-                     Peers have pruned old blocks. Jumping to earliest available height {}.",
+                    "SYNC HISTORY LOST: Skipping heights {}..{}, no peer has these blocks in history",
                     height,
                     skip_to_height
                 );

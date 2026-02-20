@@ -9,7 +9,7 @@ use alloy_trie::{proof::verify_proof as trie_verify_proof, Nibbles, EMPTY_ROOT_H
 /// RLP-encoded account for trie verification.
 /// This matches Ethereum's account encoding in the state trie.
 #[derive(alloy_rlp::RlpEncodable)]
-struct RlpAccount {
+pub(crate) struct RlpAccount {
     nonce: u64,
     balance: alloy_primitives::U256,
     storage_root: B256,

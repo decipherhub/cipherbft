@@ -125,14 +125,13 @@ impl<B: BlockStore + Send + Sync> SyncExecutor for ExecutionBridgeSyncExecutor<B
                 }
             }
             None => {
-                // Block not found - this is expected during sync before blocks are stored
-                // Return true to allow sync to proceed, actual verification happens
-                // when we reconstruct state
-                debug!(
+                // Block not found - cannot verify without the block
+                warn!(
                     height,
-                    "Block not found for state root verification (expected during sync)"
+                    %expected,
+                    "Block not found for state root verification, returning false"
                 );
-                Ok(true)
+                Ok(false)
             }
         }
     }

@@ -10,7 +10,9 @@ use crate::protocol::StatusResponse;
 use crate::snap::accounts::AccountRangeSyncer;
 use crate::snap::storage::StorageRangeSyncer;
 use crate::snapshot::{SnapshotAgreement, StateSnapshot};
-use alloy_primitives::B256;
+use alloy_primitives::{Address, B256, U256};
+use cipherbft_execution::{compute_state_root_from_entries, rlp_encode_account};
+use cipherbft_storage::evm::EvmStore;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
@@ -248,13 +250,8 @@ impl StateSyncManager {
             "Starting storage sync for accounts"
         );
 
-        // Create storage syncer with accounts that need storage
-        let storage_accounts: Vec<_> = accounts_with_storage
-            .into_iter()
-            .map(|addr| (addr, B256::ZERO)) // TODO: track actual storage roots
-            .collect();
-
-        self.storage_syncer = Some(StorageRangeSyncer::new(snapshot, storage_accounts));
+        // Create storage syncer with accounts and their actual storage roots
+        self.storage_syncer = Some(StorageRangeSyncer::new(snapshot, accounts_with_storage));
         self.progress
             .set_phase(SyncPhase::SnapSync(SnapSubPhase::Storage))?;
 
@@ -266,11 +263,54 @@ impl StateSyncManager {
         self.storage_syncer.as_ref().is_none_or(|s| s.is_complete())
     }
 
-    /// Verify final state root
-    pub fn verify_state_root(&self) -> Result<()> {
-        // TODO: Compute actual state root from downloaded state and compare
-        // For now, assume verification passes
-        info!("State root verification passed");
+    /// Verify final state root by computing a Merkle Patricia Trie from all
+    /// accounts in the store and comparing against the target snapshot root.
+    ///
+    /// This is the critical integrity check that catches any data corruption
+    /// or malicious peer behavior during snap sync.
+    pub fn verify_state_root(&self, store: &dyn EvmStore) -> Result<()> {
+        let snapshot = self
+            .target_snapshot
+            .as_ref()
+            .ok_or_else(|| SyncError::InvalidState("no target snapshot".into()))?;
+
+        info!(target_root = %snapshot.state_root, "Verifying state root");
+
+        // Load all accounts from the store
+        let accounts = store
+            .get_all_accounts()
+            .map_err(|e| SyncError::Storage(format!("failed to load accounts: {}", e)))?;
+
+        // Build (Address, rlp_encoded_account) entries for trie computation
+        let entries: Vec<(Address, Vec<u8>)> = accounts
+            .iter()
+            .map(|(addr_bytes, account)| {
+                let address = Address::from(*addr_bytes);
+                let encoded = rlp_encode_account(
+                    account.nonce,
+                    U256::from_be_bytes(account.balance),
+                    B256::from(account.storage_root),
+                    B256::from(account.code_hash),
+                );
+                (address, encoded)
+            })
+            .collect();
+
+        // Compute the state root from all accounts using MPT
+        let computed = compute_state_root_from_entries(&entries);
+
+        if computed != snapshot.state_root {
+            return Err(SyncError::StateRootMismatch {
+                expected: snapshot.state_root,
+                actual: computed,
+            });
+        }
+
+        info!(
+            state_root = %snapshot.state_root,
+            accounts = entries.len(),
+            "State root verification passed"
+        );
         Ok(())
     }
 

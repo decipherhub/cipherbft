@@ -6,7 +6,7 @@ use crate::error::Result;
 use crate::protocol::{AccountRangeRequest, AccountRangeResponse, MAX_ACCOUNTS_PER_RESPONSE};
 use crate::snap::verify::verify_account_range_proof;
 use crate::snapshot::StateSnapshot;
-use alloy_primitives::Address;
+use alloy_primitives::{Address, B256, U256};
 use alloy_trie::EMPTY_ROOT_HASH;
 
 /// Number of parallel address ranges to download
@@ -24,22 +24,23 @@ pub struct PendingRange {
 }
 
 impl PendingRange {
-    /// Create initial ranges covering the full address space
+    /// Create initial ranges covering the full 160-bit address space
     pub fn initial_ranges() -> Vec<Self> {
         let mut ranges = Vec::with_capacity(PARALLEL_RANGES);
-        let step = u128::MAX / PARALLEL_RANGES as u128;
+        // Full 160-bit address space: 2^160
+        let address_space = U256::from(1) << 160;
+        let step = address_space / U256::from(PARALLEL_RANGES);
 
         for i in 0..PARALLEL_RANGES {
-            let start_val = step * i as u128;
+            let start_val = step * U256::from(i);
             let end_val = if i == PARALLEL_RANGES - 1 {
-                u128::MAX
+                address_space - U256::from(1) // Max address: 0xFF..FF (20 bytes)
             } else {
-                step * (i + 1) as u128
+                step * U256::from(i + 1)
             };
 
-            // Convert u128 to Address (use lower 16 bytes, padded)
-            let start = address_from_u128(start_val);
-            let end = address_from_u128(end_val);
+            let start = address_from_u256(start_val);
+            let end = address_from_u256(end_val);
 
             ranges.push(PendingRange {
                 start,
@@ -74,8 +75,8 @@ pub struct AccountRangeSyncer {
     snapshot: StateSnapshot,
     /// Pending ranges to download
     pending: Vec<PendingRange>,
-    /// Accounts that need storage downloaded
-    accounts_with_storage: Vec<Address>,
+    /// Accounts that need storage downloaded (address, storage_root)
+    accounts_with_storage: Vec<(Address, B256)>,
     /// Total accounts downloaded
     total_accounts: u64,
     /// Total bytes downloaded
@@ -153,10 +154,11 @@ impl AccountRangeSyncer {
         // Verify the proof with the actual range start address
         self.verify_account_proof(&range, &response)?;
 
-        // Track accounts with storage
+        // Track accounts with non-empty storage (preserve their storage root)
         for account in &response.accounts {
             if account.storage_root != EMPTY_ROOT_HASH {
-                self.accounts_with_storage.push(account.address);
+                self.accounts_with_storage
+                    .push((account.address, account.storage_root));
             }
         }
 
@@ -166,13 +168,14 @@ impl AccountRangeSyncer {
         // If more accounts exist, add continuation range
         if response.more {
             if let Some(last) = response.accounts.last() {
-                // Next range starts after last account
-                let next_start = increment_address(last.address);
-                self.pending.push(PendingRange {
-                    start: next_start,
-                    end: range.end,
-                    retries: 0,
-                });
+                // Next range starts after last account (None means we hit max address)
+                if let Some(next_start) = increment_address(last.address) {
+                    self.pending.push(PendingRange {
+                        start: next_start,
+                        end: range.end,
+                        retries: 0,
+                    });
+                }
             }
         }
 
@@ -210,8 +213,8 @@ impl AccountRangeSyncer {
         )
     }
 
-    /// Get accounts that need storage downloaded
-    pub fn accounts_needing_storage(&self) -> &[Address] {
+    /// Get accounts that need storage downloaded (address, storage_root)
+    pub fn accounts_needing_storage(&self) -> &[(Address, B256)] {
         &self.accounts_with_storage
     }
 
@@ -223,11 +226,11 @@ impl AccountRangeSyncer {
 
 // Helper functions
 
-fn address_from_u128(val: u128) -> Address {
-    let bytes = val.to_be_bytes();
+fn address_from_u256(val: U256) -> Address {
+    let be_bytes: [u8; 32] = val.to_be_bytes();
+    // Take the last 20 bytes (address is rightmost 160 bits)
     let mut addr_bytes = [0u8; 20];
-    // Use the lower 16 bytes, padded
-    addr_bytes[4..20].copy_from_slice(&bytes);
+    addr_bytes.copy_from_slice(&be_bytes[12..32]);
     Address::from(addr_bytes)
 }
 
@@ -247,16 +250,16 @@ fn midpoint_address(start: &Address, end: &Address) -> Address {
     Address::from(mid_bytes)
 }
 
-fn increment_address(addr: Address) -> Address {
+fn increment_address(addr: Address) -> Option<Address> {
     let mut bytes = addr.0;
     for i in (0..20).rev() {
         if bytes[i] < 255 {
             bytes[i] += 1;
-            break;
+            return Some(Address::from(bytes));
         }
         bytes[i] = 0;
     }
-    Address::from(bytes)
+    None // Overflow: already at max address
 }
 
 fn estimate_response_size(response: &AccountRangeResponse) -> u64 {
@@ -307,11 +310,11 @@ mod tests {
     #[test]
     fn test_increment_address() {
         let addr = Address::ZERO;
-        let next = increment_address(addr);
+        let next = increment_address(addr).unwrap();
         assert_eq!(next.0[19], 1);
 
         let addr = Address::repeat_byte(0xff);
         let next = increment_address(addr);
-        assert_eq!(next, Address::ZERO); // Overflow wraps
+        assert_eq!(next, None); // Overflow returns None
     }
 }

@@ -174,43 +174,43 @@ where
         // Cap the number of accounts to return
         let max_accounts = req.max_accounts.min(MAX_ACCOUNTS_PER_RESPONSE) as usize;
 
-        // Get all accounts from storage and filter by range
-        // Note: This is a simplified implementation. A production version would
-        // use cursor-based iteration with seek to the start address.
-        let accounts_result = self.evm_store.get_all_accounts();
+        // Get accounts in range using cursor-based iteration (avoids loading all accounts)
+        // NOTE: Accounts are ordered by raw address bytes. Ethereum state tries order by
+        // keccak256(address). This ordering mismatch means range proofs cannot be generated
+        // correctly until the server is updated to use keccak256-ordered storage.
+        let start_bytes: [u8; 20] = req.start_address.into();
+        let limit_bytes: [u8; 20] = req.limit_address.into();
 
-        let (accounts, more) = match accounts_result {
-            Ok(all_accounts) => {
-                let start_bytes: [u8; 20] = req.start_address.into();
-                let limit_bytes: [u8; 20] = req.limit_address.into();
+        let (accounts, more) =
+            match self
+                .evm_store
+                .get_accounts_in_range(&start_bytes, &limit_bytes, max_accounts + 1)
+            {
+                Ok(range_accounts) => {
+                    let mut filtered: Vec<AccountData> = range_accounts
+                        .into_iter()
+                        .map(|(addr, account)| AccountData {
+                            address: Address::from(addr),
+                            nonce: account.nonce,
+                            balance: U256::from_be_bytes(account.balance),
+                            code_hash: B256::from(account.code_hash),
+                            storage_root: B256::from(account.storage_root),
+                        })
+                        .collect();
 
-                // Filter accounts within the range
-                let mut filtered: Vec<AccountData> = all_accounts
-                    .into_iter()
-                    .filter(|(addr, _)| *addr >= start_bytes && *addr < limit_bytes)
-                    .take(max_accounts + 1) // Take one extra to check if there's more
-                    .map(|(addr, account)| AccountData {
-                        address: Address::from(addr),
-                        nonce: account.nonce,
-                        balance: U256::from_be_bytes(account.balance),
-                        code_hash: B256::from(account.code_hash),
-                        storage_root: B256::from(account.storage_root),
-                    })
-                    .collect();
+                    // Check if there are more accounts
+                    let more = filtered.len() > max_accounts;
+                    if more {
+                        filtered.pop(); // Remove the extra account
+                    }
 
-                // Check if there are more accounts
-                let more = filtered.len() > max_accounts;
-                if more {
-                    filtered.pop(); // Remove the extra account
+                    (filtered, more)
                 }
-
-                (filtered, more)
-            }
-            Err(e) => {
-                warn!("Failed to get accounts: {}", e);
-                (Vec::new(), false)
-            }
-        };
+                Err(e) => {
+                    warn!("Failed to get accounts in range: {}", e);
+                    (Vec::new(), false)
+                }
+            };
 
         debug!(
             accounts_returned = accounts.len(),
@@ -553,6 +553,22 @@ mod tests {
                 .map(|((_, slot), value)| (*slot, *value))
                 .collect();
             result.sort_by_key(|(k, _)| *k);
+            Ok(result)
+        }
+
+        fn get_accounts_in_range(
+            &self,
+            start: &[u8; 20],
+            limit: &[u8; 20],
+            max: usize,
+        ) -> EvmStoreResult<Vec<([u8; 20], EvmAccount)>> {
+            let accounts = self.accounts.read().unwrap();
+            let result: Vec<_> = accounts
+                .iter()
+                .filter(|(addr, _)| **addr >= *start && **addr < *limit)
+                .take(max)
+                .map(|(k, v)| (*k, v.clone()))
+                .collect();
             Ok(result)
         }
 
