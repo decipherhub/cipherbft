@@ -18,20 +18,26 @@ pub struct ValidatorPriority {
     pub priority: i64,
 }
 
+/// All mutable state for the proposer selector, protected by a single lock.
+#[derive(Clone, Debug)]
+struct ProposerState {
+    /// Current priority state for all validators
+    priorities: Vec<ValidatorPriority>,
+    /// Total voting power (cached)
+    total_voting_power: u64,
+    /// Last (height, round) where priorities were synchronized
+    last_synced: (ConsensusHeight, Round),
+    /// Proposer from the last advance (for idempotent queries)
+    last_proposer: Option<ConsensusAddress>,
+}
+
 /// Manages proposer selection using Tendermint's weighted round-robin algorithm.
 ///
 /// Priority accumulates across heights, ensuring fair proposer distribution
 /// proportional to voting power over time.
 #[derive(Debug)]
 pub struct ProposerSelector {
-    /// Current priority state for all validators
-    priorities: RwLock<Vec<ValidatorPriority>>,
-    /// Total voting power (cached)
-    total_voting_power: RwLock<u64>,
-    /// Last (height, round) where priorities were synchronized
-    last_synced: RwLock<(ConsensusHeight, Round)>,
-    /// Proposer from the last advance (for idempotent queries)
-    last_proposer: RwLock<Option<ConsensusAddress>>,
+    state: RwLock<ProposerState>,
 }
 
 impl ProposerSelector {
@@ -52,10 +58,12 @@ impl ProposerSelector {
         let total_voting_power: u64 = priorities.iter().map(|p| p.voting_power).sum();
 
         Self {
-            priorities: RwLock::new(priorities),
-            total_voting_power: RwLock::new(total_voting_power),
-            last_synced: RwLock::new((initial_height, Round::Nil)),
-            last_proposer: RwLock::new(None),
+            state: RwLock::new(ProposerState {
+                priorities,
+                total_voting_power,
+                last_synced: (initial_height, Round::Nil),
+                last_proposer: None,
+            }),
         }
     }
 
@@ -74,18 +82,15 @@ impl ProposerSelector {
         height: ConsensusHeight,
         round: Round,
     ) -> &'a ConsensusValidator {
-        let mut priorities = self.priorities.write();
-        let total_power = *self.total_voting_power.read();
-        let mut last_synced = self.last_synced.write();
-        let mut last_proposer = self.last_proposer.write();
+        let mut state = self.state.write();
 
-        let (last_height, last_round) = *last_synced;
+        let (last_height, last_round) = state.last_synced;
 
         // Calculate total advances needed from last synced point to (height, round).
         // If this is the first call (last_synced is at initial_height with Nil round),
         // we compute advances from GENESIS (height 1, Nil) to ensure all nodes get
         // the same result regardless of their starting height.
-        let advances = if last_round == Round::Nil && last_proposer.is_none() {
+        let advances = if last_round == Round::Nil && state.last_proposer.is_none() {
             // First call: compute absolute advances from genesis
             Self::compute_advances(ConsensusHeight(1), Round::Nil, height, round)
         } else {
@@ -95,22 +100,25 @@ impl ProposerSelector {
 
         // Track the proposer from advances (the proposer is determined DURING advance,
         // not after, because advance_one_round penalizes the proposer)
+        let total_power = state.total_voting_power;
         let mut proposer_addr = None;
         for _ in 0..advances {
-            proposer_addr = Self::advance_one_round(&mut priorities, total_power);
+            proposer_addr = Self::advance_one_round(&mut state.priorities, total_power);
         }
 
         // If no advances needed, use the cached last_proposer (idempotent query)
         let proposer_addr = if advances == 0 {
-            last_proposer.expect("last_proposer should be set after first advance")
+            state
+                .last_proposer
+                .expect("last_proposer should be set after first advance")
         } else {
             let addr = proposer_addr.expect("should have proposer after advances");
-            *last_proposer = Some(addr);
+            state.last_proposer = Some(addr);
             addr
         };
 
         // Update sync point
-        *last_synced = (height, round);
+        state.last_synced = (height, round);
 
         // Return reference from the validator set
         validator_set
@@ -158,6 +166,13 @@ impl ProposerSelector {
         // Different heights:
         // Each height transition counts as one advance, plus any rounds within the target height.
         // Example: (1,0) -> (2,0) = 1 advance, (1,0) -> (2,1) = 2 advances, (1,0) -> (3,0) = 2 advances
+        //
+        // NOTE: The `from_round` is intentionally ignored when crossing heights. This is because
+        // each height transition counts as exactly one "commit advance" regardless of which round
+        // decided the previous height. This matches Tendermint's model where priority advances
+        // once per decided height, not once per round. In normal consensus flow, `select_proposer`
+        // is called sequentially for each round the node observes, so the from_round contribution
+        // is already captured in the `last_synced` state from the final round of the previous height.
         //
         // IMPORTANT: When starting from Round::Nil, we need to add 1 for the "unspent" round 0
         // at the source height. Nil means "before any round", so we need to advance once to get
@@ -210,7 +225,12 @@ impl ProposerSelector {
 
     /// Center priorities around zero to prevent overflow.
     pub fn center_priorities(&self) {
-        let mut priorities = self.priorities.write();
+        let mut state = self.state.write();
+        Self::center_priorities_inner(&mut state.priorities);
+    }
+
+    /// Center priorities (operates on the vec directly, no locking).
+    fn center_priorities_inner(priorities: &mut [ValidatorPriority]) {
         if priorities.is_empty() {
             return;
         }
@@ -224,10 +244,16 @@ impl ProposerSelector {
     }
 
     /// Scale priorities if range exceeds 2 * total_voting_power.
+    ///
+    /// Uses integer arithmetic (i128 intermediates) for cross-platform determinism.
     pub fn scale_if_needed(&self) {
-        let mut priorities = self.priorities.write();
-        let total_power = *self.total_voting_power.read();
+        let mut state = self.state.write();
+        let total_power = state.total_voting_power;
+        Self::scale_if_needed_inner(&mut state.priorities, total_power);
+    }
 
+    /// Scale priorities (operates on the vec directly, no locking).
+    fn scale_if_needed_inner(priorities: &mut [ValidatorPriority], total_power: u64) {
         if priorities.is_empty() || total_power == 0 {
             return;
         }
@@ -238,19 +264,20 @@ impl ProposerSelector {
         let range = max.saturating_sub(min);
 
         if range > limit {
-            let scale = limit as f64 / range as f64;
+            // Use i128 intermediate to avoid overflow and ensure determinism across platforms
             for p in priorities.iter_mut() {
-                p.priority = (p.priority as f64 * scale) as i64;
+                p.priority = (p.priority as i128 * limit as i128 / range as i128) as i64;
             }
         }
     }
 
     /// Handle validator set changes at epoch boundaries.
+    ///
+    /// Uses integer arithmetic for deterministic scaling across platforms.
     pub fn update_validator_set(&self, new_validator_set: &ConsensusValidatorSet) {
-        let mut priorities = self.priorities.write();
-        let mut total_power = self.total_voting_power.write();
+        let mut state = self.state.write();
 
-        let old_total = *total_power;
+        let old_total = state.total_voting_power;
         let new_total: u64 = new_validator_set
             .as_slice()
             .iter()
@@ -260,19 +287,23 @@ impl ProposerSelector {
         let mut new_priorities = Vec::with_capacity(new_validator_set.len());
 
         for validator in new_validator_set.as_slice() {
-            let existing = priorities.iter().find(|p| p.address == validator.address);
+            let existing = state
+                .priorities
+                .iter()
+                .find(|p| p.address == validator.address);
 
             let priority = if let Some(existing) = existing {
-                // Scale existing priority for power ratio change
+                // Scale existing priority for power ratio change using i128 to avoid overflow
                 if old_total > 0 {
-                    let scale = new_total as f64 / old_total as f64;
-                    (existing.priority as f64 * scale) as i64
+                    (existing.priority as i128 * new_total as i128 / old_total as i128) as i64
                 } else {
                     existing.priority
                 }
             } else {
-                // New validator: penalty to prevent gaming
-                (-1.125 * new_total as f64) as i64
+                // New validator: penalty of -1.125 * total to prevent gaming.
+                // -1.125 = -(1 + 1/8), computed with integer arithmetic for determinism.
+                let total = new_total as i64;
+                -(total + total / 8)
             };
 
             new_priorities.push(ValidatorPriority {
@@ -282,24 +313,20 @@ impl ProposerSelector {
             });
         }
 
-        *priorities = new_priorities;
-        *total_power = new_total;
+        state.priorities = new_priorities;
+        state.total_voting_power = new_total;
 
-        // Center and scale after update (must release locks first)
-        drop(priorities);
-        drop(total_power);
-        self.center_priorities();
-        self.scale_if_needed();
+        // Center and scale within the same lock guard (no race window)
+        Self::center_priorities_inner(&mut state.priorities);
+        let total_power = state.total_voting_power;
+        Self::scale_if_needed_inner(&mut state.priorities, total_power);
     }
 }
 
 impl Clone for ProposerSelector {
     fn clone(&self) -> Self {
         Self {
-            priorities: RwLock::new(self.priorities.read().clone()),
-            total_voting_power: RwLock::new(*self.total_voting_power.read()),
-            last_synced: RwLock::new(*self.last_synced.read()),
-            last_proposer: RwLock::new(*self.last_proposer.read()),
+            state: RwLock::new(self.state.read().clone()),
         }
     }
 }
