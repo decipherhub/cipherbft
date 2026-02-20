@@ -1048,14 +1048,18 @@ pub async fn spawn_host_actor(
     decision_handler: Arc<dyn DecisionHandler>,
     config: HostConfig,
     span: tracing::Span,
+    proposer_selector: Option<Arc<crate::proposer_selector::ProposerSelector>>,
 ) -> Result<HostRef<CipherBftContext>, ConsensusError> {
-    let host = CipherBftHost::new(
+    let mut host = CipherBftHost::new(
         validator_set_manager.clone(),
         value_builder.clone(),
         decision_handler.clone(),
         config.clone(),
         span.clone(),
     );
+    if let Some(selector) = proposer_selector {
+        host = host.with_proposer_selector(selector);
+    }
 
     let args = HostArgs {
         validator_set_manager,
@@ -1897,7 +1901,8 @@ pub async fn spawn_host(
         warn!("Host: DCL cut receiver closed");
     });
 
-    // Spawn host actor
+    // Spawn host actor with proposer selector from context
+    let proposer_selector = Some(ctx.proposer_selector().clone());
     let span = tracing::info_span!("CipherBftHost");
     let host_ref = spawn_host_actor(
         validator_set_manager,
@@ -1905,11 +1910,12 @@ pub async fn spawn_host(
         decision_handler as Arc<dyn DecisionHandler>,
         config,
         span,
+        proposer_selector,
     )
     .await
     .map_err(|e| anyhow::anyhow!("Failed to spawn host: {}", e))?;
 
-    info!("Host actor spawned (backward-compatible mode)");
+    info!("Host actor spawned with proposer selector");
     Ok(host_ref)
 }
 
