@@ -2,11 +2,31 @@
 
 ## Changelog
 
-* 2025-12-06: Initial draft
+* 2026-02-01: Added implementation status
+* 2025-12-07: Initial draft
 
 ## Status
 
-PROPOSED Not Implemented
+ACCEPTED Implemented
+
+## Implementation Status
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| Embedded revm | Implemented | `crates/execution/` |
+| Reth crate integration | Implemented | See `Cargo.toml` dependencies |
+| ExecutionEngine trait | Implemented | `crates/execution/src/engine.rs` |
+| EVM Configuration | Implemented | `crates/execution/src/evm_config.rs` |
+| Staking Precompile | Implemented | `crates/execution/src/precompiles/staking.rs` |
+| State Root Calculation | Implemented | `crates/execution/src/state.rs` |
+| Transaction Validation | Implemented | `crates/execution/src/validation.rs` |
+
+### Implementation Notes
+
+- **Reth Version**: Pinned to v1.1.0 for API stability
+- **EVM Fork**: Supports Shanghai fork, Dencun activation configurable
+- **Gas Limit**: Default 30M gas per block, configurable via genesis
+- **State Sync**: Snap sync implemented for fast bootstrap
 
 ## Abstract
 

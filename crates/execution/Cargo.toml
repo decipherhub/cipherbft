@@ -50,6 +50,7 @@ async-trait = "0.1"
 
 # Concurrency
 parking_lot = "0.12"
+rayon = "1.10"
 
 # Logging
 tracing = "0.1"

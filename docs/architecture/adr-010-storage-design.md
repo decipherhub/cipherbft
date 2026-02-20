@@ -2,11 +2,32 @@
 
 ## Changelog
 
+* 2026-02-01: Added implementation status
 * 2025-12-07: Initial draft
 
 ## Status
 
-PROPOSED Not Implemented
+ACCEPTED Implemented
+
+## Implementation Status
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| MDBX Backend | Implemented | `crates/storage/` |
+| EVM State Tables | Implemented | Reth-native tables |
+| Block Tables | Implemented | Reth-native tables |
+| Consensus Tables | Implemented | `crates/storage/src/tables/consensus.rs` |
+| DCL Tables | Implemented | `crates/storage/src/tables/dcl.rs` |
+| WAL | Implemented | `crates/storage/src/wal.rs` |
+| Block Pruning | Implemented | `crates/storage/src/pruning.rs` |
+| Recovery Manager | Implemented | `crates/storage/src/recovery.rs` |
+
+### Implementation Notes
+
+- **Database Path**: `<data-dir>/db/` (MDBX files)
+- **WAL Path**: `<data-dir>/wal/` (separate for crash safety)
+- **Retention**: Default 100,000 blocks before pruning
+- **State Root**: Calculated via `reth-trie` integration
 
 ## Abstract
 

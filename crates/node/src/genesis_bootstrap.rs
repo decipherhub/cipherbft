@@ -227,8 +227,8 @@ impl Default for GenesisGeneratorConfig {
             network_id: "cipherbft-testnet-1".to_string(),
             // 32 CPH = 32 * 10^18 wei = 0x1bc16d674ec80000
             initial_stake: U256::from(32_000_000_000_000_000_000u128),
-            // 100 CPH = 100 * 10^18 wei
-            initial_balance: U256::from(100_000_000_000_000_000_000u128),
+            // 100,000 CPH = 100,000 * 10^18 wei
+            initial_balance: U256::from(100_000_000_000_000_000_000_000u128),
             gas_limit: U256::from(30_000_000u64),
             extra_alloc: Vec::new(),
         }
@@ -497,7 +497,7 @@ impl GenesisGenerator {
     ///     85300,
     ///     "cipherbft-testnet-1",
     ///     32_000_000_000_000_000_000u128.into(),  // 32 CPH
-    ///     100_000_000_000_000_000_000u128.into(), // 100 CPH
+    ///     100_000_000_000_000_000_000_000u128.into(), // 100,000 CPH
     /// )?;
     /// ```
     pub fn generate_from_validator_keys(
@@ -1001,10 +1001,10 @@ mod tests {
             config.initial_stake,
             U256::from(32_000_000_000_000_000_000u128)
         );
-        // 100 CPH in wei
+        // 100,000 CPH in wei
         assert_eq!(
             config.initial_balance,
-            U256::from(100_000_000_000_000_000_000u128)
+            U256::from(100_000_000_000_000_000_000_000u128)
         );
         // 30M gas
         assert_eq!(config.gas_limit, U256::from(30_000_000u64));

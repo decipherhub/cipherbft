@@ -21,32 +21,39 @@ See [ADR-002](./adr-002-evm-native-execution.md) for the complete analysis.
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| [ADR-001](./adr-001-three-layer-architecture.md) | Three-Layer Architecture (DCL/CL/EL) | PROPOSED |
-| [ADR-002](./adr-002-evm-native-execution.md) | EVM-Native Execution with Embedded revm | PROPOSED |
-| [ADR-003](./adr-003-malachite-consensus.md) | Malachite Consensus Integration | PROPOSED |
-| [ADR-004](./adr-004-primary-worker-architecture.md) | Autobahn BFT with Worker Scaling | PROPOSED |
+| [ADR-001](./adr-001-three-layer-architecture.md) | Three-Layer Architecture (DCL/CL/EL) | IMPLEMENTED |
+| [ADR-002](./adr-002-evm-native-execution.md) | EVM-Native Execution with Embedded revm | IMPLEMENTED |
+| [ADR-003](./adr-003-malachite-consensus.md) | Malachite Consensus Integration | IMPLEMENTED |
+| [ADR-004](./adr-004-primary-worker-architecture.md) | Autobahn BFT with Worker Scaling | IMPLEMENTED |
 
 ### Cryptography & Networking
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| [ADR-005](./adr-005-dual-signatures.md) | Dual Signature Scheme (Ed25519 + BLS12-381) | PROPOSED |
-| [ADR-007](./adr-007-p2p-networking.md) | P2P Networking with Malachite | PROPOSED |
+| [ADR-005](./adr-005-dual-signatures.md) | Dual Signature Scheme (Ed25519 + BLS12-381) | IMPLEMENTED |
+| [ADR-007](./adr-007-p2p-networking.md) | P2P Networking with Malachite | IMPLEMENTED |
 
 ### EVM & Storage
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| [ADR-006](./adr-006-mempool-design.md) | Mempool Integration with Reth Transaction Pool | PROPOSED |
-| [ADR-008](./adr-008-json-rpc-interface.md) | JSON-RPC Interface | PROPOSED |
-| [ADR-009](./adr-009-staking-precompile.md) | Staking Precompile | PROPOSED |
-| [ADR-010](./adr-010-storage-design.md) | Storage Design | PROPOSED |
+| [ADR-006](./adr-006-mempool-design.md) | Mempool Integration with Reth Transaction Pool | IMPLEMENTED |
+| [ADR-008](./adr-008-json-rpc-interface.md) | JSON-RPC Interface | IMPLEMENTED |
+| [ADR-009](./adr-009-staking-precompile.md) | Staking Precompile | IMPLEMENTED |
+| [ADR-010](./adr-010-storage-design.md) | Storage Design | IMPLEMENTED |
+| [ADR-012](./adr-012-state-root-handling.md) | State Root Handling and Delayed Commitment | IMPLEMENTED |
 
 ### Operations
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| [ADR-011](./adr-011-configuration-operations.md) | Configuration and Operations | PROPOSED |
+| [ADR-011](./adr-011-configuration-operations.md) | Configuration and Operations | PARTIAL |
+
+### Sync & Performance
+
+| ADR | Title | Status |
+|-----|-------|--------|
+| [ADR-013](./adr-013-commonware-aggregation.md) | Commonware Aggregation for Fast Sync | PROPOSED |
 
 ## Architecture Overview
 
@@ -162,7 +169,7 @@ Pipelining: Collect attestations for height N+1 while consensus runs for height 
 ## ADR Lifecycle
 
 ```
-DRAFT ──▶ PROPOSED ──▶ ACCEPTED ──▶ IMPLEMENTED
+DRAFT ──▶ PROPOSED ──▶ ACCEPTED ──▶ PARTIAL ──▶ IMPLEMENTED
                               │
                               └──▶ SUPERSEDED
 ```
@@ -172,5 +179,6 @@ DRAFT ──▶ PROPOSED ──▶ ACCEPTED ──▶ IMPLEMENTED
 | DRAFT | ADR is being written |
 | PROPOSED | Ready for review |
 | ACCEPTED | Approved, implementation starting |
+| PARTIAL | Core components implemented, some features pending |
 | IMPLEMENTED | Fully implemented and tested |
 | SUPERSEDED | Replaced by newer ADR |

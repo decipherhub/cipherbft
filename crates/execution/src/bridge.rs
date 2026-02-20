@@ -14,11 +14,12 @@
 //! # Determinism
 //!
 //! The bridge guarantees deterministic transaction ordering:
-//! - Cars are iterated in ValidatorId ascending order (via `Cut::ordered_cars()`)
+//! - Cars are iterated using XOR-based fair ordering (via `Cut::ordered_cars(Some(parent_hash))`)
 //! - Within each Car, batch digests are processed in order
 //! - Within each Batch, transactions are processed in order
 //!
-//! This ensures all validators produce identical BlockInputs from the same Cut.
+//! This ensures all validators produce identical BlockInputs from the same Cut,
+//! while fairly rotating which validator's transactions execute first.
 
 use crate::error::ExecutionError;
 use crate::types::BlockInput;
@@ -100,7 +101,7 @@ impl<S: BatchFetcher> ExecutionBridge<S> {
     /// # Determinism
     ///
     /// The transaction order is guaranteed to be deterministic:
-    /// 1. Cars are processed in ValidatorId ascending order
+    /// 1. Cars are processed using XOR-based fair ordering (parent_hash shuffles order)
     /// 2. Batch digests within each Car are processed in order
     /// 3. Transactions within each Batch are processed in order
     pub async fn convert_cut(
@@ -111,8 +112,11 @@ impl<S: BatchFetcher> ExecutionBridge<S> {
     ) -> Result<BlockInput> {
         let mut all_transactions = Vec::new();
 
-        // Iterate Cars in deterministic order (by ValidatorId ascending)
-        for (_, car) in cut.ordered_cars() {
+        // Convert B256 to Hash for fair ordering
+        let parent_hash_typed = Hash::from_bytes(parent_hash.0);
+
+        // Iterate Cars in fair order (XOR-based shuffling by parent hash)
+        for (_, car) in cut.ordered_cars(Some(&parent_hash_typed)) {
             for batch_digest in &car.batch_digests {
                 // Fetch batch from storage
                 let batch = self
@@ -170,8 +174,11 @@ impl<S: BatchFetcher> ExecutionBridge<S> {
     ) -> Result<BlockInput> {
         let mut all_transactions = Vec::new();
 
-        // Iterate Cars in deterministic order (by ValidatorId ascending)
-        for (_, car) in cut.ordered_cars() {
+        // Convert B256 to Hash for fair ordering
+        let parent_hash_typed = Hash::from_bytes(parent_hash.0);
+
+        // Iterate Cars in fair order (XOR-based shuffling by parent hash)
+        for (_, car) in cut.ordered_cars(Some(&parent_hash_typed)) {
             for batch_digest in &car.batch_digests {
                 // Fetch batch from storage
                 let batch = self

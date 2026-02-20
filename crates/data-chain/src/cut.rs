@@ -7,7 +7,7 @@ use crate::attestation::AggregatedAttestation;
 use crate::car::Car;
 use alloy_primitives::Address;
 use cipherbft_crypto::BlsPublicKey;
-use cipherbft_types::{Hash, ValidatorId};
+use cipherbft_types::{Hash, ValidatorId, VALIDATOR_ID_SIZE};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -95,8 +95,8 @@ impl Cut {
         // Number of Cars
         data.extend_from_slice(&(self.cars.len() as u32).to_be_bytes());
 
-        // Cars in deterministic order (ValidatorId ascending)
-        for (_, car) in self.ordered_cars() {
+        // Cars in deterministic order (ValidatorId ascending for hash stability)
+        for (_, car) in self.ordered_cars(None) {
             // Include Car hash and position
             data.extend_from_slice(car.hash().as_bytes());
             data.extend_from_slice(&car.position.to_be_bytes());
@@ -120,19 +120,44 @@ impl Cut {
         self.attestations.insert(car_hash, attestation);
     }
 
-    /// Iterate Cars in deterministic order (ValidatorId ascending)
+    /// Iterate Cars in deterministic order.
     ///
-    /// This ensures all validators process transactions in the same order
-    /// for deterministic deduplication.
-    pub fn ordered_cars(&self) -> impl Iterator<Item = (&ValidatorId, &Car)> {
+    /// # Arguments
+    /// * `parent_hash` - If `Some`, uses XOR-based fair ordering for execution.
+    ///   If `None`, uses ValidatorId ascending order for hashing.
+    ///
+    /// # Fair Ordering
+    /// When `parent_hash` is provided, the sort key is:
+    /// `validator_id[0..20] XOR parent_hash[0..20]`
+    ///
+    /// This ensures:
+    /// - Deterministic ordering (all validators compute same order)
+    /// - Unpredictable ordering (depends on previous block)
+    /// - Fair rotation (no validator consistently first)
+    pub fn ordered_cars(
+        &self,
+        parent_hash: Option<&Hash>,
+    ) -> impl Iterator<Item = (&ValidatorId, &Car)> {
         let mut entries: Vec<_> = self.cars.iter().collect();
-        entries.sort_by_key(|(vid, _)| *vid);
-        entries.into_iter()
-    }
 
-    /// Get Cars as ordered Vec (for serialization)
-    pub fn ordered_cars_vec(&self) -> Vec<(&ValidatorId, &Car)> {
-        self.ordered_cars().collect()
+        match parent_hash {
+            Some(hash) => {
+                let hash_bytes = hash.as_bytes();
+                entries.sort_by_key(|(vid, _)| {
+                    let vid_bytes = vid.as_bytes();
+                    let mut sort_key = [0u8; VALIDATOR_ID_SIZE];
+                    for i in 0..VALIDATOR_ID_SIZE {
+                        sort_key[i] = vid_bytes[i] ^ hash_bytes[i];
+                    }
+                    sort_key
+                });
+            }
+            None => {
+                entries.sort_by_key(|(vid, _)| *vid);
+            }
+        }
+
+        entries.into_iter()
     }
 
     /// Total transaction count across all Cars
@@ -274,7 +299,7 @@ impl Cut {
             proposer_address: self.proposer_address,
         };
 
-        let car_parts = self.ordered_cars().filter_map(move |(_, car)| {
+        let car_parts = self.ordered_cars(None).filter_map(move |(_, car)| {
             let car_hash = car.hash();
             self.attestations
                 .get(&car_hash)
@@ -577,8 +602,8 @@ mod tests {
         cut.cars.insert(car2.proposer, car2.clone());
         cut.cars.insert(car3.proposer, car3.clone());
 
-        // ordered_cars should return in ValidatorId order
-        let ordered: Vec<_> = cut.ordered_cars().collect();
+        // ordered_cars(None) should return in ValidatorId order
+        let ordered: Vec<_> = cut.ordered_cars(None).collect();
         assert_eq!(ordered.len(), 3);
 
         // Verify ordering
@@ -1005,5 +1030,136 @@ mod tests {
             }
         }
         panic!("cut was not assembled");
+    }
+
+    // ============ Fair Ordering Tests ============
+
+    #[test]
+    fn test_ordered_cars_fair_differs_from_id_ordering() {
+        // Create validators with varied byte patterns to ensure XOR produces different order
+        // v1: starts with 0x10, v2: starts with 0x20, v3: starts with 0x30
+        let mut v1_bytes = [0u8; VALIDATOR_ID_SIZE];
+        let mut v2_bytes = [0u8; VALIDATOR_ID_SIZE];
+        let mut v3_bytes = [0u8; VALIDATOR_ID_SIZE];
+
+        v1_bytes[0] = 0x10;
+        v1_bytes[1] = 0xaa;
+        v2_bytes[0] = 0x20;
+        v2_bytes[1] = 0xbb;
+        v3_bytes[0] = 0x30;
+        v3_bytes[1] = 0xcc;
+
+        let v1 = ValidatorId::from_bytes(v1_bytes);
+        let v2 = ValidatorId::from_bytes(v2_bytes);
+        let v3 = ValidatorId::from_bytes(v3_bytes);
+
+        let mut cut = Cut::new(1);
+        cut.cars.insert(v1, Car::new(v1, 0, vec![], None));
+        cut.cars.insert(v2, Car::new(v2, 0, vec![], None));
+        cut.cars.insert(v3, Car::new(v3, 0, vec![], None));
+
+        // With None, should be ValidatorId order: v1 < v2 < v3
+        let ordered_none: Vec<_> = cut.ordered_cars(None).map(|(vid, _)| *vid).collect();
+        assert_eq!(ordered_none, vec![v1, v2, v3]);
+
+        // Use a hash that will shuffle the order: 0x25 XOR 0x10=0x35, 0x25 XOR 0x20=0x05, 0x25 XOR 0x30=0x15
+        // Expected order after XOR: v2 (0x05) < v3 (0x15) < v1 (0x35)
+        let mut hash_bytes = [0u8; 32];
+        hash_bytes[0] = 0x25;
+        hash_bytes[1] = 0x00;
+        let parent_hash = Hash::from_bytes(hash_bytes);
+
+        let ordered_fair: Vec<_> = cut
+            .ordered_cars(Some(&parent_hash))
+            .map(|(vid, _)| *vid)
+            .collect();
+
+        // v2 XOR 0x25 = 0x05, v3 XOR 0x25 = 0x15, v1 XOR 0x25 = 0x35
+        // So order should be: v2, v3, v1
+        assert_eq!(
+            ordered_fair,
+            vec![v2, v3, v1],
+            "XOR should reorder validators"
+        );
+    }
+
+    #[test]
+    fn test_ordered_cars_fair_is_deterministic() {
+        let v1 = ValidatorId::from_bytes([0x10; VALIDATOR_ID_SIZE]);
+        let v2 = ValidatorId::from_bytes([0x20; VALIDATOR_ID_SIZE]);
+
+        let mut cut = Cut::new(1);
+        cut.cars.insert(v1, Car::new(v1, 0, vec![], None));
+        cut.cars.insert(v2, Car::new(v2, 0, vec![], None));
+
+        let parent_hash = Hash::compute(b"deterministic_test");
+
+        // Same inputs should produce same order
+        let order1: Vec<_> = cut
+            .ordered_cars(Some(&parent_hash))
+            .map(|(vid, _)| *vid)
+            .collect();
+        let order2: Vec<_> = cut
+            .ordered_cars(Some(&parent_hash))
+            .map(|(vid, _)| *vid)
+            .collect();
+
+        assert_eq!(order1, order2, "Same parent_hash must produce same order");
+    }
+
+    #[test]
+    fn test_ordered_cars_fair_rotation() {
+        // Different parent hashes should produce different orderings
+        let v1 = ValidatorId::from_bytes([0xaa; VALIDATOR_ID_SIZE]);
+        let v2 = ValidatorId::from_bytes([0xbb; VALIDATOR_ID_SIZE]);
+        let v3 = ValidatorId::from_bytes([0xcc; VALIDATOR_ID_SIZE]);
+
+        let mut cut = Cut::new(1);
+        cut.cars.insert(v1, Car::new(v1, 0, vec![], None));
+        cut.cars.insert(v2, Car::new(v2, 0, vec![], None));
+        cut.cars.insert(v3, Car::new(v3, 0, vec![], None));
+
+        let hash1 = Hash::compute(b"block_1");
+        let hash2 = Hash::compute(b"block_2");
+        let hash3 = Hash::compute(b"block_3");
+
+        let order1: Vec<_> = cut
+            .ordered_cars(Some(&hash1))
+            .map(|(vid, _)| *vid)
+            .collect();
+        let order2: Vec<_> = cut
+            .ordered_cars(Some(&hash2))
+            .map(|(vid, _)| *vid)
+            .collect();
+        let order3: Vec<_> = cut
+            .ordered_cars(Some(&hash3))
+            .map(|(vid, _)| *vid)
+            .collect();
+
+        // At least one ordering should differ (very high probability)
+        let all_same = order1 == order2 && order2 == order3;
+        assert!(
+            !all_same,
+            "Different parent hashes should produce different orderings"
+        );
+    }
+
+    #[test]
+    fn test_ordered_cars_none_preserves_backward_compat() {
+        // Regression test: ordered_cars(None) must match original behavior
+        let v_low = ValidatorId::from_bytes([0x00; VALIDATOR_ID_SIZE]);
+        let v_mid = ValidatorId::from_bytes([0x80; VALIDATOR_ID_SIZE]);
+        let v_high = ValidatorId::from_bytes([0xff; VALIDATOR_ID_SIZE]);
+
+        let mut cut = Cut::new(1);
+        // Insert in random order
+        cut.cars.insert(v_high, Car::new(v_high, 0, vec![], None));
+        cut.cars.insert(v_low, Car::new(v_low, 0, vec![], None));
+        cut.cars.insert(v_mid, Car::new(v_mid, 0, vec![], None));
+
+        let ordered: Vec<_> = cut.ordered_cars(None).map(|(vid, _)| *vid).collect();
+
+        // Must be ascending ValidatorId order
+        assert_eq!(ordered, vec![v_low, v_mid, v_high]);
     }
 }
