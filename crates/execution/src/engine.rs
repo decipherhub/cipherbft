@@ -5,7 +5,7 @@
 
 use crate::{
     database::{CipherBftDatabase, Provider},
-    error::{ExecutionError, Result, TxErrorCategory},
+    error::{ExecutionError, Result, SkipReason, TxErrorCategory},
     evm::CipherBftEvmConfig,
     precompiles::{GenesisValidatorData, StakingPrecompile},
     receipts::{
@@ -45,12 +45,14 @@ const BLOCK_HASH_CACHE_SIZE: NonZeroUsize = match NonZeroUsize::new(256) {
 /// - Logs emitted by each transaction
 /// - Total transaction fees collected (gas_used × effective_gas_price)
 /// - Executed transaction bytes (only transactions with receipts, not skipped ones)
+/// - Hashes of permanently-skipped transactions (NonceTooLow)
 type ProcessTransactionsResult = (
     Vec<TransactionReceipt>,
     u64,
     Vec<Vec<Log>>,
     U256,
     Vec<Bytes>,
+    Vec<B256>,
 );
 
 /// ExecutionLayer trait defines the interface for block execution.
@@ -350,6 +352,7 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
         let mut all_logs = Vec::new();
         let mut total_fees = U256::ZERO;
         let mut executed_tx_bytes = Vec::new();
+        let mut skipped_tx_hashes: Vec<B256> = Vec::new();
 
         // Parallel signature recovery - recovers sender addresses from all transactions
         // This is the CPU-intensive part that benefits from parallelization
@@ -388,6 +391,9 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
                     Ok(result) => result,
                     Err(e) => match e.category() {
                         TxErrorCategory::Skip { reason } => {
+                            if reason == SkipReason::NonceTooLow {
+                                skipped_tx_hashes.push(recovered_tx.tx_hash);
+                            }
                             tracing::warn!(
                                 tx_index,
                                 ?reason,
@@ -508,6 +514,7 @@ impl<P: Provider + Clone> ExecutionEngine<P> {
             all_logs,
             total_fees,
             executed_tx_bytes,
+            skipped_tx_hashes,
         ))
     }
 
@@ -544,7 +551,7 @@ impl<P: Provider + Clone> ExecutionLayer for ExecutionEngine<P> {
 
         // Process all transactions and collect fees
         // executed_tx_bytes contains only transactions that actually executed (have receipts)
-        let (receipts, gas_used, all_logs, total_fees, executed_tx_bytes) = self
+        let (receipts, gas_used, all_logs, total_fees, executed_tx_bytes, skipped_tx_hashes) = self
             .process_transactions(
                 &input.transactions,
                 input.block_number,
@@ -645,6 +652,7 @@ impl<P: Provider + Clone> ExecutionLayer for ExecutionEngine<P> {
             receipts,
             logs_bloom,
             executed_transactions: executed_tx_bytes,
+            skipped_tx_hashes,
         })
     }
 
@@ -939,6 +947,7 @@ mod tests {
             receipts: vec![],
             logs_bloom: Bloom::ZERO,
             executed_transactions: vec![],
+            skipped_tx_hashes: vec![],
         };
 
         let sealed = engine
@@ -1000,6 +1009,7 @@ mod tests {
             receipts: vec![],
             logs_bloom: Bloom::ZERO,
             executed_transactions: vec![],
+            skipped_tx_hashes: vec![],
         };
 
         let sealed = engine

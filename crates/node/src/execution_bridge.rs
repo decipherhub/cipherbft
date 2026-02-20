@@ -37,6 +37,11 @@ pub struct BlockExecutionResult {
     /// in execution order. Used by the node to store transactions
     /// for `eth_getTransactionByHash` RPC queries.
     pub executed_transactions: Vec<Bytes>,
+    /// Hashes of permanently-skipped transactions (NonceTooLow).
+    ///
+    /// These should be removed from the RPC pending map to prevent
+    /// infinite retry loops.
+    pub skipped_tx_hashes: Vec<B256>,
 }
 
 /// Bridge between consensus and execution layers
@@ -435,6 +440,7 @@ impl ExecutionBridge {
         // Use executed_transactions from the execution result - this only contains
         // transactions that actually executed (have receipts), not skipped ones
         let executed_transactions = result.executed_transactions.clone();
+        let skipped_tx_hashes = result.skipped_tx_hashes.clone();
 
         Ok(BlockExecutionResult {
             execution_result: result,
@@ -442,6 +448,7 @@ impl ExecutionBridge {
             parent_hash,
             timestamp,
             executed_transactions,
+            skipped_tx_hashes,
         })
     }
 

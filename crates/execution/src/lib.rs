@@ -594,6 +594,7 @@ mod tests {
             receipts: vec![],
             logs_bloom: Bloom::ZERO,
             executed_transactions: vec![],
+            skipped_tx_hashes: vec![],
         };
 
         let sealed = execution_layer

@@ -359,6 +359,15 @@ pub struct ExecutionResult {
     /// the mempool pending map - only executed transactions should be removed.
     #[serde(default)]
     pub executed_transactions: Vec<Bytes>,
+
+    /// Hashes of transactions that were permanently skipped (NonceTooLow).
+    ///
+    /// These transactions can never succeed because their nonce has already
+    /// been used. The node removes them from the RPC pending map to prevent
+    /// infinite retry loops where stale transactions cycle through
+    /// consensus and execution repeatedly.
+    #[serde(default)]
+    pub skipped_tx_hashes: Vec<B256>,
 }
 
 /// Transaction receipt.

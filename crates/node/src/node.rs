@@ -1678,9 +1678,8 @@ impl Node {
                                             debug!("Broadcast block {} to WebSocket subscribers", height.0);
                                         }
 
-                                        // Clean up executed transactions and retry pending ones
-                                        // This prevents stale transactions from accumulating and
-                                        // ensures skipped transactions (e.g., NonceTooLow) are retried
+                                        // Clean up executed and permanently-invalid transactions,
+                                        // then retry remaining pending ones
                                         if let Some(ref mempool) = rpc_mempool {
                                             use alloy_rlp::Decodable;
                                             use reth_primitives::TransactionSigned;
@@ -1704,11 +1703,27 @@ impl Node {
                                                 );
                                             }
 
+                                            // Remove permanently-skipped transactions (NonceTooLow)
+                                            // from the pending map. These can never succeed because
+                                            // their nonce has already been used. Without this, they
+                                            // would be retried every block in an infinite loop.
+                                            if !block_result.skipped_tx_hashes.is_empty() {
+                                                mempool.remove_included(&block_result.skipped_tx_hashes);
+                                                debug!(
+                                                    "Removed {} permanently-skipped (NonceTooLow) transactions from mempool pending map",
+                                                    block_result.skipped_tx_hashes.len()
+                                                );
+                                            }
+
+                                            // Collect all hashes to exclude from retry
+                                            let mut exclude_from_retry = tx_hashes;
+                                            exclude_from_retry.extend_from_slice(&block_result.skipped_tx_hashes);
+
                                             // ALWAYS retry pending transactions after every block
                                             // Previously this was inside the if block, causing pending
                                             // transactions to only retry when a block had executed txs.
                                             // This led to multi-minute delays when the chain had empty blocks.
-                                            let retried = mempool.retry_pending(&tx_hashes).await;
+                                            let retried = mempool.retry_pending(&exclude_from_retry).await;
                                             if retried > 0 {
                                                 debug!(
                                                     "Re-queued {} pending transactions for retry",
