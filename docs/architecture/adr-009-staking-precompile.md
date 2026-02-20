@@ -2,11 +2,30 @@
 
 ## Changelog
 
+* 2026-02-01: Added implementation status
 * 2025-12-07: Initial draft
 
 ## Status
 
-PROPOSED Not Implemented
+ACCEPTED Implemented
+
+## Implementation Status
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| Precompile Contract | Implemented | `crates/execution/src/precompiles/staking.rs` |
+| Validator Registration | Implemented | Function selector `0x12345678` |
+| Validator Deregistration | Implemented | Function selector `0x23456789` |
+| Stake Queries | Implemented | `getValidatorSet()`, `getStake(address)` |
+| Epoch Transitions | Implemented | `crates/consensus/src/epoch.rs` |
+| Slashing | Partial | Basic stake reduction, jailing pending |
+
+### Implementation Notes
+
+- **Precompile Address**: `0x0000000000000000000000000000000000000100`
+- **Minimum Stake**: 32 ETH (configurable via genesis)
+- **Epoch Length**: 5000 blocks (configurable)
+- **Exit Delay**: 256 blocks after deregistration request
 
 ## Abstract
 

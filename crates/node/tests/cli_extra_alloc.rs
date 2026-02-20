@@ -119,11 +119,11 @@ fn test_genesis_generate_extra_alloc_balance_conversion() {
         .get("0x3e54b36f4f8efaa017888e66fb6db17098437ac7")
         .unwrap();
 
-    // 100 ETH = 100 * 10^18 wei = 0x56bc75e2d63100000
+    // 100 CPH = 100 * 10^18 wei = 0x56bc75e2d63100000
     let balance = entry["balance"].as_str().unwrap();
     assert_eq!(
         balance, "0x56bc75e2d63100000",
-        "Expected 100 ETH in wei (hex)"
+        "Expected 100 CPH in wei (hex)"
     );
 }
 

@@ -2,11 +2,30 @@
 
 ## Changelog
 
-* 2025-12-06: Initial draft
+* 2026-02-01: Added implementation status
+* 2025-12-07: Initial draft
 
 ## Status
 
-PROPOSED Not Implemented
+ACCEPTED Implemented
+
+## Implementation Status
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| CipherBftContext | Implemented | `crates/consensus/src/context.rs` |
+| Type Implementations | Implemented | `crates/types/src/` |
+| Effect Handlers | Implemented | `crates/consensus/src/effects/` |
+| Consensus Engine | Implemented | `crates/consensus/src/engine.rs` |
+| Vote Aggregation | Implemented | `crates/consensus/src/vote.rs` |
+| WAL Integration | Implemented | `crates/storage/src/wal.rs` |
+
+### Implementation Notes
+
+- **Malachite Version**: Pinned to specific commit for stability
+- **Signing Scheme**: Uses `malachitebft-signing-ed25519` for CL
+- **Leader Selection**: Round-robin proposer selection implemented
+- **Equivocation Detection**: Integrated with slashing mechanism
 
 ## Abstract
 

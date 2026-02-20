@@ -39,7 +39,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, trace, warn};
 
 use cipherbft_execution::precompiles::{CipherBftPrecompileProvider, StakingPrecompile};
 use cipherbft_execution::AccountProof;
@@ -1573,7 +1573,7 @@ impl ChannelMempoolApi {
 #[async_trait]
 impl MempoolApi for ChannelMempoolApi {
     async fn submit_transaction(&self, tx_bytes: Bytes) -> RpcResult<B256> {
-        info!(
+        trace!(
             "ChannelMempoolApi::submit_transaction received {} bytes (chain_id={})",
             tx_bytes.len(),
             self.chain_id
@@ -1616,7 +1616,7 @@ impl MempoolApi for ChannelMempoolApi {
         }
 
         // Forward to worker via channel
-        info!(
+        trace!(
             "Sending transaction {} to worker channel (capacity: {})",
             tx_hash,
             self.tx_sender.capacity()
@@ -1626,7 +1626,7 @@ impl MempoolApi for ChannelMempoolApi {
             RpcError::Execution("Transaction submission failed: worker channel closed".to_string())
         })?;
 
-        info!(
+        trace!(
             "Transaction {} sent to worker channel ({} bytes)",
             tx_hash,
             tx_bytes.len()
@@ -2239,9 +2239,10 @@ impl<P: Provider> EvmExecutionApi<P> {
 
         // Configure chain settings
         ctx.cfg.chain_id = self.chain_id;
-        // Disable nonce check for eth_call and eth_estimateGas
-        // These are simulation calls that shouldn't require valid nonce
+        // Disable nonce and balance checks for eth_call and eth_estimateGas
+        // These are simulation calls that shouldn't require valid nonce or sufficient balance
         ctx.cfg.disable_nonce_check = true;
+        ctx.cfg.disable_balance_check = true;
 
         // Set up transaction environment
         ctx.tx.caller = from.unwrap_or(Address::ZERO);
@@ -2700,8 +2701,9 @@ where
 
         // Configure chain settings
         ctx.cfg.chain_id = self.chain_id;
-        // Disable nonce check for trace calls (simulation)
+        // Disable nonce and balance checks for trace calls (simulation)
         ctx.cfg.disable_nonce_check = true;
+        ctx.cfg.disable_balance_check = true;
 
         // Set up transaction environment
         ctx.tx.caller = from.unwrap_or(Address::ZERO);
@@ -2812,8 +2814,9 @@ where
 
         // Configure chain settings
         ctx.cfg.chain_id = self.chain_id;
-        // Disable nonce check for trace calls (simulation)
+        // Disable nonce and balance checks for trace calls (simulation)
         ctx.cfg.disable_nonce_check = true;
+        ctx.cfg.disable_balance_check = true;
 
         // Set up transaction environment
         ctx.tx.caller = from.unwrap_or(Address::ZERO);

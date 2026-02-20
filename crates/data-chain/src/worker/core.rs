@@ -382,10 +382,18 @@ impl Worker {
                     self.check_time_flush().await;
                 }
 
-                // Handle incoming transactions
+                // Handle incoming transactions - drain all ready TXs at once
                 tx = self.tx_receiver.recv() => {
                     if let Some(tx) = tx {
-                        self.handle_transaction(tx).await;
+                        // Drain additional ready transactions to amortize select! overhead
+                        let mut txs = vec![tx];
+                        while let Ok(t) = self.tx_receiver.try_recv() {
+                            txs.push(t);
+                            if txs.len() >= self.config.max_batch_txs {
+                                break;
+                            }
+                        }
+                        self.handle_transactions_batch(txs).await;
                     } else {
                         warn!(worker_id = self.config.worker_id, "tx_receiver closed");
                         self.shutdown = true;
@@ -420,9 +428,10 @@ impl Worker {
         info!(worker_id = self.config.worker_id, "Worker shutting down");
     }
 
-    /// Handle incoming transaction
+    /// Handle incoming transaction (used by tests only; production uses handle_transactions_batch)
+    #[cfg(test)]
     async fn handle_transaction(&mut self, tx: Transaction) {
-        info!(
+        trace!(
             worker_id = self.config.worker_id,
             tx_size = tx.len(),
             "Worker received transaction from channel"
@@ -457,11 +466,57 @@ impl Worker {
             );
             self.process_batch(batch).await;
         } else {
-            info!(
+            trace!(
                 worker_id = self.config.worker_id,
                 pending_txs = self.batch_maker.pending_count(),
                 "Transaction added to batch maker, waiting for more or flush"
             );
+        }
+    }
+
+    /// Handle a batch of incoming transactions drained from the channel.
+    ///
+    /// Validates each transaction, adds all valid ones to the batch maker,
+    /// and processes any resulting batches. This amortizes the per-transaction
+    /// overhead of the select! loop and logging.
+    async fn handle_transactions_batch(&mut self, txs: Vec<Transaction>) {
+        let total = txs.len();
+        debug!(
+            worker_id = self.config.worker_id,
+            tx_count = total,
+            "Processing drained transaction batch"
+        );
+
+        // Validate and collect valid transactions
+        let mut valid_txs = Vec::with_capacity(total);
+        for tx in txs {
+            if let Some(ref validator) = self.validator {
+                match validator.validate_transaction(&tx).await {
+                    Ok(()) => valid_txs.push(tx),
+                    Err(e) => {
+                        warn!(
+                            worker_id = self.config.worker_id,
+                            error = %e,
+                            "Transaction validation failed, rejecting"
+                        );
+                    }
+                }
+            } else {
+                valid_txs.push(tx);
+            }
+        }
+
+        // Add all valid transactions and collect any completed batches
+        let batches = self.batch_maker.add_transactions(valid_txs);
+
+        // Process all completed batches
+        for batch in batches {
+            info!(
+                worker_id = self.config.worker_id,
+                tx_count = batch.transactions.len(),
+                "Batch ready, processing"
+            );
+            self.process_batch(batch).await;
         }
     }
 
@@ -694,9 +749,8 @@ impl Worker {
         let has_pending = self.batch_maker.has_pending();
         let elapsed = self.batch_maker.time_since_batch_start();
 
-        // Log every call so we can see the tick is working
         if has_pending {
-            info!(
+            trace!(
                 worker_id = self.config.worker_id,
                 should_flush,
                 has_pending,
@@ -706,7 +760,7 @@ impl Worker {
         }
 
         if should_flush && has_pending {
-            info!(
+            debug!(
                 worker_id = self.config.worker_id,
                 pending_txs = self.batch_maker.pending_count(),
                 "Time flush triggered, creating batch"
@@ -783,7 +837,7 @@ impl Worker {
         if let Some(ref storage) = self.storage {
             match storage.put_batch(batch.clone()).await {
                 Ok(_) => {
-                    info!(
+                    debug!(
                         worker_id = self.config.worker_id,
                         digest = %digest.digest,
                         tx_count = batch.transactions.len(),
@@ -812,20 +866,20 @@ impl Worker {
         self.state.store_batch(batch.clone());
 
         // Broadcast to peer Workers
-        info!(
+        debug!(
             worker_id = self.config.worker_id,
             digest = %digest.digest,
             "Broadcasting batch to peer Workers..."
         );
         self.network.broadcast_batch(&batch).await;
-        info!(
+        debug!(
             worker_id = self.config.worker_id,
             digest = %digest.digest,
             "Broadcast complete"
         );
 
         // Report to Primary
-        info!(
+        debug!(
             worker_id = self.config.worker_id,
             digest = %digest.digest,
             "Sending BatchDigest to Primary"
@@ -846,7 +900,7 @@ impl Worker {
                 "Failed to send BatchDigest to Primary - channel closed"
             );
         } else {
-            info!(
+            debug!(
                 worker_id = self.config.worker_id,
                 "BatchDigest sent to Primary successfully"
             );

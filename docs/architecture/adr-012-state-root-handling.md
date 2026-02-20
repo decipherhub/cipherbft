@@ -2,11 +2,30 @@
 
 ## Changelog
 
+* 2026-02-01: Added implementation status
 * 2025-12-29: Initial draft
 
 ## Status
 
-PROPOSED Not Implemented
+ACCEPTED Implemented
+
+## Implementation Status
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| Delayed Commitment (N-K) | Implemented | `crates/execution/src/pipeline.rs` |
+| Periodic State Root | Implemented | Every 100 blocks (configurable) |
+| SealedBlock Structure | Implemented | `crates/types/src/block.rs` |
+| ExecutionBlock Structure | Implemented | `crates/types/src/block.rs` |
+| Snap Sync | Implemented | `crates/node/src/sync/snap.rs` |
+| Full Sync | Planned | Sequential block validation for archive nodes |
+
+### Implementation Notes
+
+- **Pipeline Depth (K)**: Default 2 blocks delay for execution finalization
+- **State Root Interval**: Every 100 blocks for full state root calculation
+- **Intermediate Roots**: Incremental trie updates between snapshot blocks
+- **Block Structure**: `delayed_block_hash` field added for execution verification
 
 ## Abstract
 
