@@ -54,6 +54,20 @@ impl BatchMaker {
         None
     }
 
+    /// Add multiple transactions at once, returning any completed batches.
+    ///
+    /// Convenience method that collects all resulting batches when adding
+    /// a pre-drained set of transactions in bulk.
+    pub fn add_transactions(&mut self, txs: Vec<Transaction>) -> Vec<Batch> {
+        let mut batches = Vec::new();
+        for tx in txs {
+            if let Some(batch) = self.add_transaction(tx) {
+                batches.push(batch);
+            }
+        }
+        batches
+    }
+
     /// Check if batch should be flushed
     fn should_flush(&self) -> bool {
         self.pending_size >= self.max_bytes || self.pending_txs.len() >= self.max_txs

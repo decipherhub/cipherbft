@@ -58,7 +58,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use cipherbft_metrics;
 
@@ -703,7 +703,9 @@ impl Node {
                 // to ensure batches are flushed before Cars are created. Without this, there's a race
                 // condition where Primary creates empty Cars before Worker flushes pending batches.
                 let worker_config = WorkerConfig::new(self.validator_id, worker_id)
-                    .with_flush_interval(std::time::Duration::from_millis(50));
+                    .with_flush_interval(std::time::Duration::from_millis(50))
+                    .with_max_batch_txs(self.config.max_batch_txs)
+                    .with_max_batch_bytes(self.config.max_batch_bytes);
                 let mut worker_handle = Worker::spawn_with_storage(
                     worker_config,
                     Box::new(worker_network),
@@ -754,12 +756,12 @@ impl Node {
                                 }
                             } => {
                                 if let Some(tx_bytes) = tx {
-                                    info!("Worker {} received transaction from RPC mempool ({} bytes)", worker_id, tx_bytes.len());
+                                    trace!("Worker {} received transaction from RPC mempool ({} bytes)", worker_id, tx_bytes.len());
                                     if worker_handle.submit_transaction(tx_bytes).await.is_err() {
                                         warn!("Worker {} submit_transaction failed", worker_id);
                                         // Don't break - continue processing other messages
                                     } else {
-                                        info!("Worker {} forwarded transaction to batch maker", worker_id);
+                                        trace!("Worker {} forwarded transaction to batch maker", worker_id);
                                     }
                                 }
                             }
@@ -784,7 +786,7 @@ impl Node {
                             msg = worker_handle.recv_from_worker() => {
                                 match msg {
                                     Some(m) => {
-                                        info!("Worker {} bridge forwarding {:?} to Primary", worker_id, m);
+                                        debug!("Worker {} bridge forwarding {:?} to Primary", worker_id, m);
                                         if primary_worker_sender.send(m).await.is_err() {
                                             warn!("Worker {} send to primary failed", worker_id);
                                             break;

@@ -247,7 +247,7 @@ impl NodeConfig {
             data_dir: home_dir.join("data"),
             genesis_path: None, // Uses default: {home_dir}/config/genesis.json
             car_interval_ms: 100,
-            max_batch_txs: 100,
+            max_batch_txs: 500,
             max_batch_bytes: 1024 * 1024, // 1MB
             rpc_enabled: false,
             rpc_http_port: DEFAULT_RPC_HTTP_PORT + (index as u16),
@@ -473,7 +473,7 @@ mod tests {
             "num_workers": 1,
             "data_dir": "/tmp/cipherd-0",
             "car_interval_ms": 100,
-            "max_batch_txs": 100,
+            "max_batch_txs": 500,
             "max_batch_bytes": 1048576
         }"#;
 
@@ -556,7 +556,7 @@ mod tests {
             "num_workers": 1,
             "data_dir": "/tmp/cipherd-0",
             "car_interval_ms": 100,
-            "max_batch_txs": 100,
+            "max_batch_txs": 500,
             "max_batch_bytes": 1048576
         }"#;
 
