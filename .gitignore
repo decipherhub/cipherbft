@@ -46,5 +46,7 @@ devnet/
 # Design plans (local only)
 docs/plans/
 
-# Docker auto-generated configs
+# Docker auto-generated configs (regenerate with: ./scripts/generate-compose.sh)
 docker/configs/
+docker/docker-compose.yml
+docker/prometheus/prometheus.yml
