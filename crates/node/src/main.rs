@@ -364,7 +364,8 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Initialize tracing based on global flags
-    init_tracing(&cli.log_level, &cli.log_format, cli.log_no_color);
+    // Hold the guard to keep the non-blocking writer alive for the process lifetime
+    let _tracing_guard = init_tracing(&cli.log_level, &cli.log_format, cli.log_no_color);
 
     let result = match cli.command {
         Commands::Init {
@@ -424,7 +425,11 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn init_tracing(log_level: &str, log_format: &str, no_color: bool) {
+fn init_tracing(
+    log_level: &str,
+    log_format: &str,
+    no_color: bool,
+) -> tracing_appender::non_blocking::WorkerGuard {
     let level = match log_level.to_lowercase().as_str() {
         "trace" => Level::TRACE,
         "debug" => Level::DEBUG,
@@ -437,16 +442,22 @@ fn init_tracing(log_level: &str, log_format: &str, no_color: bool) {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level.to_string()));
 
+    // Use non-blocking writer to avoid blocking the async runtime on log I/O
+    let (non_blocking, guard) = tracing_appender::non_blocking(std::io::stdout());
+
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(true)
         .with_thread_ids(true)
-        .with_ansi(!no_color);
+        .with_ansi(!no_color)
+        .with_writer(non_blocking);
 
     match log_format {
         "json" => subscriber.json().init(),
         _ => subscriber.init(),
     }
+
+    guard
 }
 
 // =============================================================================
@@ -554,7 +565,7 @@ fn cmd_init(
         data_dir: data_dir.clone(),
         genesis_path: Some(genesis_path.clone()),
         car_interval_ms: 100,
-        max_batch_txs: 100,
+        max_batch_txs: 500,
         max_batch_bytes: 1024 * 1024,
         rpc_enabled: true,
         rpc_http_port: cipherd::DEFAULT_RPC_HTTP_PORT,
@@ -968,7 +979,7 @@ fn cmd_testnet_init_files(
             data_dir: data_dir.clone(),
             genesis_path: Some(genesis_path.clone()),
             car_interval_ms: 100,
-            max_batch_txs: 100,
+            max_batch_txs: 500,
             max_batch_bytes: 1024 * 1024,
             rpc_enabled: true,
             // Each validator gets HTTP and WS ports spaced by 10 to avoid conflicts

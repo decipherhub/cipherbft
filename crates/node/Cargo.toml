@@ -51,6 +51,7 @@ toml = { workspace = true }
 # Logging
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tracing-appender = "0.2"
 
 # CLI
 clap = { version = "4.4", features = ["derive"] }
