@@ -77,6 +77,38 @@ pub const DEFAULT_RPC_WS_PORT: u16 = 8546;
 /// Default metrics port (Prometheus standard)
 pub const DEFAULT_METRICS_PORT: u16 = 9100;
 
+/// Default snap sync enabled setting
+pub const DEFAULT_SNAP_SYNC_ENABLED: bool = true;
+
+/// Default minimum peers required to start sync
+pub const DEFAULT_MIN_SYNC_PEERS: usize = 3;
+
+/// Default sync request timeout in seconds
+pub const DEFAULT_SYNC_TIMEOUT_SECS: u64 = 30;
+
+/// Default block gap threshold to trigger snap sync (vs block-by-block)
+pub const DEFAULT_SNAP_SYNC_THRESHOLD: u64 = 1024;
+
+/// Serde default function for snap_sync_enabled
+fn default_snap_sync_enabled() -> bool {
+    DEFAULT_SNAP_SYNC_ENABLED
+}
+
+/// Serde default function for min_sync_peers
+fn default_min_sync_peers() -> usize {
+    DEFAULT_MIN_SYNC_PEERS
+}
+
+/// Serde default function for sync_timeout
+fn default_sync_timeout() -> u64 {
+    DEFAULT_SYNC_TIMEOUT_SECS
+}
+
+/// Serde default function for snap_sync_threshold
+fn default_snap_sync_threshold() -> u64 {
+    DEFAULT_SNAP_SYNC_THRESHOLD
+}
+
 /// Serde default function for rpc_http_port
 fn default_rpc_http_port() -> u16 {
     DEFAULT_RPC_HTTP_PORT
@@ -107,6 +139,52 @@ pub struct PeerConfig {
     pub consensus_addr: SocketAddr,
     /// Worker addresses for batch sync
     pub worker_addrs: Vec<SocketAddr>,
+}
+
+/// Sync configuration for state synchronization
+///
+/// Controls how the node performs snap sync when joining the network
+/// or recovering from being behind.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SyncConfig {
+    /// Enable snap sync for fast bootstrap.
+    ///
+    /// When enabled, nodes that are significantly behind will use snap sync
+    /// to download state directly rather than replaying all blocks.
+    #[serde(default = "default_snap_sync_enabled")]
+    pub snap_sync_enabled: bool,
+
+    /// Minimum peers required to start sync.
+    ///
+    /// The node will wait until it has at least this many peers with
+    /// consistent state before beginning snap sync.
+    #[serde(default = "default_min_sync_peers")]
+    pub min_sync_peers: usize,
+
+    /// Sync request timeout in seconds.
+    ///
+    /// Maximum time to wait for a response to a sync request before
+    /// retrying with a different peer.
+    #[serde(default = "default_sync_timeout")]
+    pub sync_timeout_secs: u64,
+
+    /// Block gap threshold to trigger snap sync (vs block-by-block).
+    ///
+    /// If the node is behind by more than this many blocks, it will
+    /// use snap sync. Otherwise, it will sync block-by-block.
+    #[serde(default = "default_snap_sync_threshold")]
+    pub snap_sync_threshold: u64,
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self {
+            snap_sync_enabled: DEFAULT_SNAP_SYNC_ENABLED,
+            min_sync_peers: DEFAULT_MIN_SYNC_PEERS,
+            sync_timeout_secs: DEFAULT_SYNC_TIMEOUT_SECS,
+            snap_sync_threshold: DEFAULT_SNAP_SYNC_THRESHOLD,
+        }
+    }
 }
 
 /// Node configuration
@@ -199,6 +277,13 @@ pub struct NodeConfig {
     /// Port for Prometheus metrics endpoint (default: 9100)
     #[serde(default = "default_metrics_port")]
     pub metrics_port: u16,
+
+    /// Sync configuration for state synchronization.
+    ///
+    /// Controls snap sync behavior for fast bootstrap when joining
+    /// the network or recovering from being behind.
+    #[serde(default)]
+    pub sync: SyncConfig,
 }
 
 /// Test configuration with keypairs for local testing
@@ -253,6 +338,7 @@ impl NodeConfig {
             rpc_http_port: DEFAULT_RPC_HTTP_PORT + (index as u16),
             rpc_ws_port: DEFAULT_RPC_WS_PORT + (index as u16),
             metrics_port: DEFAULT_METRICS_PORT + (index as u16),
+            sync: SyncConfig::default(),
         };
 
         LocalTestConfig {

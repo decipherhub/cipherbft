@@ -79,6 +79,47 @@ impl MdbxEvmStore {
         Ok(accounts)
     }
 
+    /// Get accounts within an address range using cursor-based iteration.
+    ///
+    /// Seeks to `start` and iterates until `limit` or `max` accounts are collected.
+    pub fn get_accounts_in_range(
+        &self,
+        start: &[u8; 20],
+        limit: &[u8; 20],
+        max: usize,
+    ) -> EvmStoreResult<Vec<([u8; 20], EvmAccount)>> {
+        let tx = self.db.tx().map_err(|e| db_err(e.to_string()))?;
+
+        let mut cursor = tx
+            .cursor_read::<EvmAccounts>()
+            .map_err(|e| db_err(e.to_string()))?;
+
+        let mut accounts = Vec::new();
+
+        // Seek to start address
+        let mut entry = cursor
+            .seek(AddressKey(*start))
+            .map_err(|e| db_err(e.to_string()))?;
+
+        while let Some((key, stored)) = entry {
+            if key.0 >= *limit || accounts.len() >= max {
+                break;
+            }
+
+            let account = EvmAccount {
+                nonce: stored.0.nonce,
+                balance: stored.0.balance,
+                code_hash: stored.0.code_hash,
+                storage_root: stored.0.storage_root,
+            };
+            accounts.push((key.0, account));
+
+            entry = cursor.next().map_err(|e| db_err(e.to_string()))?;
+        }
+
+        Ok(accounts)
+    }
+
     /// Get all storage slots for a specific address using cursor iteration.
     ///
     /// Returns all storage slots stored for the given address in the EvmStorage table.
@@ -341,6 +382,25 @@ impl EvmStore for MdbxEvmStore {
             .observe(start.elapsed().as_secs_f64());
 
         Ok(())
+    }
+
+    fn get_all_accounts(&self) -> EvmStoreResult<Vec<([u8; 20], EvmAccount)>> {
+        // Delegate to the inherent method
+        MdbxEvmStore::get_all_accounts(self)
+    }
+
+    fn get_accounts_in_range(
+        &self,
+        start: &[u8; 20],
+        limit: &[u8; 20],
+        max: usize,
+    ) -> EvmStoreResult<Vec<([u8; 20], EvmAccount)>> {
+        MdbxEvmStore::get_accounts_in_range(self, start, limit, max)
+    }
+
+    fn get_all_storage(&self, address: &[u8; 20]) -> EvmStoreResult<Vec<([u8; 32], [u8; 32])>> {
+        // Delegate to the inherent method
+        MdbxEvmStore::get_all_storage(self, address)
     }
 
     fn get_current_block(&self) -> EvmStoreResult<Option<u64>> {

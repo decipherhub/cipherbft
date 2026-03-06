@@ -1,0 +1,50 @@
+[package]
+name = "cipherbft-sync"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "State synchronization for CipherBFT nodes"
+
+[dependencies]
+# Internal
+cipherbft-types = { path = "../types" }
+cipherbft-crypto = { path = "../crypto" }
+cipherbft-storage = { path = "../storage" }
+cipherbft-execution = { path = "../execution" }
+
+# Async
+tokio = { workspace = true, features = ["sync", "time"] }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+bincode = { workspace = true }
+bytes = { workspace = true }
+
+# Ethereum types
+alloy-primitives = { workspace = true }
+alloy-rlp = { workspace = true }
+alloy-trie = "0.9"
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Metrics
+prometheus = { workspace = true }
+once_cell = "1.19"
+
+# Collections
+lru = "0.12"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
+tempfile = { workspace = true }
+rand = { workspace = true }
+
+[lints.rust]
+unsafe_code = "deny"

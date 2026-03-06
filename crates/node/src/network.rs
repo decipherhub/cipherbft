@@ -38,6 +38,7 @@ use cipherbft_metrics::network::{
     P2P_BYTES_RECEIVED, P2P_BYTES_SENT, P2P_CONNECTION_ERRORS, P2P_MESSAGES_RECEIVED,
     P2P_MESSAGES_SENT, P2P_PEERS_CONNECTED, P2P_PEERS_INBOUND, P2P_PEERS_OUTBOUND,
 };
+use cipherbft_sync::{OutgoingSnapMessage, SnapSyncMessage, SyncNetworkSender};
 use cipherbft_types::ValidatorId;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -58,6 +59,19 @@ pub enum NetworkMessage {
     Dcl(Box<DclMessage>),
     /// Worker message (for Worker)
     Worker(WorkerMessage),
+    /// Snap sync message (for state synchronization)
+    SnapSync(SnapSyncMessage),
+}
+
+impl NetworkMessage {
+    /// Get message type name for logging
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            NetworkMessage::Dcl(msg) => msg.type_name(),
+            NetworkMessage::Worker(msg) => msg.type_name(),
+            NetworkMessage::SnapSync(msg) => msg.message_type(),
+        }
+    }
 }
 
 /// TCP-based Primary network implementation
@@ -71,6 +85,9 @@ pub struct TcpPrimaryNetwork {
     peer_addrs: HashMap<ValidatorId, SocketAddr>,
     /// Incoming message channel
     incoming_tx: mpsc::Sender<(ValidatorId, DclMessage)>,
+    /// Snap sync network sender for forwarding sync messages
+    /// Uses RwLock for interior mutability (can be set after Arc creation)
+    snap_sync_sender: RwLock<Option<SyncNetworkSender>>,
     /// Whether the network listener is active
     listening: AtomicBool,
 }
@@ -101,8 +118,17 @@ impl TcpPrimaryNetwork {
             peers: Arc::new(RwLock::new(HashMap::new())),
             peer_addrs,
             incoming_tx,
+            snap_sync_sender: RwLock::new(None),
             listening: AtomicBool::new(false),
         }
+    }
+
+    /// Set the snap sync sender for forwarding incoming sync messages
+    ///
+    /// This method uses interior mutability via RwLock, so it can be called
+    /// even after the network is wrapped in Arc.
+    pub async fn set_snap_sync_sender(&self, sender: SyncNetworkSender) {
+        *self.snap_sync_sender.write().await = Some(sender);
     }
 
     /// Returns whether the network listener is active.
@@ -245,8 +271,20 @@ impl TcpPrimaryNetwork {
                             break;
                         }
                     }
-                    Ok(_) => {
-                        warn!("Received non-DCL message on Primary connection");
+                    Ok(NetworkMessage::SnapSync(snap_msg)) => {
+                        debug!("Received snap sync message: {}", snap_msg.message_type());
+                        // Forward to sync manager via channel
+                        let sender_guard = self.snap_sync_sender.read().await;
+                        if let Some(ref sender) = *sender_guard {
+                            // For incoming connections, we don't have a validator ID yet
+                            // Use "unknown" as peer ID - the sync manager can track peers by socket
+                            sender
+                                .forward_message("unknown".to_string(), snap_msg)
+                                .await;
+                        }
+                    }
+                    Ok(NetworkMessage::Worker(_)) => {
+                        warn!("Received Worker message on Primary connection");
                     }
                     Err(e) => {
                         error!("Failed to deserialize message: {}", e);
@@ -295,8 +333,13 @@ impl TcpPrimaryNetwork {
         // This is critical: without this, responses (e.g., attestations) sent back on
         // this connection would never be read, causing attestation timeouts.
         let incoming_tx = self.incoming_tx.clone();
+        let snap_sender = self.snap_sync_sender.read().await.clone();
+        let peer_id = format!("{:?}", validator_id);
         tokio::spawn(async move {
-            if let Err(e) = Self::handle_outgoing_connection_reader(reader, incoming_tx).await {
+            if let Err(e) =
+                Self::handle_outgoing_connection_reader(reader, incoming_tx, peer_id, snap_sender)
+                    .await
+            {
                 debug!("Outgoing connection reader ended: {}", e);
             }
             // Connection ended - decrement metrics
@@ -316,6 +359,8 @@ impl TcpPrimaryNetwork {
     async fn handle_outgoing_connection_reader(
         mut reader: tokio::io::ReadHalf<TcpStream>,
         incoming_tx: mpsc::Sender<(ValidatorId, DclMessage)>,
+        peer_id: String,
+        snap_sync_sender: Option<SyncNetworkSender>,
     ) -> Result<()> {
         let mut buf = BytesMut::with_capacity(4096);
 
@@ -358,8 +403,18 @@ impl TcpPrimaryNetwork {
                             break;
                         }
                     }
-                    Ok(_) => {
-                        warn!("Received non-DCL message on outgoing connection");
+                    Ok(NetworkMessage::SnapSync(snap_msg)) => {
+                        debug!(
+                            "Received snap sync message on outgoing connection: {}",
+                            snap_msg.message_type()
+                        );
+                        // Forward to sync manager via channel
+                        if let Some(ref sender) = snap_sync_sender {
+                            sender.forward_message(peer_id.clone(), snap_msg).await;
+                        }
+                    }
+                    Ok(NetworkMessage::Worker(_)) => {
+                        warn!("Received Worker message on outgoing connection");
                     }
                     Err(e) => {
                         error!(
@@ -424,6 +479,7 @@ impl TcpPrimaryNetwork {
                 _ => "other",
             },
             NetworkMessage::Worker(_) => "worker",
+            NetworkMessage::SnapSync(_) => "snap_sync",
         };
 
         // Serialize message AFTER releasing peers lock
@@ -453,6 +509,70 @@ impl TcpPrimaryNetwork {
                 warn!("Failed to send to peer {:?}: {}", validator_id, e);
             }
         }
+    }
+
+    /// Send a snap sync message to a specific peer by validator ID
+    pub async fn send_snap_sync(&self, validator_id: ValidatorId, message: SnapSyncMessage) {
+        let msg = NetworkMessage::SnapSync(message);
+        if let Err(e) = self.send_to(validator_id, &msg).await {
+            warn!("Failed to send snap sync to {:?}: {}", validator_id, e);
+        }
+    }
+
+    /// Broadcast a snap sync message to all peers
+    pub async fn broadcast_snap_sync(&self, message: SnapSyncMessage) {
+        let msg = NetworkMessage::SnapSync(message);
+        self.broadcast(&msg).await;
+    }
+
+    /// Start processing outgoing snap sync messages from the adapter
+    ///
+    /// This spawns a background task that reads from the outgoing message channel
+    /// and sends messages via the TCP network.
+    pub fn start_snap_sync_sender(
+        self: Arc<Self>,
+        mut outgoing_rx: mpsc::Receiver<OutgoingSnapMessage>,
+    ) {
+        tokio::spawn(async move {
+            while let Some(outgoing) = outgoing_rx.recv().await {
+                match outgoing.target_peer {
+                    Some(peer_id) => {
+                        // Parse peer_id string to extract validator ID
+                        // Format is typically "ValidatorId(0x...)" from Debug
+                        if let Some(vid) = Self::parse_peer_id(&peer_id) {
+                            self.send_snap_sync(vid, outgoing.message).await;
+                        } else {
+                            warn!("Could not parse peer ID: {}", peer_id);
+                        }
+                    }
+                    None => {
+                        // Broadcast to all peers
+                        self.broadcast_snap_sync(outgoing.message).await;
+                    }
+                }
+            }
+            info!("Snap sync sender task ended");
+        });
+    }
+
+    /// Parse a peer ID string back to ValidatorId
+    ///
+    /// Handles both raw hex strings and "ValidatorId(0x...)" format
+    pub fn parse_peer_id(peer_id: &str) -> Option<ValidatorId> {
+        // Try to extract hex from "ValidatorId(0x...)" format
+        let hex_str = if let Some(start) = peer_id.find("0x") {
+            let end = peer_id[start..].find(')').unwrap_or(peer_id.len() - start);
+            &peer_id[start + 2..start + end]
+        } else if let Some(stripped) = peer_id.strip_prefix("0x") {
+            stripped
+        } else {
+            peer_id
+        };
+
+        // Trim any trailing characters
+        let hex_str = hex_str.trim_end_matches(|c: char| !c.is_ascii_hexdigit());
+
+        parse_validator_id(hex_str).ok()
     }
 }
 

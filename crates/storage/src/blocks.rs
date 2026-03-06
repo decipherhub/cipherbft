@@ -16,6 +16,7 @@
 //! ```
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 use crate::error::StorageError;
 
@@ -25,7 +26,7 @@ pub type BlockStoreResult<T> = Result<T, StorageError>;
 /// Stored block data structure.
 ///
 /// Contains all the information returned by `eth_getBlockByNumber`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Block {
     /// Block hash (32 bytes)
     pub hash: [u8; 32],
