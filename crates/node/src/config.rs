@@ -92,6 +92,14 @@ fn default_metrics_port() -> u16 {
     DEFAULT_METRICS_PORT
 }
 
+/// Default timeout for waiting for cuts after consensus decisions (50ms)
+pub const DEFAULT_WAIT_FOR_CUT_TIMEOUT_MS: u64 = 50;
+
+/// Serde default function for wait_for_cut_timeout_ms
+fn default_wait_for_cut_timeout_ms() -> u64 {
+    DEFAULT_WAIT_FOR_CUT_TIMEOUT_MS
+}
+
 /// Peer configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerConfig {
@@ -199,6 +207,18 @@ pub struct NodeConfig {
     /// Port for Prometheus metrics endpoint (default: 9100)
     #[serde(default = "default_metrics_port")]
     pub metrics_port: u16,
+
+    /// Timeout in milliseconds to wait for the next cut after a consensus decision (default: 50ms).
+    ///
+    /// After consensus decides on a block, the host waits for the next cut to be
+    /// available before starting the next consensus round. This prevents a race
+    /// condition where consensus requests a value before DCL has produced the cut.
+    ///
+    /// Lower values improve block throughput but may cause NIL votes if cuts
+    /// aren't ready. Higher values reduce throughput but give DCL more time.
+    /// Set to 0 to disable waiting entirely.
+    #[serde(default = "default_wait_for_cut_timeout_ms")]
+    pub wait_for_cut_timeout_ms: u64,
 }
 
 /// Test configuration with keypairs for local testing
@@ -253,6 +273,7 @@ impl NodeConfig {
             rpc_http_port: DEFAULT_RPC_HTTP_PORT + (index as u16),
             rpc_ws_port: DEFAULT_RPC_WS_PORT + (index as u16),
             metrics_port: DEFAULT_METRICS_PORT + (index as u16),
+            wait_for_cut_timeout_ms: DEFAULT_WAIT_FOR_CUT_TIMEOUT_MS,
         };
 
         LocalTestConfig {

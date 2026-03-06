@@ -38,6 +38,9 @@ pub mod vote;
 pub mod wal;
 
 #[cfg(feature = "malachite")]
+pub mod proposer_selector;
+
+#[cfg(feature = "malachite")]
 pub mod execution_handler;
 
 pub use config::ConsensusConfig;
@@ -82,6 +85,9 @@ pub use validator_set_manager::{
 pub use vote::ConsensusVote;
 #[cfg(feature = "malachite")]
 pub use wal::spawn_wal;
+
+#[cfg(feature = "malachite")]
+pub use proposer_selector::ProposerSelector;
 
 #[cfg(feature = "malachite")]
 pub use execution_handler::{

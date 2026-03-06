@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use informalsystems_malachitebft_core_types::{
     Context as MalachiteContext, NilOrVal, Round, ValueId, VoteType,
 };
@@ -5,6 +7,7 @@ use informalsystems_malachitebft_core_types::{
 use crate::config::ConsensusConfig;
 use crate::error::ConsensusError;
 use crate::proposal::{CutProposal, CutProposalPart};
+use crate::proposer_selector::ProposerSelector;
 use crate::signing::Ed25519SigningScheme;
 use crate::types::{ConsensusHeight, ConsensusValue};
 use crate::validator_set::{ConsensusAddress, ConsensusValidator, ConsensusValidatorSet};
@@ -32,6 +35,8 @@ pub struct CipherBftContext {
     pub validator_set: ConsensusValidatorSet,
     /// Height the engine should start from.
     pub initial_height: ConsensusHeight,
+    /// Proposer selector using Tendermint's weighted round-robin algorithm.
+    proposer_selector: Arc<ProposerSelector>,
 }
 
 impl CipherBftContext {
@@ -47,10 +52,12 @@ impl CipherBftContext {
         if validator_set.is_empty() {
             return Err(ConsensusError::EmptyValidatorSet);
         }
+        let proposer_selector = Arc::new(ProposerSelector::new(&validator_set, initial_height));
         Ok(Self {
             config,
             validator_set,
             initial_height,
+            proposer_selector,
         })
     }
 
@@ -82,19 +89,24 @@ impl CipherBftContext {
         self.config.chain_id()
     }
 
-    /// Deterministic round-robin proposer selection.
-    pub fn proposer_at_round(&self, round: Round) -> Option<ConsensusAddress> {
-        let count = self.validator_set.len();
-        if count == 0 {
+    /// Access the proposer selector for external priority updates.
+    pub fn proposer_selector(&self) -> &Arc<ProposerSelector> {
+        &self.proposer_selector
+    }
+
+    /// Weighted round-robin proposer selection for a given height and round.
+    pub fn proposer_at_round(
+        &self,
+        height: ConsensusHeight,
+        round: Round,
+    ) -> Option<ConsensusAddress> {
+        if self.validator_set.is_empty() {
             return None;
         }
-
-        // Use round index modulo validator count; nil rounds map to first validator.
-        let idx = match round.as_i64() {
-            x if x < 0 => 0,
-            x => (x as usize) % count,
-        };
-        self.validator_set.as_slice().get(idx).map(|v| v.address)
+        let proposer = self
+            .proposer_selector
+            .select_proposer(&self.validator_set, height, round);
+        Some(proposer.address)
     }
 }
 
@@ -113,18 +125,11 @@ impl MalachiteContext for CipherBftContext {
     fn select_proposer<'a>(
         &self,
         validator_set: &'a Self::ValidatorSet,
-        _height: Self::Height,
+        height: Self::Height,
         round: Round,
     ) -> &'a Self::Validator {
-        let count = validator_set.len();
-        let idx = match round.as_i64() {
-            x if x < 0 => 0,
-            x => (x as usize) % count.max(1),
-        };
-        validator_set
-            .as_slice()
-            .get(idx)
-            .expect("validator_set must not be empty")
+        self.proposer_selector
+            .select_proposer(validator_set, height, round)
     }
 
     fn new_proposal(
